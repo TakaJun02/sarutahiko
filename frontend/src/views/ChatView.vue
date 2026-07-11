@@ -1,8 +1,8 @@
 <script setup>
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
-import LoadingSpinner from '../components/LoadingSpinner.vue'
+import LoadingSpinnerV5 from '../components/LoadingSpinnerV5.vue'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
@@ -14,6 +14,10 @@ const router = useRouter()
 const draft = ref('')
 const messagesEnd = ref(null)
 const inputRef = ref(null)
+const footerRef = ref(null)
+const footerClearancePx = ref(224)
+
+let footerResizeObserver = null
 
 async function send() {
   const text = draft.value
@@ -50,16 +54,36 @@ function logout() {
 
 async function scrollToBottom() {
   await nextTick()
+  updateFooterClearance()
   messagesEnd.value?.scrollIntoView({ behavior: 'smooth', block: 'end' })
 }
 
+function updateFooterClearance() {
+  const footerHeight = footerRef.value?.offsetHeight || 0
+  if (footerHeight > 0) {
+    footerClearancePx.value = Math.ceil(footerHeight + 24)
+  }
+}
+
 watch(
-  () => chat.messages.map((message) => `${message.id}:${message.content.length}:${message.statusText}`).join('|'),
+  () => chat.messages.map((message) => {
+    const sourceKey = message.sources.map((source) => source.url).join(',')
+    return `${message.clientId || message.id}:${message.content.length}:${message.statusText}:${message.statusStep}:${sourceKey}`
+  }).join('|'),
   scrollToBottom,
 )
 
 onMounted(() => {
   inputRef.value?.focus()
+  updateFooterClearance()
+  if (typeof ResizeObserver !== 'undefined' && footerRef.value) {
+    footerResizeObserver = new ResizeObserver(updateFooterClearance)
+    footerResizeObserver.observe(footerRef.value)
+  }
+})
+
+onBeforeUnmount(() => {
+  footerResizeObserver?.disconnect()
 })
 </script>
 
@@ -85,7 +109,7 @@ onMounted(() => {
     </header>
 
     <section class="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-4 pt-5">
-      <div class="flex-1 space-y-5 pb-4">
+      <div class="flex-1 space-y-5" :style="{ paddingBottom: `${footerClearancePx}px` }">
         <div v-if="chat.messages.length === 0" class="mx-auto flex max-w-xl flex-col items-center justify-center py-14 text-center">
           <img src="/app-icon.png" alt="" class="mb-5 h-14 w-14 rounded-full opacity-90" />
           <h2 class="text-2xl font-semibold tracking-normal">知りたいことを聞いてください。</h2>
@@ -93,7 +117,7 @@ onMounted(() => {
 
         <article
           v-for="message in chat.messages"
-          :key="message.id"
+          :key="message.clientId || message.id"
           class="flex"
           :class="message.role === 'user' ? 'justify-end' : 'justify-start'"
         >
@@ -102,33 +126,38 @@ onMounted(() => {
             :class="message.role === 'user' ? 'rounded-2xl bg-white px-4 py-3 text-[#111318]' : 'text-white'"
           >
             <template v-if="message.role === 'assistant'">
-              <LoadingSpinner v-if="message.pending" :text="message.statusText || 'お待ちください…'" />
-              <div v-else class="space-y-3">
-                <MarkdownRenderer :content="message.content" />
-                <div v-if="message.sources.length" class="border-t border-white/10 pt-3">
-                  <p class="mb-2 text-xs text-white/44">出典</p>
-                  <ul class="space-y-1">
-                    <li v-for="source in message.sources" :key="source.url">
-                      <a
-                        class="text-sm text-brand-mint underline-offset-4 hover:underline"
-                        :href="source.url"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {{ source.title }}
-                      </a>
-                    </li>
-                  </ul>
+              <LoadingSpinnerV5
+                :mode="message.pending ? 'pending' : 'settled'"
+                :text="message.statusText || 'お待ちください…'"
+                :status-step="message.statusStep || 'generate'"
+              >
+                <div class="space-y-3">
+                  <MarkdownRenderer v-if="message.content" :content="message.content" />
+                  <div v-if="message.sources.length" class="border-t border-white/10 pt-3">
+                    <p class="mb-2 text-xs text-white/44">出典</p>
+                    <ul class="space-y-1">
+                      <li v-for="source in message.sources" :key="source.url">
+                        <a
+                          class="text-sm text-brand-mint underline-offset-4 hover:underline"
+                          :href="source.url"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {{ source.title }}
+                        </a>
+                      </li>
+                    </ul>
+                  </div>
                 </div>
-              </div>
+              </LoadingSpinnerV5>
             </template>
             <p v-else class="whitespace-pre-wrap break-words text-base leading-7">{{ message.content }}</p>
           </div>
         </article>
-        <div ref="messagesEnd"></div>
+        <div ref="messagesEnd" :style="{ scrollMarginBottom: `${footerClearancePx}px` }"></div>
       </div>
 
-      <form class="sticky bottom-0 border-t border-white/8 bg-[#0f1115]/92 py-3 backdrop-blur-xl" @submit.prevent="send">
+      <form ref="footerRef" class="sticky bottom-0 border-t border-white/8 bg-[#0f1115]/92 py-3 backdrop-blur-xl" @submit.prevent="send">
         <div class="flex items-end gap-2 rounded-3xl border border-white/10 bg-white/[0.06] p-2 shadow-[0_-20px_60px_rgba(0,0,0,0.16)]">
           <textarea
             ref="inputRef"

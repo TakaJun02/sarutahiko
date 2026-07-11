@@ -43,6 +43,7 @@ describe('chat store SSE helpers', () => {
     const message = createMessage('assistant', '', {
       pending: true,
       statusText: '質問を分析しています…',
+      statusStep: 'analyze',
       id: 'local-id',
     })
 
@@ -52,6 +53,7 @@ describe('chat store SSE helpers', () => {
     })
     expect(message.pending).toBe(true)
     expect(message.statusText).toBe('学内ナレッジを検索しています…')
+    expect(message.statusStep).toBe('retrieve')
 
     applyAssistantEvent(message, {
       event: 'token',
@@ -73,6 +75,7 @@ describe('chat store SSE helpers', () => {
     expect(message.id).toBe('message-1')
     expect(message.streaming).toBe(false)
     expect(message.sources).toHaveLength(1)
+    expect(message.clientId).toBe('local-id')
   })
 
   it('consumes complete SSE blocks and preserves incomplete buffers', () => {
@@ -134,5 +137,6 @@ describe('chat store SSE helpers', () => {
     expect(contentSnapshots).toContain('本荘')
     expect(contentSnapshots).toContain('本荘キャンパス')
     expect(store.messages[1].content).toBe('本荘キャンパス')
+    expect(store.messages[1].statusStep).toBe('retrieve')
   })
 })
