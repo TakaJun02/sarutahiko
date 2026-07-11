@@ -64,7 +64,7 @@ GET  /api/health          ヘルスチェック（vLLM/Qdrant 疎通含む）
 
 ```
 event: status
-data: {"step": "analyze" | "retrieve" | "web_search" | "evaluate" | "generate",
+data: {"step": "analyze" | "retrieve" | "search" | "web_search" | "evaluate" | "generate",
        "text": "学内ナレッジを検索しています…"}
 
 event: token

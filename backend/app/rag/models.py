@@ -14,3 +14,5 @@ class KnowledgeChunk:
     score: float | None = None
     file_id: str | None = None
     chunk_index: int | None = None
+    grep_hit: bool = False
+    grep_keywords: tuple[str, ...] = ()

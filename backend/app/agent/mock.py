@@ -26,6 +26,7 @@ class MockCampusAgent:
         statuses = [
             StatusPayload(step="analyze", text="質問の意図を整理しています…"),
             StatusPayload(step="retrieve", text="学内ナレッジを検索しています…"),
+            StatusPayload(step="search", text="学内資料を全文検索しています…"),
             StatusPayload(step="generate", text="回答をまとめています…"),
         ]
 

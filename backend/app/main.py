@@ -12,6 +12,7 @@ from app.core.config import Settings, load_settings
 from app.core.database import Database
 from app.llm.client import VLLMClient
 from app.rag.embeddings import EmbeddingModel
+from app.rag.lexical import CampusLexicalSearch
 from app.rag.qdrant_store import CampusKnowledgeStore
 from app.search.ddgs import DDGSSearchProvider
 from app.services.auth import AuthService
@@ -73,10 +74,12 @@ def _configure_agent(app: FastAPI, settings: Settings) -> None:
         embedding_model=embedding_model,
     )
     search_provider = DDGSSearchProvider()
+    lexical_search = CampusLexicalSearch(settings.knowledge_dir)
 
     app.state.agent = RealCampusAgent(
         llm_client=llm_client,
         knowledge_store=knowledge_store,
+        lexical_search=lexical_search,
         search_provider=search_provider,
         top_k=settings.retrieval_top_k,
         min_relevance_score=settings.retrieval_min_score,

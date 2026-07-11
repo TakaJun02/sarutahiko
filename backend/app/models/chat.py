@@ -25,7 +25,7 @@ class Source(BaseModel):
 
 
 class StatusPayload(BaseModel):
-    step: Literal["analyze", "retrieve", "web_search", "evaluate", "generate"]
+    step: Literal["analyze", "retrieve", "search", "web_search", "evaluate", "generate"]
     text: str
 
 
