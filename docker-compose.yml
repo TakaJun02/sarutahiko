@@ -6,15 +6,15 @@ services:
       - "8000:8000"
     volumes:
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
-    command:
-      - --model
-      - Qwen/Qwen3-14B-AWQ
-      - --max-model-len
-      - "16384"
-      - --gpu-memory-utilization
-      - "0.90"
-      - --reasoning-parser
-      - qwen3
+    environment:
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    command: >-
+      --model google/gemma-4-31B-it-qat-w4a16-ct
+      --max-model-len 2816
+      --max-num-seqs 4
+      --gpu-memory-utilization 0.95
+      --enforce-eager
+      --limit-mm-per-prompt '{"image": 0}'
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -35,7 +35,9 @@ services:
       AGENT_MODE: ${AGENT_MODE:-real}
       DATABASE_PATH: /app/data/campus-guide.sqlite3
       VLLM_BASE_URL: http://vllm:8000/v1
-      LLM_MODEL: ${LLM_MODEL:-Qwen/Qwen3-14B-AWQ}
+      LLM_MODEL: ${LLM_MODEL:-google/gemma-4-31B-it-qat-w4a16-ct}
+      LLM_CONTEXT_WINDOW: ${LLM_CONTEXT_WINDOW:-2816}
+      LLM_ANSWER_MAX_TOKENS: ${LLM_ANSWER_MAX_TOKENS:-640}
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-campus_knowledge}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}

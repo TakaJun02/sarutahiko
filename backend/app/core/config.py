@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Literal
 
 AgentMode = Literal["mock", "real"]
+DEFAULT_LLM_MODEL = "google/gemma-4-31B-it-qat-w4a16-ct"
+DEFAULT_LLM_CONTEXT_WINDOW = 2816
+DEFAULT_LLM_ANSWER_MAX_TOKENS = 640
 
 
 @dataclass(frozen=True)
@@ -15,7 +18,9 @@ class Settings:
     mock_status_delay_seconds: float = 1.0
     mock_token_delay_seconds: float = 0.035
     vllm_base_url: str = "http://127.0.0.1:8000/v1"
-    llm_model: str = "Qwen/Qwen3-14B-AWQ"
+    llm_model: str = DEFAULT_LLM_MODEL
+    llm_context_window: int = DEFAULT_LLM_CONTEXT_WINDOW
+    llm_answer_max_tokens: int = DEFAULT_LLM_ANSWER_MAX_TOKENS
     qdrant_url: str = "http://127.0.0.1:6333"
     qdrant_collection: str = "campus_knowledge"
     embedding_model: str = "BAAI/bge-m3"
@@ -47,7 +52,9 @@ def load_settings() -> Settings:
         mock_status_delay_seconds=status_delay,
         mock_token_delay_seconds=token_delay,
         vllm_base_url=os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"),
-        llm_model=os.getenv("LLM_MODEL", "Qwen/Qwen3-14B-AWQ"),
+        llm_model=os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL),
+        llm_context_window=int(os.getenv("LLM_CONTEXT_WINDOW", str(DEFAULT_LLM_CONTEXT_WINDOW))),
+        llm_answer_max_tokens=int(os.getenv("LLM_ANSWER_MAX_TOKENS", str(DEFAULT_LLM_ANSWER_MAX_TOKENS))),
         qdrant_url=os.getenv("QDRANT_URL", "http://127.0.0.1:6333"),
         qdrant_collection=os.getenv("QDRANT_COLLECTION", "campus_knowledge"),
         embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),

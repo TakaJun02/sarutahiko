@@ -80,6 +80,8 @@ def _configure_agent(app: FastAPI, settings: Settings) -> None:
         search_provider=search_provider,
         top_k=settings.retrieval_top_k,
         min_relevance_score=settings.retrieval_min_score,
+        llm_context_window=settings.llm_context_window,
+        llm_answer_max_tokens=settings.llm_answer_max_tokens,
     )
     app.state.vllm_health = llm_client.health
     app.state.qdrant_health = knowledge_store.health
