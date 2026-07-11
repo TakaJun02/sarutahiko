@@ -88,7 +88,28 @@ oc_2026/
 └── .env.example
 ```
 
-## 5. 設定・シークレット
+## 5. vLLM 起動構成（2026-07-11 Fable 実機検証済み）
+
+以下の構成で RTX 3090 Ti 24GB 上の動作を確認した（日本語応答 OK、VRAM 22.0/24.5GB）:
+
+```bash
+docker run --gpus all \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -p 8000:8000 vllm/vllm-openai:latest \
+  --model Qwen/Qwen3-14B-AWQ \
+  --max-model-len 16384 \
+  --gpu-memory-utilization 0.90 \
+  --reasoning-parser qwen3
+```
+
+- モデル重み（9.4GB）と `BAAI/bge-m3`（4.3GB）はホストの HF キャッシュにダウンロード済み。
+  docker compose では同じボリュームマウントを使うこと（再ダウンロード禁止）。
+- Qwen3 の thinking モードは既定 ON。**通常の回答生成では `chat_template_kwargs: {"enable_thinking": false}` を指定**して
+  レイテンシを抑える（エージェントの計画ステップでは ON にしてよい。効果は Phase 3 で測定）。
+- 埋め込み（bge-m3）は **CPU で実行**する（GPU は vLLM が 0.90 を確保済み。クエリ 1 件の埋め込みは CPU で十分速い。
+  一括インジェストはオフライン処理なので問題ない）。遅すぎる場合のみ `--gpu-memory-utilization` を 0.85 に下げて GPU 共有を検討。
+
+## 6. 設定・シークレット
 
 - モデル名・vLLM URL・Qdrant URL 等はすべて環境変数（`.env`）で注入。`.env` はコミットしない。
 - 外部 API キー（使う場合のみ）も同様。
