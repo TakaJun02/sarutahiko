@@ -14,6 +14,7 @@ venv/
 .pytest_cache/
 backend/data/*.sqlite3
 backend/data/*.db
+qdrant_data/
 
 # node
 node_modules/
