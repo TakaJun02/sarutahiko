@@ -34,7 +34,7 @@ backend のローカル起動・Vite の `/api` プロキシ先はともに 8080
 | バックエンド | Python 3.11+ / FastAPI | SSE・非同期・LLM エコシステムとの親和性 |
 | エージェント制御 | LangGraph | Agentic RAG のループ（検索→評価→再検索）とステップ通知フックを素直に書ける |
 | LLM サービング | vLLM（OpenAI 互換サーバ） | 確定仕様。バックエンドからは OpenAI クライアントで接続 |
-| LLM モデル | Qwen3 系（第一候補: `Qwen/Qwen3-14B-AWQ`、代替: `Qwen/Qwen3-8B`） | 参照システムも Qwen3。24GB VRAM に量子化 14B + KV キャッシュが収まる。日本語性能良好。最終決定は Phase 2 でスループット実測後 |
+| LLM モデル | `google/gemma-4-31B-it-qat-w4a16-ct`（**2026-07-11 利用者指定**） | 利用者指示によりQwen3-14B-AWQから変更。Apache-2.0・w4a16 量子化 31B。Gemma は thinking モード非対応のため Qwen 固有の `chat_template_kwargs` は送らない（AGENT_HARNESS.md §4） |
 | 埋め込み | `BAAI/bge-m3` | 日本語を含む多言語で高性能。ローカル実行可 |
 | リランカー | `BAAI/bge-reranker-v2-m3`（任意、Phase 3 で効果測定） | 検索精度向上の定番。効果がなければ外す |
 | ベクトル DB | Qdrant（docker） | 運用が軽く、メタデータフィルタが強い。compose に載せやすい |
@@ -100,26 +100,25 @@ oc_2026/
 └── .env.example
 ```
 
-## 5. vLLM 起動構成（2026-07-11 Fable 実機検証済み）
+## 5. vLLM 起動構成（2026-07-11 改訂: Gemma 4 31B へ変更）
 
-以下の構成で RTX 3090 Ti 24GB 上の動作を確認した（日本語応答 OK、VRAM 22.0/24.5GB）:
+利用者指定により `google/gemma-4-31B-it-qat-w4a16-ct` を使用する（旧 Qwen3-14B-AWQ 構成は撤去）:
 
 ```bash
 docker run --gpus all \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -p 8000:8000 vllm/vllm-openai:latest \
-  --model Qwen/Qwen3-14B-AWQ \
-  --max-model-len 16384 \
-  --gpu-memory-utilization 0.90 \
-  --reasoning-parser qwen3
+  --model google/gemma-4-31B-it-qat-w4a16-ct \
+  --max-model-len 8192 \
+  --gpu-memory-utilization 0.92
 ```
 
-- モデル重み（9.4GB）と `BAAI/bge-m3`（4.3GB）はホストの HF キャッシュにダウンロード済み。
-  docker compose では同じボリュームマウントを使うこと（再ダウンロード禁止）。
-- Qwen3 の thinking モードは既定 ON。**通常の回答生成では `chat_template_kwargs: {"enable_thinking": false}` を指定**して
-  レイテンシを抑える（エージェントの計画ステップでは ON にしてよい。効果は Phase 3 で測定）。
-- 埋め込み（bge-m3）は **CPU で実行**する（GPU は vLLM が 0.90 を確保済み。クエリ 1 件の埋め込みは CPU で十分速い。
-  一括インジェストはオフライン処理なので問題ない）。遅すぎる場合のみ `--gpu-memory-utilization` を 0.85 に下げて GPU 共有を検討。
+- `--reasoning-parser qwen3` は**削除**（Gemma に不要）。
+- `chat_template_kwargs: {"enable_thinking": false}` は **Gemma に送らない**（Qwen 固有。AGENT_HARNESS.md §4）。
+- w4a16 の 31B は重みだけで約 17GB のため `--max-model-len 8192` から開始し、OOM なら 6144 へ、
+  余裕があれば 12288 へ調整（Fable が実測して確定させる）。
+- モデル重みと `BAAI/bge-m3` はホストの HF キャッシュにダウンロード済み。compose では同じボリュームを使う（再ダウンロード禁止）。
+- 埋め込み（bge-m3）は従来どおり **CPU で実行**。
 
 ## 6. 設定・シークレット
 
