@@ -6,7 +6,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app.agent.mock import MockCampusAgent
 from app.api.dependencies import get_agent, get_current_user, get_thread_service
 from app.models.auth import User
 from app.models.chat import ChatRequest
@@ -20,19 +19,20 @@ async def chat(
     payload: ChatRequest,
     user: Annotated[User, Depends(get_current_user)],
     thread_service: Annotated[ThreadService, Depends(get_thread_service)],
-    agent: Annotated[MockCampusAgent, Depends(get_agent)],
+    agent: Annotated[object, Depends(get_agent)],
 ) -> StreamingResponse:
     question = payload.message
     thread_id = payload.thread_id
 
     ensured_thread_id = thread_service.ensure_thread(user, thread_id, question)
+    history = thread_service.get_recent_messages(ensured_thread_id, limit=6)
     thread_service.add_message(ensured_thread_id, "user", question)
     assistant_message_id = str(uuid.uuid4())
 
     async def event_stream():
         answer_parts: list[str] = []
         try:
-            async for event, data in agent.stream(question, user, ensured_thread_id, assistant_message_id):
+            async for event, data in agent.stream(question, user, ensured_thread_id, assistant_message_id, history=history):
                 if event == "token":
                     answer_parts.append(data["text"])
                 if event == "done":

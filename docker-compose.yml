@@ -1,0 +1,53 @@
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    gpus: all
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    command:
+      - --model
+      - Qwen/Qwen3-14B-AWQ
+      - --max-model-len
+      - "16384"
+      - --gpu-memory-utilization
+      - "0.90"
+      - --reasoning-parser
+      - qwen3
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./qdrant_data:/qdrant/storage
+
+  backend:
+    build:
+      context: ./backend
+    depends_on:
+      - qdrant
+      - vllm
+    ports:
+      - "8080:8080"
+    environment:
+      AGENT_MODE: ${AGENT_MODE:-real}
+      DATABASE_PATH: /app/data/campus-guide.sqlite3
+      VLLM_BASE_URL: http://vllm:8000/v1
+      LLM_MODEL: ${LLM_MODEL:-Qwen/Qwen3-14B-AWQ}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-campus_knowledge}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
+      CORS_ALLOW_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+    volumes:
+      - ./backend/data:/app/data
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
