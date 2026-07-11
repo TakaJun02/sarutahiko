@@ -1,0 +1,180 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0f1115;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  background: #0f1115;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+/* コンテナを一定速度で回転させるキーフレーム */
+@keyframes gemini_spinner_rotate {
+  100% { transform: rotate(360deg); }
+}
+
+/* 円弧の長さと開始位置を同時に変化させる、シームレスなキーフレーム */
+@keyframes gemini_spinner_arc_dash {
+  0%   { stroke-dasharray: 1, 68;  stroke-dashoffset: 0; }
+  50%  { stroke-dasharray: 50, 68; stroke-dashoffset: -25; }
+  100% { stroke-dasharray: 1, 68;  stroke-dashoffset: -68; }
+}
+
+/* アイコンを一定時間ごとにクルンと回転させるためのキーフレーム */
+@keyframes icon_kurun_rotate {
+  0%, 90% { transform: rotate(0deg); }
+  100%    { transform: rotate(360deg); }
+}
+
+.animate-gemini-spinner-container { animation: gemini_spinner_rotate 2s linear infinite; }
+.animate-gemini-spinner-arc       { animation: gemini_spinner_arc_dash 1.5s ease-in-out infinite; }
+.animate-icon-rotate              { animation: icon_kurun_rotate 4s ease-in-out infinite; }
+
+.login-shell {
+  position: relative;
+}
+
+.aurora {
+  position: absolute;
+  width: 22rem;
+  height: 22rem;
+  border-radius: 9999px;
+  filter: blur(70px);
+  opacity: 0.18;
+  will-change: transform, opacity;
+  pointer-events: none;
+}
+
+.aurora-coral {
+  top: -8rem;
+  left: -8rem;
+  background: #FF8A65;
+  animation: aurora_drift_one 24s ease-in-out infinite alternate;
+}
+
+.aurora-sun {
+  right: -10rem;
+  top: 18%;
+  background: #FFEB3B;
+  opacity: 0.12;
+  animation: aurora_drift_two 28s ease-in-out infinite alternate;
+}
+
+.aurora-mint {
+  bottom: -9rem;
+  left: 18%;
+  background: #69F0AE;
+  opacity: 0.14;
+  animation: aurora_drift_three 26s ease-in-out infinite alternate;
+}
+
+@keyframes aurora_drift_one {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(4rem, 2.5rem, 0) scale(1.1); }
+}
+
+@keyframes aurora_drift_two {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(-3rem, 4rem, 0) scale(1.05); }
+}
+
+@keyframes aurora_drift_three {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(2rem, -3rem, 0) scale(1.08); }
+}
+
+.login-card {
+  animation: login_card_enter 0.4s ease-out both;
+}
+
+.login-card-leave {
+  animation: login_card_leave 0.3s ease-in both;
+}
+
+@keyframes login_card_enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes login_card_leave {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0);
+  }
+}
+
+.markdown-body {
+  color: rgb(243 244 246);
+  font-size: 1rem;
+  line-height: 1.75;
+  word-break: break-word;
+}
+
+.markdown-body > * + * {
+  margin-top: 0.85rem;
+}
+
+.markdown-body strong {
+  color: white;
+  font-weight: 700;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.25rem;
+}
+
+.markdown-body ul {
+  list-style: disc;
+}
+
+.markdown-body ol {
+  list-style: decimal;
+}
+
+.markdown-body a {
+  color: #69F0AE;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  .aurora {
+    animation: none !important;
+  }
+}
