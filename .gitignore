@@ -1,0 +1,26 @@
+# 参考用の画面録画（約800MB）— 絶対にコミットしない
+chat.mov
+*.mov
+
+# secrets
+.env
+.env.local
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# node
+node_modules/
+dist/
+
+# tools
+.serena/cache/
+.codex/
+.claude/settings.local.json
+
+# os
+.DS_Store
