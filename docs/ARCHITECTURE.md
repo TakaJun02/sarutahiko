@@ -13,6 +13,18 @@
 
 すべて docker compose で起動する（vLLM は GPU 割当、`--gpus all`）。
 
+### ポート割当（2026-07-11 Fable 決定）
+
+| サービス | ポート |
+|---|---|
+| frontend (Vite dev / nginx) | 5173 |
+| backend (FastAPI) | **8080** |
+| vLLM | 8000 |
+| Qdrant | 6333 |
+
+backend のローカル起動・Vite の `/api` プロキシ先はともに 8080 とする（8000 は vLLM が使うため）。
+プロキシ先は `VITE_API_PROXY_TARGET` 環境変数で上書き可能にする。
+
 ## 2. 技術選定と理由
 
 | 項目 | 選定 | 理由 |
@@ -48,7 +60,7 @@ GET  /api/health          ヘルスチェック（vLLM/Qdrant 疎通含む）
 
 ### チャット SSE
 
-`POST /api/chat`（リクエストで質問と `thread_id` を受け、SSE ストリームを返す）
+`POST /api/chat`（リクエスト body: `{"message": "<質問文>", "thread_id": "<既存スレッドID または null>"}`。SSE ストリームを返す）
 
 ```
 event: status
