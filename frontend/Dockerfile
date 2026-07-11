@@ -1,4 +1,6 @@
-FROM node:20-alpine AS build
+# bookworm (glibc) instead of alpine: the lockfile is generated on a glibc host,
+# and npm's optional-deps handling skips the musl rollup binary (npm/cli#4828)
+FROM node:20-bookworm-slim AS build
 
 WORKDIR /app
 COPY package*.json ./
