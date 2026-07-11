@@ -12,6 +12,8 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+backend/data/*.sqlite3
+backend/data/*.db
 
 # node
 node_modules/
@@ -24,3 +26,6 @@ dist/
 
 # os
 .DS_Store
+
+# playwright artifacts
+.playwright-mcp/
