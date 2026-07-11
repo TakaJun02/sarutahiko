@@ -68,6 +68,20 @@ class ThreadService:
             )
         return new_message_id
 
+    def get_recent_messages(self, thread_id: str, limit: int = 6) -> list[dict]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, role, content, sources_json, created_at
+                FROM messages
+                WHERE thread_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (thread_id, limit),
+            ).fetchall()
+        return [self._message_to_dict(row) for row in reversed(rows)]
+
     def get_thread(self, user: User, thread_id: str) -> dict:
         with self.database.connect() as connection:
             thread = connection.execute(

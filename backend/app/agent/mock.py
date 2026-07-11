@@ -15,7 +15,14 @@ class MockCampusAgent:
         self.status_delay_seconds = status_delay_seconds
         self.token_delay_seconds = token_delay_seconds
 
-    async def stream(self, question: str, user: User, thread_id: str, message_id: str) -> AsyncIterator[tuple[str, dict]]:
+    async def stream(
+        self,
+        question: str,
+        user: User,
+        thread_id: str,
+        message_id: str,
+        history: list[dict] | None = None,
+    ) -> AsyncIterator[tuple[str, dict]]:
         statuses = [
             StatusPayload(step="analyze", text="質問の意図を整理しています…"),
             StatusPayload(step="retrieve", text="学内ナレッジを検索しています…"),
