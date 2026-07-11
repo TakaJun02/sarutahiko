@@ -8,7 +8,8 @@
 
 ## Docker Compose 起動
 
-vLLM は RTX 3090 Ti 上で検証済みの `Qwen/Qwen3-14B-AWQ` 設定で起動します。
+vLLM は Q-005 ruling に従い、RTX 3090 Ti 上で検証済みの `google/gemma-4-31B-it-qat-w4a16-ct` 設定で起動します。
+この構成では `--max-model-len 2816` が上限のため、backend は `LLM_CONTEXT_WINDOW=2816` / `LLM_ANSWER_MAX_TOKENS=640` を前提にプロンプトを切り詰めます。
 ホストの Hugging Face キャッシュ `~/.cache/huggingface` を再利用します。
 
 ```bash

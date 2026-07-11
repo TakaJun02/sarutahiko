@@ -46,86 +46,49 @@ textarea {
 .animate-gemini-spinner-arc       { animation: gemini_spinner_arc_dash 1.5s ease-in-out infinite; }
 .animate-icon-rotate              { animation: icon_kurun_rotate 4s ease-in-out infinite; }
 
-.login-shell {
-  position: relative;
+.login-page {
+  color-scheme: light;
 }
 
-.aurora {
-  position: absolute;
-  width: 22rem;
-  height: 22rem;
-  border-radius: 9999px;
-  filter: blur(70px);
-  opacity: 0.18;
-  will-change: transform, opacity;
-  pointer-events: none;
+.bg-noise {
+  background-color: #ffffff;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 800 800' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.03'/%3E%3C/svg%3E");
 }
 
-.aurora-coral {
-  top: -8rem;
-  left: -8rem;
-  background: #FF8A65;
-  animation: aurora_drift_one 24s ease-in-out infinite alternate;
+.login-type-cursor {
+  display: inline-block;
+  width: 4px;
+  height: 2.5rem;
+  margin-left: 0.25rem;
+  vertical-align: -0.4rem;
+  background: linear-gradient(180deg, #FF8A65, #FFEB3B, #69F0AE);
+  animation: login_cursor_blink 1s step-end infinite;
 }
 
-.aurora-sun {
-  right: -10rem;
-  top: 18%;
-  background: #FFEB3B;
-  opacity: 0.12;
-  animation: aurora_drift_two 28s ease-in-out infinite alternate;
+.login-type-cursor--static {
+  animation: none;
 }
 
-.aurora-mint {
-  bottom: -9rem;
-  left: 18%;
-  background: #69F0AE;
-  opacity: 0.14;
-  animation: aurora_drift_three 26s ease-in-out infinite alternate;
+.login-sheet {
+  animation: login_sheet_enter 0.4s ease-out both;
 }
 
-@keyframes aurora_drift_one {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(4rem, 2.5rem, 0) scale(1.1); }
-}
-
-@keyframes aurora_drift_two {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(-3rem, 4rem, 0) scale(1.05); }
-}
-
-@keyframes aurora_drift_three {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(2rem, -3rem, 0) scale(1.08); }
-}
-
-.login-card {
-  animation: login_card_enter 0.4s ease-out both;
-}
-
-.login-card-leave {
-  animation: login_card_leave 0.3s ease-in both;
-}
-
-@keyframes login_card_enter {
-  from {
+@keyframes login_cursor_blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
     opacity: 0;
-    transform: translate3d(0, 14px, 0);
+  }
+}
+
+@keyframes login_sheet_enter {
+  from {
+    transform: translate3d(0, 100%, 0);
   }
   to {
-    opacity: 1;
     transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes login_card_leave {
-  from {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-  to {
-    opacity: 0;
-    transform: translate3d(0, -8px, 0);
   }
 }
 
@@ -174,12 +137,12 @@ textarea {
     transition-duration: 0.001ms !important;
   }
 
-  .aurora {
-    animation: none !important;
-  }
-
   .aurora-ring-v5 .aurora-ring-v5__ring {
     transition: opacity 300ms ease-out !important;
+  }
+
+  .login-type-cursor {
+    animation: none !important;
   }
 
   .aurora-ring-v5-status-enter-active,
