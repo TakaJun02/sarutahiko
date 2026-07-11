@@ -4,6 +4,7 @@ import { computed } from 'vue'
 const STEP_THEMES = {
   analyze: ['#B388FF', '#82B1FF', '#80D8FF'],
   retrieve: ['#448AFF', '#40C4FF', '#84FFFF'],
+  search: ['#00B8D4', '#64FFDA', '#A7FFEB'],
   web_search: ['#69F0AE', '#B9F6CA', '#FFFF8D'],
   evaluate: ['#FFD180', '#FFAB40', '#FF8A65'],
   generate: ['#FF8A65', '#FFEB3B', '#69F0AE'],

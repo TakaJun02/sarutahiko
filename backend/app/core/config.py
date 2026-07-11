@@ -11,6 +11,15 @@ DEFAULT_LLM_CONTEXT_WINDOW = 2816
 DEFAULT_LLM_ANSWER_MAX_TOKENS = 640
 
 
+def default_knowledge_dir() -> Path:
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        candidate = parent / "knowledge"
+        if candidate.exists():
+            return candidate
+    return current.parents[3] / "knowledge"
+
+
 @dataclass(frozen=True)
 class Settings:
     database_path: Path
@@ -26,6 +35,7 @@ class Settings:
     embedding_model: str = "BAAI/bge-m3"
     retrieval_top_k: int = 6
     retrieval_min_score: float = 0.45
+    knowledge_dir: Path = default_knowledge_dir()
     allow_origins: tuple[str, ...] = (
         "http://localhost:5173",
         "http://127.0.0.1:5173",
@@ -60,6 +70,7 @@ def load_settings() -> Settings:
         embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
         retrieval_top_k=int(os.getenv("RAG_TOP_K", "6")),
         retrieval_min_score=float(os.getenv("RAG_MIN_SCORE", "0.45")),
+        knowledge_dir=Path(os.getenv("KNOWLEDGE_DIR", str(default_knowledge_dir()))),
         allow_origins=allow_origins,
     )
 

@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import httpx
 from openai import BadRequestError
 
 from app.agent.graph import GENERATE_SYSTEM_PROMPT, PROMPT_MARGIN_TOKENS, RealCampusAgent, estimate_tokens
 from app.models.auth import User
+from app.rag.lexical import (
+    CampusLexicalSearch,
+    LexicalSearchOutcome,
+    SectionHit,
+    generate_keyword_variants,
+)
 from app.rag.models import KnowledgeChunk
 from app.search.models import WebSearchResult
+from knowledge.ingest.ingest import build_knowledge_chunks, chunk_markdown, parse_frontmatter
 
 pytestmark = pytest.mark.asyncio
 
@@ -133,6 +142,16 @@ class FakeSearchProvider:
         return rows[:max_results]
 
 
+class FakeLexicalSearch:
+    def __init__(self, outcome: LexicalSearchOutcome | None = None) -> None:
+        self.outcome = outcome or LexicalSearchOutcome([], [], [], False)
+        self.calls: list[list[str]] = []
+
+    def grep_sections_with_trace(self, keywords):
+        self.calls.append(list(keywords))
+        return self.outcome
+
+
 def _user(role: str = "highschool") -> User:
     return User(id="user-1", name="テスト", role=role)
 
@@ -169,6 +188,7 @@ def _agent(
     llm: FakeLLMClient | None = None,
     store: FakeKnowledgeStore | None = None,
     search: FakeSearchProvider | None = None,
+    lexical: FakeLexicalSearch | CampusLexicalSearch | None = None,
     http_client_factory=None,
     llm_context_window: int = 2816,
     llm_answer_max_tokens: int = 640,
@@ -177,6 +197,7 @@ def _agent(
         llm_client=llm or FakeLLMClient(),
         knowledge_store=store or FakeKnowledgeStore([]),
         search_provider=search or FakeSearchProvider([]),
+        lexical_search=lexical,
         http_client_factory=http_client_factory,
         llm_context_window=llm_context_window,
         llm_answer_max_tokens=llm_answer_max_tokens,
@@ -202,15 +223,93 @@ async def test_estimate_tokens_uses_japanese_character_heuristic() -> None:
     assert estimate_tokens(text) == (len(text) * 3) // 4
 
 
+async def test_keyword_variants_strip_suffix_and_extract_script_runs() -> None:
+    cps_variants = generate_keyword_variants(["サイバーフィジカルシステム研究室"])
+    variants = generate_keyword_variants(["サイバーフィジカルシステム研究室", "知能メカトロニクス学科"])
+
+    assert cps_variants == ["サイバーフィジカルシステム"]
+    assert "サイバーフィジカルシステム" in variants
+    assert "研究室" not in variants
+    assert "知能メカトロニクス" in variants
+    assert "メカトロニクス" in variants
+    assert "知能" in variants
+    assert generate_keyword_variants(["研究室"]) == []
+
+
+async def test_lexical_search_scores_distinct_keywords_then_hits_and_uses_ingest_ids(tmp_path: Path) -> None:
+    path = tmp_path / "faculty-management.md"
+    path.write_text(
+        """---
+id: faculty-management
+category: faculty
+title: 経営システム工学科
+source_urls:
+  - https://example.test/faculty
+retrieved_at: 2026-07-11
+confidence: high
+---
+
+## 教員一覧
+山口高康教授はサイバーフィジカルシステム研究室を担当します。
+
+## 研究室
+サイバーフィジカルシステム研究室ではサイバーフィジカルを扱います。
+""",
+        encoding="utf-8",
+    )
+    lexical = CampusLexicalSearch(tmp_path)
+
+    hits = lexical.grep_sections(["サイバーフィジカル", "山口高康"])
+    ingest_document = parse_frontmatter(path)
+    ingest_chunks = build_knowledge_chunks(ingest_document, chunk_markdown(ingest_document.body))
+
+    assert [hit.distinct_keyword_hits for hit in hits[:2]] == [2, 1]
+    assert hits[0].chunk.id == ingest_chunks[0].id
+    assert hits[0].chunk.grep_hit is True
+    assert hits[0].chunk.grep_keywords == ("サイバーフィジカル", "山口高康")
+
+
+async def test_lexical_search_uses_keyword_variants_after_zero_primary_hits(tmp_path: Path) -> None:
+    path = tmp_path / "lab.md"
+    path.write_text(
+        """---
+id: lab
+category: faculty
+title: 研究室
+source_urls:
+  - https://example.test/lab
+retrieved_at: 2026-07-11
+confidence: high
+---
+
+## 研究室
+サイバーフィジカルシステムを扱います。
+""",
+        encoding="utf-8",
+    )
+    lexical = CampusLexicalSearch(tmp_path)
+
+    outcome = lexical.grep_sections_with_trace(["サイバーフィジカルシステム研究室"])
+
+    assert outcome.variants_attempted is True
+    assert "サイバーフィジカルシステム" in outcome.variant_keywords
+    assert len(outcome.hits) == 1
+
+
 async def test_analyze_parses_json_retrieval_queries() -> None:
     llm = FakeLLMClient(
-        completions=['{"retrieval_queries": ["食堂 メニュー", "カフェテリア 営業時間"], "intent": "food"}']
+        completions=[
+            '{"retrieval_queries": ["食堂 メニュー", "カフェテリア 営業時間"], "keywords": ["カフェテリア"], "intent": "food"}'
+        ]
     )
     agent = _agent(llm=llm)
 
     result = await agent._analyze({"question": "学食について教えて", "history": []})
 
-    assert result == {"retrieval_queries": ["食堂 メニュー", "カフェテリア 営業時間"]}
+    assert result == {
+        "retrieval_queries": ["食堂 メニュー", "カフェテリア 営業時間"],
+        "keywords": ["カフェテリア"],
+    }
     assert llm.complete_calls[0]["temperature"] == 0.2
     assert llm.complete_calls[0]["max_tokens"] == 300
 
@@ -221,7 +320,7 @@ async def test_analyze_falls_back_to_raw_question_on_parse_failure() -> None:
 
     result = await agent._analyze({"question": "サークルは？", "history": []})
 
-    assert result == {"retrieval_queries": ["サークルは？"]}
+    assert result == {"retrieval_queries": ["サークルは？"], "keywords": []}
 
 
 async def test_retrieve_searches_multiple_queries_dedupes_by_chunk_id_and_caps_results() -> None:
@@ -278,6 +377,7 @@ async def test_evaluate_insufficient_triggers_two_web_rounds_then_generates() ->
     assert status_steps == [
         "analyze",
         "retrieve",
+        "search",
         "evaluate",
         "web_search",
         "evaluate",
@@ -291,6 +391,22 @@ async def test_evaluate_insufficient_triggers_two_web_rounds_then_generates() ->
     ]
     assert events[-2] == ("token", {"text": "最終回答"})
     assert llm.stream_calls[0]["temperature"] == 0.7
+
+
+async def test_stream_emits_search_status_step() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries": ["サークル"], "keywords": ["サークル"], "intent": "clubs"}',
+            '{"sufficient": true, "missing": "", "grep_keywords": [], "web_queries": []}',
+        ],
+        tokens=["回答"],
+    )
+    agent = _agent(llm=llm, store=FakeKnowledgeStore([]), lexical=FakeLexicalSearch())
+
+    events = await _collect(agent, "サークルを教えて")
+
+    status_steps = [payload["step"] for event, payload in events if event == "status"]
+    assert status_steps == ["analyze", "retrieve", "search", "evaluate", "generate"]
 
 
 async def test_web_page_fetch_and_extraction_drops_tags_and_truncates() -> None:
@@ -316,6 +432,18 @@ async def test_web_page_fetch_and_extraction_drops_tags_and_truncates() -> None:
     assert len(text) == 1400
 
 
+async def test_focused_extraction_centers_window_on_keyword_match() -> None:
+    text = "先頭" + ("あ" * 1600) + "サイバーフィジカルシステム研究室 山口高康" + ("い" * 1600)
+
+    excerpt = RealCampusAgent._focus_page_text(text, ["サイバーフィジカルシステム研究室", "山口高康"])
+
+    assert excerpt.startswith("…")
+    assert "サイバーフィジカルシステム研究室" in excerpt
+    assert "山口高康" in excerpt
+    assert "先頭" not in excerpt
+    assert len(excerpt) <= 1401
+
+
 async def test_context_budget_truncates_and_drops_knowledge_chunks_by_score() -> None:
     agent = _agent()
     high = _chunk(id="high", title="High score", score=0.99, text="HIGH_CONTEXT " + ("あ" * 1200))
@@ -328,6 +456,20 @@ async def test_context_budget_truncates_and_drops_knowledge_chunks_by_score() ->
     assert "HIGH_CONTEXT" in context.text
     assert "LOW_CONTEXT" not in context.text
     assert len(context.text) < len(high.text)
+
+
+async def test_context_packing_prioritizes_grep_hits_then_web_then_vector_only_chunks() -> None:
+    agent = _agent()
+    grep = _chunk(id="grep", score=0.10, text="GREP_CONTEXT", grep_hit=True, grep_keywords=("研究室",))
+    vector = _chunk(id="vector", score=0.99, text="VECTOR_CONTEXT")
+    web = WebSearchResult("Web", "https://example.test/web", "snippet", "WEB_CONTEXT")
+
+    context = agent._assemble_context_with_budget([vector, grep], [web], mode="generate", token_budget=400)
+
+    assert context.text.index("GREP_CONTEXT") < context.text.index("WEB_CONTEXT")
+    assert context.text.index("WEB_CONTEXT") < context.text.index("VECTOR_CONTEXT")
+    assert [chunk.id for chunk in context.knowledge_results] == ["grep", "vector"]
+    assert [result.url for result in context.web_results] == ["https://example.test/web"]
 
 
 async def test_generation_budget_drops_history_before_trimming_context() -> None:
@@ -393,6 +535,77 @@ async def test_evaluate_messages_use_summary_context_within_budget() -> None:
     assert "い" * 500 not in combined
 
 
+async def test_evaluate_messages_include_value_demand_criterion() -> None:
+    agent = _agent()
+
+    messages = agent._build_evaluate_messages(
+        {
+            "question": "サイバーフィジカルシステム研究室の先生は誰ですか？",
+            "knowledge_results": [],
+            "web_results": [],
+        }
+    )
+
+    assert (
+        "質問が特定の値（人名・数値・日時・場所・URL）を尋ねている場合、その値そのものがコンテキストに含まれていなければ、"
+        "関連説明があっても必ず insufficient としてください。"
+    ) in messages[0]["content"]
+
+
+async def test_evaluate_uses_centered_summary_for_grep_hit_chunks() -> None:
+    agent = _agent(llm_context_window=1400)
+    chunk = _chunk(
+        id="grep",
+        title="研究室",
+        text=("前" * 600) + "サイバーフィジカルシステム研究室 山口高康教授" + ("後" * 600),
+        score=1.01,
+        grep_hit=True,
+        grep_keywords=("サイバーフィジカルシステム研究室",),
+    )
+    messages = agent._build_evaluate_messages(
+        {
+            "question": "先生は誰ですか？",
+            "knowledge_results": [chunk],
+            "web_results": [],
+            "search_executed": True,
+            "search_terms": ["サイバーフィジカルシステム研究室"],
+            "search_hit_count": 1,
+        }
+    )
+    combined = "\n".join(message["content"] for message in messages)
+
+    assert "サイバーフィジカルシステム研究室 山口高康教授" in combined
+    assert "前" * 500 not in combined
+
+
+async def test_give_up_gate_controls_investigation_log() -> None:
+    agent = _agent()
+    state = {
+        "question": "不明な制度は？",
+        "role": "highschool",
+        "history": [],
+        "knowledge_results": [],
+        "web_results": [],
+        "sufficient": False,
+        "retrieve_executed": True,
+        "search_executed": True,
+        "retrieval_queries": ["不明な制度"],
+        "search_terms": ["不明な制度"],
+        "search_variant_terms": ["制度"],
+        "web_search_rounds": 2,
+        "used_web_queries": ["site:akita-pu.ac.jp 不明な制度", "不明な制度 秋田県立大学"],
+    }
+
+    messages = agent._build_generation_messages(state)
+    combined = "\n".join(message["content"] for message in messages)
+    assert "調査ログ:" in combined
+
+    state["web_search_rounds"] = 1
+    messages = agent._build_generation_messages(state)
+    combined = "\n".join(message["content"] for message in messages)
+    assert "調査ログ:" not in combined
+
+
 async def test_generate_system_prompt_contains_deflection_ban_rule() -> None:
     llm = FakeLLMClient(
         completions=[
@@ -409,6 +622,7 @@ async def test_generate_system_prompt_contains_deflection_ban_rule() -> None:
     assert system_prompt == GENERATE_SYSTEM_PROMPT
     assert "丸投げする表現を回答の主内容にしない" in system_prompt
     assert "公式サイトでご確認ください" in system_prompt
+    assert "学内ナレッジを優先" in system_prompt
 
 
 async def test_real_agent_deduplicates_sources_from_generation_context() -> None:

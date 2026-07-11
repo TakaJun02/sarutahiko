@@ -44,8 +44,8 @@ async def test_chat_stream_uses_documented_sse_schema(app) -> None:
         body = response.text
 
     events = _events(body)
-    assert [event for event, _ in events[:3]] == ["status", "status", "status"]
-    assert [payload["step"] for _, payload in events[:3]] == ["analyze", "retrieve", "generate"]
+    assert [event for event, _ in events[:4]] == ["status", "status", "status", "status"]
+    assert [payload["step"] for _, payload in events[:4]] == ["analyze", "retrieve", "search", "generate"]
     assert events[0][1]["text"].endswith("…")
     assert any(event == "token" and payload["text"] for event, payload in events)
     assert events[-1][0] == "done"
