@@ -106,17 +106,26 @@ oc_2026/
 
 ```bash
 docker run --gpus all \
+  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -p 8000:8000 vllm/vllm-openai:latest \
   --model google/gemma-4-31B-it-qat-w4a16-ct \
-  --max-model-len 8192 \
-  --gpu-memory-utilization 0.92
+  --max-model-len 2816 \
+  --max-num-seqs 4 \
+  --gpu-memory-utilization 0.95 \
+  --enforce-eager \
+  --limit-mm-per-prompt '{"image": 0}'
 ```
 
+- **2026-07-12 Fable 実測で確定**。重みロードだけで 19.79GiB を消費し、Gemma4 は KV が極めて重い
+  （約0.85MB/token）ため、24GB では **max-model-len 2816 が上限**（8192/6144/4096/3584/3200/2880 で
+  KV不足または実行時OOMを確認済み）。FP8 KV は SM86（3090 Ti）非対応。
+- これに伴いハーネス側で**コンテキスト予算管理が必須**（環境変数 `LLM_CONTEXT_WINDOW=2816`、
+  回答は `LLM_ANSWER_MAX_TOKENS=640`。チャンク・Webページ・履歴を予算内に切り詰める）。
 - `--reasoning-parser qwen3` は**削除**（Gemma に不要）。
 - `chat_template_kwargs: {"enable_thinking": false}` は **Gemma に送らない**（Qwen 固有。AGENT_HARNESS.md §4）。
-- w4a16 の 31B は重みだけで約 17GB のため `--max-model-len 8192` から開始し、OOM なら 6144 へ、
-  余裕があれば 12288 へ調整（Fable が実測して確定させる）。
+- トレードオフ（利用者への注記）: Qwen3-14B-AWQ 構成では 16k コンテキストを確保できたが、
+  指定モデルへの変更で 2816 に縮小。RAG の同時投入コンテキスト量が大きく制限される。
 - モデル重みと `BAAI/bge-m3` はホストの HF キャッシュにダウンロード済み。compose では同じボリュームを使う（再ダウンロード禁止）。
 - 埋め込み（bge-m3）は従来どおり **CPU で実行**。
 

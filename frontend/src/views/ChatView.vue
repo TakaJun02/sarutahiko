@@ -108,9 +108,9 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <section class="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-4 pt-5">
+    <section class="flex w-full flex-1 flex-col pb-4 pt-5">
       <div class="flex-1 space-y-5" :style="{ paddingBottom: `${footerClearancePx}px` }">
-        <div v-if="chat.messages.length === 0" class="mx-auto flex max-w-xl flex-col items-center justify-center py-14 text-center">
+        <div v-if="chat.messages.length === 0" class="mx-auto flex max-w-xl flex-col items-center justify-center px-4 py-14 text-center">
           <img src="/app-icon.png" alt="" class="mb-5 h-14 w-14 rounded-full opacity-90" />
           <h2 class="text-2xl font-semibold tracking-normal">知りたいことを聞いてください。</h2>
         </div>
@@ -118,67 +118,71 @@ onBeforeUnmount(() => {
         <article
           v-for="message in chat.messages"
           :key="message.clientId || message.id"
-          class="flex"
-          :class="message.role === 'user' ? 'justify-end' : 'justify-start'"
+          class="w-full px-4"
         >
-          <div
-            class="max-w-[88%] sm:max-w-[78%]"
-            :class="message.role === 'user' ? 'rounded-2xl bg-white px-4 py-3 text-[#111318]' : 'text-white'"
-          >
+          <div class="mx-auto w-full max-w-3xl">
             <template v-if="message.role === 'assistant'">
-              <LoadingSpinnerV5
-                :mode="message.pending ? 'pending' : 'settled'"
-                :text="message.statusText || 'お待ちください…'"
-                :status-step="message.statusStep || 'generate'"
-              >
-                <div class="space-y-3">
-                  <MarkdownRenderer v-if="message.content" :content="message.content" />
-                  <div v-if="message.sources.length" class="border-t border-white/10 pt-3">
-                    <p class="mb-2 text-xs text-white/44">出典</p>
-                    <ul class="space-y-1">
-                      <li v-for="source in message.sources" :key="source.url">
-                        <a
-                          class="text-sm text-brand-mint underline-offset-4 hover:underline"
-                          :href="source.url"
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {{ source.title }}
-                        </a>
-                      </li>
-                    </ul>
+              <div class="w-full text-white">
+                <LoadingSpinnerV5
+                  :mode="message.pending ? 'pending' : 'settled'"
+                  :text="message.statusText || 'お待ちください…'"
+                  :status-step="message.statusStep || 'generate'"
+                >
+                  <div class="space-y-3">
+                    <MarkdownRenderer v-if="message.content" :content="message.content" />
+                    <div v-if="message.sources.length" class="border-t border-white/10 pt-3">
+                      <p class="mb-2 text-xs text-white/44">出典</p>
+                      <ul class="space-y-1">
+                        <li v-for="source in message.sources" :key="source.url">
+                          <a
+                            class="text-sm text-brand-mint underline-offset-4 hover:underline"
+                            :href="source.url"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {{ source.title }}
+                          </a>
+                        </li>
+                      </ul>
+                    </div>
                   </div>
-                </div>
-              </LoadingSpinnerV5>
+                </LoadingSpinnerV5>
+              </div>
             </template>
-            <p v-else class="whitespace-pre-wrap break-words text-base leading-7">{{ message.content }}</p>
+            <div v-else class="flex justify-end">
+              <p class="max-w-[88%] whitespace-pre-wrap break-words rounded-2xl bg-white px-4 py-3 text-base leading-7 text-[#111318] sm:max-w-[78%]">
+                {{ message.content }}
+              </p>
+            </div>
           </div>
         </article>
         <div ref="messagesEnd" :style="{ scrollMarginBottom: `${footerClearancePx}px` }"></div>
       </div>
 
-      <form ref="footerRef" class="sticky bottom-0 border-t border-white/8 bg-[#0f1115]/92 py-3 backdrop-blur-xl" @submit.prevent="send">
-        <div class="flex items-end gap-2 rounded-3xl border border-white/10 bg-white/[0.06] p-2 shadow-[0_-20px_60px_rgba(0,0,0,0.16)]">
-          <textarea
-            ref="inputRef"
-            v-model="draft"
-            rows="1"
-            class="max-h-32 min-h-11 flex-1 resize-none bg-transparent px-3 py-2.5 text-base leading-6 text-white outline-none placeholder:text-white/35"
-            placeholder="質問を入力"
-            @keydown.enter="onEnter"
-          ></textarea>
-          <button
-            type="submit"
-            class="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white text-[#101217] transition hover:shadow-[0_0_18px_rgba(105,240,174,0.28)] disabled:cursor-not-allowed disabled:opacity-45"
-            :disabled="!draft.trim() || chat.isSending"
-            aria-label="送信"
-          >
-            <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none">
-              <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
+      <form ref="footerRef" class="sticky bottom-0 border-t border-white/8 bg-[#0f1115]/92 px-4 py-3 backdrop-blur-xl" @submit.prevent="send">
+        <div class="mx-auto w-full max-w-3xl">
+          <div class="flex items-end gap-2 rounded-3xl border border-white/10 bg-white/[0.06] p-2 shadow-[0_-20px_60px_rgba(0,0,0,0.16)]">
+            <textarea
+              ref="inputRef"
+              v-model="draft"
+              rows="1"
+              class="max-h-32 min-h-11 flex-1 resize-none bg-transparent px-3 py-2.5 text-base leading-6 text-white outline-none placeholder:text-white/35"
+              placeholder="質問を入力"
+              @keydown.enter="onEnter"
+            ></textarea>
+            <button
+              type="submit"
+              class="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white text-[#101217] transition hover:shadow-[0_0_18px_rgba(105,240,174,0.28)] disabled:cursor-not-allowed disabled:opacity-45"
+              :disabled="!draft.trim() || chat.isSending"
+              aria-label="送信"
+            >
+              <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none">
+                <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+          </div>
+          <p v-if="chat.error" class="mt-2 text-sm text-red-300">{{ chat.error }}</p>
         </div>
-        <p v-if="chat.error" class="mt-2 text-sm text-red-300">{{ chat.error }}</p>
       </form>
     </section>
   </main>

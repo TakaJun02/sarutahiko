@@ -8,3 +8,4 @@ class WebSearchResult:
     title: str
     url: str
     snippet: str
+    text: str = ""
