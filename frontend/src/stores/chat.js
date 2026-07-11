@@ -3,13 +3,16 @@ import { defineStore } from 'pinia'
 import { ApiError, getStoredToken } from '../services/api'
 
 export function createMessage(role, content = '', overrides = {}) {
+  const id = overrides.id || crypto.randomUUID()
   return {
-    id: overrides.id || crypto.randomUUID(),
+    id,
+    clientId: overrides.clientId || id,
     role,
     content,
     pending: false,
     streaming: false,
     statusText: '',
+    statusStep: '',
     sources: [],
     ...overrides,
   }
@@ -38,6 +41,7 @@ export function parseSseBlock(block) {
 export function applyAssistantEvent(message, event) {
   if (event.event === 'status') {
     message.statusText = event.data.text
+    message.statusStep = event.data.step
     message.pending = true
     message.streaming = false
     return
@@ -86,6 +90,7 @@ export const useChatStore = defineStore('chat', {
       const assistantDraft = createMessage('assistant', '', {
         pending: true,
         statusText: '質問を分析しています…',
+        statusStep: 'analyze',
       })
       this.messages.push(userMessage, assistantDraft)
       const assistantMessage = this.messages[this.messages.length - 1]

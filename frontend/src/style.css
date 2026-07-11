@@ -177,4 +177,13 @@ textarea {
   .aurora {
     animation: none !important;
   }
+
+  .aurora-ring-v5 .aurora-ring-v5__ring {
+    transition: opacity 300ms ease-out !important;
+  }
+
+  .aurora-ring-v5-status-enter-active,
+  .aurora-ring-v5-status-leave-active {
+    transition: opacity 150ms ease !important;
+  }
 }
