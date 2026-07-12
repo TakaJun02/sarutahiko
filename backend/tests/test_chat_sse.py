@@ -24,7 +24,7 @@ async def _client(app):
 async def _auth_headers(client: httpx.AsyncClient) -> dict[str, str]:
     response = await client.post(
         "/api/auth/register",
-        json={"name": "テストユーザー", "role": "highschool"},
+        json={"name": "テストユーザー"},
     )
     assert response.status_code == 201
     return {"Authorization": f"Bearer {response.json()['token']}"}

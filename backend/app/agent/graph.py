@@ -77,7 +77,6 @@ trace_logger = logging.getLogger("agent.trace")
 
 GENERATE_SYSTEM_PROMPT = """あなたは秋田県立大学 本荘キャンパスのオープンキャンパス2026来場者向け案内AIです。
 回答は日本語で、丁寧でフレンドリーな文体にしてください。
-利用者ロール別のトーンは次を守ってください。highschool: 高校生にも分かりやすい語彙で、親しみやすく丁寧に答える。parent: 保護者が確認しやすいように、要点と注意点を整理して答える。other: 来場者に向けて、必要な情報を簡潔かつ丁寧に答える。
 
 回答ルール:
 1. 禁止: 「公式サイトでご確認ください」「当日の学科紹介でご確認いただけます」など、調べれば答えられる内容を利用者に丸投げする表現を回答の主内容にしないでください。
@@ -97,7 +96,6 @@ def estimate_tokens(text: str) -> int:
 class AgentState(TypedDict, total=False):
     trace_id: str
     question: str
-    role: str
     history: list[dict]
     retrieval_queries: list[str]
     keywords: list[str]
@@ -219,7 +217,6 @@ class RealCampusAgent:
         state: AgentState = {
             "trace_id": message_id,
             "question": question.strip(),
-            "role": user.role,
             "history": (history or [])[-MAX_HISTORY_MESSAGES:],
             "knowledge_results": [],
             "web_results": [],
@@ -787,7 +784,6 @@ class RealCampusAgent:
         token_budget: int | None = None,
     ) -> tuple[list[dict[str, str]], _ContextAssembly]:
         user_content_factory = lambda context: (
-                f"利用者ロール: {state.get('role', 'other')}\n"
                 f"現在日付: {date.today().isoformat()}\n"
                 f"質問: {state['question']}\n\n"
                 "利用可能な根拠:\n"
