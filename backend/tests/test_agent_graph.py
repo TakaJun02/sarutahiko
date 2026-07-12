@@ -167,8 +167,8 @@ class FakeLexicalSearch:
         return self.outcome
 
 
-def _user(role: str = "highschool") -> User:
-    return User(id="user-1", name="テスト", role=role)
+def _user() -> User:
+    return User(id="user-1", name="テスト")
 
 
 async def _collect(agent: RealCampusAgent, question: str, history: list[dict] | None = None):
@@ -880,7 +880,6 @@ async def test_generation_budget_preserves_history_and_trims_context() -> None:
     context_text = "HIGH_CONTEXT " + ("う" * 2400) + " END_CONTEXT"
     state = {
         "question": "食堂はどこですか？",
-        "role": "highschool",
         "history": history,
         "knowledge_results": [
             _chunk(id="high", title="High score", score=0.99, text=context_text)
@@ -906,7 +905,6 @@ async def test_generation_budget_shrinks_history_to_250_to_preserve_minimum_cont
     agent = _agent(llm_context_window=2816, llm_answer_max_tokens=640)
     state = {
         "question": "施設について教えて",
-        "role": "highschool",
         "history": _long_history("MIN_CONTEXT"),
         "knowledge_results": [_long_context_chunk()],
         "web_results": [],
@@ -926,7 +924,6 @@ async def test_generation_budget_uses_120_floor_and_accepts_sub_minimum_context(
     agent = _agent(llm_context_window=1800, llm_answer_max_tokens=640)
     state = {
         "question": "施設について教えて",
-        "role": "highschool",
         "history": _long_history("LOW_CONTEXT"),
         "knowledge_results": [_long_context_chunk()],
         "web_results": [],
@@ -946,7 +943,6 @@ async def test_forced_generation_budget_does_not_inflate_without_history_freed_t
     agent = _agent(llm_context_window=2816, llm_answer_max_tokens=640)
     state = {
         "question": "施設について教えて",
-        "role": "highschool",
         "history": [],
         "knowledge_results": [_long_context_chunk()],
         "web_results": [],
@@ -1137,7 +1133,6 @@ async def test_give_up_gate_controls_investigation_log() -> None:
     agent = _agent()
     state = {
         "question": "不明な制度は？",
-        "role": "highschool",
         "history": [],
         "knowledge_results": [],
         "web_results": [],

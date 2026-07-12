@@ -23,7 +23,6 @@ class Database:
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL UNIQUE,
-                    role TEXT NOT NULL CHECK(role IN ('highschool', 'parent', 'other')),
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -54,3 +53,40 @@ class Database:
                 );
                 """
             )
+        self._drop_legacy_users_role_column()
+
+    def _drop_legacy_users_role_column(self) -> None:
+        # FR-6 (2026-07-13): the visitor attribute was removed. Legacy databases
+        # created before the change still carry users.role, so rebuild the users
+        # table without it while keeping sessions/threads/messages intact.
+        connection = sqlite3.connect(self.path)
+        try:
+            connection.row_factory = sqlite3.Row
+            columns = connection.execute("PRAGMA table_info(users)").fetchall()
+            if not any(column["name"] == "role" for column in columns):
+                return
+            # Foreign keys must be disabled outside the transaction so that
+            # dropping the referenced users table does not violate constraints
+            # declared by sessions/threads.
+            connection.execute("PRAGMA foreign_keys = OFF")
+            try:
+                with connection:
+                    connection.execute(
+                        """
+                        CREATE TABLE users_new (
+                            id TEXT PRIMARY KEY,
+                            name TEXT NOT NULL UNIQUE,
+                            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
+                    )
+                    connection.execute(
+                        "INSERT INTO users_new (id, name, created_at) "
+                        "SELECT id, name, created_at FROM users"
+                    )
+                    connection.execute("DROP TABLE users")
+                    connection.execute("ALTER TABLE users_new RENAME TO users")
+            finally:
+                connection.execute("PRAGMA foreign_keys = ON")
+        finally:
+            connection.close()

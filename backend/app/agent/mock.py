@@ -56,15 +56,10 @@ class MockCampusAgent:
 
     @staticmethod
     def _answer(question: str, user: User) -> str:
-        role_note = {
-            "highschool": "高校生の方にも分かりやすい言葉で案内します。",
-            "parent": "保護者の方が確認しやすいよう、要点を整理します。",
-            "other": "来場者の方に向けて、必要な情報を簡潔に案内します。",
-        }[user.role]
         return (
             "ご質問ありがとうございます。\n\n"
             f"**「{question.strip()}」** について、Phase 1 ではモック回答を返しています。"
-            f"{role_note}\n\n"
+            "\n\n"
             "- 本荘キャンパスの学部・施設・アクセス案内を想定した回答形式です。\n"
             "- 実際の RAG と Web Search は Phase 3 で同じ SSE インターフェースに接続します。\n"
             "- 正式運用では、回答末尾に大学公式サイトなどの出典を表示します。\n\n"

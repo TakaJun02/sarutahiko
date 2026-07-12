@@ -20,19 +20,12 @@ const typewriterPhrases = [
   'ここからの一歩を、いっしょに',
 ]
 
-const roles = [
-  { value: 'highschool', label: '高校生' },
-  { value: 'parent', label: '保護者' },
-  { value: 'other', label: 'その他' },
-]
-
 const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
 
 const mode = ref('register')
 const name = ref('')
-const role = ref('highschool')
 const error = ref('')
 const isSubmitting = ref(false)
 const displayedPhrase = ref('')
@@ -148,7 +141,7 @@ async function submit() {
   error.value = ''
   try {
     if (isRegister.value) {
-      await auth.register(name.value, role.value)
+      await auth.register(name.value)
     } else {
       await auth.login(name.value)
     }
@@ -219,22 +212,6 @@ onBeforeUnmount(() => {
             @keydown.enter="onEnter"
           />
         </label>
-
-        <div v-if="isRegister" class="space-y-2">
-          <p class="text-sm text-zinc-300">属性</p>
-          <div class="grid grid-cols-3 gap-2">
-            <button
-              v-for="roleOption in roles"
-              :key="roleOption.value"
-              type="button"
-              class="rounded-xl px-3 py-3 text-sm font-medium transition"
-              :class="role === roleOption.value ? 'bg-white text-black' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white'"
-              @click="role = roleOption.value"
-            >
-              {{ roleOption.label }}
-            </button>
-          </div>
-        </div>
 
         <button
           type="submit"

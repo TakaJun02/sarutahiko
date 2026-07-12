@@ -2,26 +2,17 @@ import { defineStore } from 'pinia'
 
 import { ApiError, apiFetch, getStoredToken, removeStoredToken, storeToken } from '../services/api'
 
-const ROLE_LABELS = {
-  highschool: '高校生',
-  parent: '保護者',
-  other: 'その他',
-}
-
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     token: getStoredToken(),
     user: null,
     isChecking: false,
   }),
-  getters: {
-    roleLabel: (state) => (state.user ? ROLE_LABELS[state.user.role] : ''),
-  },
   actions: {
-    async register(name, role) {
+    async register(name) {
       const response = await apiFetch('/api/auth/register', {
         method: 'POST',
-        body: JSON.stringify({ name, role }),
+        body: JSON.stringify({ name }),
       })
       const payload = await response.json()
       this.setSession(payload.token, payload.user)

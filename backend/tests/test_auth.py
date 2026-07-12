@@ -14,7 +14,7 @@ async def test_register_login_and_me(app) -> None:
     async with await _client(app) as client:
         register = await client.post(
             "/api/auth/register",
-            json={"name": "来場者A", "role": "parent"},
+            json={"name": "来場者A"},
         )
         assert register.status_code == 201
         payload = register.json()
@@ -22,7 +22,6 @@ async def test_register_login_and_me(app) -> None:
         assert payload["user"] == {
             "id": payload["user"]["id"],
             "name": "来場者A",
-            "role": "parent",
         }
 
         me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {payload['token']}"})
@@ -39,13 +38,13 @@ async def test_register_duplicate_and_login_missing(app) -> None:
     async with await _client(app) as client:
         response = await client.post(
             "/api/auth/register",
-            json={"name": "来場者B", "role": "other"},
+            json={"name": "来場者B"},
         )
         assert response.status_code == 201
 
         duplicate = await client.post(
             "/api/auth/register",
-            json={"name": "来場者B", "role": "other"},
+            json={"name": "来場者B"},
         )
         assert duplicate.status_code == 409
         assert "すでに登録" in duplicate.json()["detail"]
