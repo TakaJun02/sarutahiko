@@ -25,7 +25,8 @@ MAX_RETRIEVAL_QUERIES = 3
 MAX_ANALYZE_KEYWORDS = 6
 MAX_EVALUATE_GREP_KEYWORDS = 3
 MAX_EVALUATE_RETRIEVAL_QUERIES = 2
-MAX_KNOWLEDGE_CONTEXT_CHUNKS = 16
+MAX_KNOWLEDGE_CONTEXT_CHUNKS = 24
+MAX_SAME_FILE_EXPANSION_CHUNKS = 12
 HIGH_RELEVANCE_CONTEXT_THRESHOLD = 0.60
 MAX_LOCAL_SEARCH_FOLLOWUPS = 1
 MAX_RETRIEVAL_FOLLOWUPS = 1
@@ -127,6 +128,8 @@ class AgentState(TypedDict, total=False):
     generation_adopted_chunk_ids: list[str]
     generation_rejected_chunk_ids: list[str]
     generation_adopted_web_urls: list[str]
+    same_file_expanded_file_ids: list[str]
+    same_file_expanded_chunk_ids: list[str]
     sources: list[Source]
 
 
@@ -171,6 +174,13 @@ class _WebRoundOutcome:
 class _WebExecutionOutcome:
     results: list[WebSearchResult]
     raw_result_count: int
+
+
+@dataclass(frozen=True)
+class _KnowledgeMergeOutcome:
+    results: list[KnowledgeChunk]
+    expanded_file_ids: list[str]
+    expanded_chunk_ids: list[str]
 
 
 class RealCampusAgent:
@@ -227,6 +237,8 @@ class RealCampusAgent:
             "used_web_queries": [],
             "used_web_query_keys": [],
             "used_retrieval_queries": [],
+            "same_file_expanded_file_ids": [],
+            "same_file_expanded_chunk_ids": [],
         }
 
         yield "status", self._status("analyze", state)
@@ -426,13 +438,15 @@ class RealCampusAgent:
                     continue
                 retrieved_results.append(chunk)
 
-        merged = self._merge_knowledge_results(existing_results, retrieved_results)
+        merge_outcome = self._merge_and_expand_knowledge_results(state, existing_results, retrieved_results)
         self._trace("retrieve", state, {"queries": trace_queries})
         return {
-            "knowledge_results": merged[:MAX_KNOWLEDGE_CONTEXT_CHUNKS],
+            "knowledge_results": merge_outcome.results,
             "retrieve_executed": True,
             "retrieval_rounds": state.get("retrieval_rounds", 0) + 1,
             "used_retrieval_queries": self._dedupe_keys(used_query_keys),
+            "same_file_expanded_file_ids": merge_outcome.expanded_file_ids,
+            "same_file_expanded_chunk_ids": merge_outcome.expanded_chunk_ids,
         }
 
     async def _search(self, state: AgentState, keywords: Sequence[str] | None = None) -> dict:
@@ -450,7 +464,7 @@ class RealCampusAgent:
 
         outcome = self.lexical_search.grep_sections_with_trace(search_keywords)
         grep_chunks = [hit.chunk for hit in outcome.hits]
-        merged = self._merge_knowledge_results(existing_results, grep_chunks)
+        merge_outcome = self._merge_and_expand_knowledge_results(state, existing_results, grep_chunks)
         self._trace(
             "search",
             state,
@@ -469,7 +483,7 @@ class RealCampusAgent:
             },
         )
         return {
-            "knowledge_results": merged[:MAX_KNOWLEDGE_CONTEXT_CHUNKS],
+            "knowledge_results": merge_outcome.results,
             "search_rounds": state.get("search_rounds", 0) + 1,
             "search_executed": True,
             "search_variant_executed": bool(state.get("search_variant_executed")) or outcome.variants_attempted,
@@ -479,6 +493,8 @@ class RealCampusAgent:
                 outcome.variant_keywords,
             ),
             "search_hit_count": state.get("search_hit_count", 0) + len(outcome.hits),
+            "same_file_expanded_file_ids": merge_outcome.expanded_file_ids,
+            "same_file_expanded_chunk_ids": merge_outcome.expanded_chunk_ids,
         }
 
     async def _evaluate(self, state: AgentState) -> dict:
@@ -1772,6 +1788,15 @@ class RealCampusAgent:
             merged.append(item)
         return merged
 
+    def _merge_and_expand_knowledge_results(
+        self,
+        state: AgentState,
+        existing_results: Sequence[KnowledgeChunk],
+        new_results: Sequence[KnowledgeChunk],
+    ) -> _KnowledgeMergeOutcome:
+        merged = self._merge_knowledge_results(existing_results, new_results)
+        return self._expand_same_file_chunks(state, merged)
+
     def _merge_knowledge_results(
         self,
         existing_results: Sequence[KnowledgeChunk],
@@ -1795,10 +1820,154 @@ class RealCampusAgent:
                 selected,
                 grep_hit=current.grep_hit or chunk.grep_hit,
                 grep_keywords=grep_keywords,
+                same_file_expanded=current.same_file_expanded and chunk.same_file_expanded,
                 score=self._merged_score(current, chunk),
             )
 
         return self._ordered_knowledge_results(by_id.values())
+
+    def _expand_same_file_chunks(
+        self,
+        state: AgentState,
+        merged_results: Sequence[KnowledgeChunk],
+    ) -> _KnowledgeMergeOutcome:
+        inferred_expanded_file_ids = [
+            chunk.file_id for chunk in merged_results if chunk.same_file_expanded and chunk.file_id
+        ]
+        inferred_expanded_chunk_ids = [chunk.id for chunk in merged_results if chunk.same_file_expanded]
+        expanded_file_ids = self._dedupe_keys(
+            [*(state.get("same_file_expanded_file_ids") or []), *inferred_expanded_file_ids]
+        )
+        expanded_chunk_ids = self._dedupe_keys(
+            [*(state.get("same_file_expanded_chunk_ids") or []), *inferred_expanded_chunk_ids]
+        )
+        expanded_file_id_set = set(expanded_file_ids)
+
+        if self.lexical_search is None:
+            return _KnowledgeMergeOutcome(
+                results=list(merged_results)[:MAX_KNOWLEDGE_CONTEXT_CHUNKS],
+                expanded_file_ids=expanded_file_ids,
+                expanded_chunk_ids=expanded_chunk_ids,
+            )
+
+        load_sections = getattr(self.lexical_search, "_load_sections", None)
+        if not callable(load_sections):
+            return _KnowledgeMergeOutcome(
+                results=list(merged_results)[:MAX_KNOWLEDGE_CONTEXT_CHUNKS],
+                expanded_file_ids=expanded_file_ids,
+                expanded_chunk_ids=expanded_chunk_ids,
+            )
+
+        direct_results = self._ordered_knowledge_results(
+            [chunk for chunk in merged_results if not chunk.same_file_expanded]
+        )
+        selected_direct = direct_results[:MAX_KNOWLEDGE_CONTEXT_CHUNKS]
+        remaining_slots = MAX_KNOWLEDGE_CONTEXT_CHUNKS - len(selected_direct)
+        if remaining_slots <= 0:
+            return _KnowledgeMergeOutcome(
+                results=selected_direct,
+                expanded_file_ids=expanded_file_ids,
+                expanded_chunk_ids=expanded_chunk_ids,
+            )
+
+        previous_expansions = [chunk for chunk in merged_results if chunk.same_file_expanded]
+        sections = load_sections()
+        existing_ids = {chunk.id for chunk in merged_results}
+        new_expansions: list[KnowledgeChunk] = []
+        new_expansion_file_by_id: dict[str, str] = {}
+        for file_id, candidates in self._same_file_expansion_candidates(
+            selected_direct,
+            sections,
+            existing_ids,
+            expanded_file_id_set,
+        ):
+            for chunk in candidates:
+                new_expansions.append(chunk)
+                new_expansion_file_by_id[chunk.id] = file_id
+
+        selected_expansions = self._merge_knowledge_results(previous_expansions, new_expansions)[:remaining_slots]
+        selected_new_by_file: dict[str, list[KnowledgeChunk]] = {}
+        for chunk in selected_expansions:
+            file_id = new_expansion_file_by_id.get(chunk.id)
+            if file_id is None:
+                continue
+            selected_new_by_file.setdefault(file_id, []).append(chunk)
+
+        for file_id, selected in selected_new_by_file.items():
+            expanded_file_id_set.add(file_id)
+            expanded_file_ids.append(file_id)
+            expanded_chunk_ids.extend(chunk.id for chunk in selected)
+            self._trace(
+                "expand",
+                state,
+                {
+                    "file_id": file_id,
+                    "added_chunk_indices": [
+                        chunk.chunk_index for chunk in selected if chunk.chunk_index is not None
+                    ],
+                },
+            )
+
+        return _KnowledgeMergeOutcome(
+            results=self._merge_knowledge_results(selected_direct, selected_expansions)[
+                :MAX_KNOWLEDGE_CONTEXT_CHUNKS
+            ],
+            expanded_file_ids=self._dedupe_keys(expanded_file_ids),
+            expanded_chunk_ids=self._dedupe_keys(expanded_chunk_ids),
+        )
+
+    def _same_file_expansion_candidates(
+        self,
+        direct_results: Sequence[KnowledgeChunk],
+        sections: Sequence[Any],
+        existing_ids: set[str],
+        expanded_file_ids: set[str],
+    ) -> list[tuple[str, list[KnowledgeChunk]]]:
+        direct_by_file: dict[str, list[KnowledgeChunk]] = {}
+        for chunk in direct_results:
+            if not chunk.file_id:
+                continue
+            direct_by_file.setdefault(chunk.file_id, []).append(chunk)
+
+        sections_by_file: dict[str, list[KnowledgeChunk]] = {}
+        for section in sections:
+            chunk = getattr(section, "chunk", None)
+            if chunk is None or not chunk.file_id:
+                continue
+            sections_by_file.setdefault(chunk.file_id, []).append(chunk)
+
+        expansion_groups: list[tuple[str, list[KnowledgeChunk]]] = []
+        for file_id, direct_chunks in direct_by_file.items():
+            if file_id in expanded_file_ids or len(direct_chunks) < 2:
+                continue
+
+            scores = [chunk.score for chunk in direct_chunks if chunk.score is not None]
+            if not scores:
+                continue
+
+            expansion_score = min(scores) - 0.01
+            candidates = [
+                replace(
+                    chunk,
+                    score=expansion_score,
+                    grep_hit=False,
+                    grep_keywords=(),
+                    same_file_expanded=True,
+                )
+                for chunk in sorted(
+                    sections_by_file.get(file_id, []),
+                    key=lambda item: (
+                        item.chunk_index is None,
+                        item.chunk_index if item.chunk_index is not None else 0,
+                        item.id,
+                    ),
+                )
+                if chunk.id not in existing_ids
+            ][:MAX_SAME_FILE_EXPANSION_CHUNKS]
+            if candidates:
+                expansion_groups.append((file_id, candidates))
+
+        return expansion_groups
 
     def _format_search_note(self, state: AgentState) -> str:
         if not state.get("search_executed"):

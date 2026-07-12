@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -242,6 +243,41 @@ def _long_context_chunk() -> KnowledgeChunk:
     return _chunk(id="ctx", title="長い根拠", score=0.99, text="CTX_START " + ("根拠本文" * 1200) + " CTX_END")
 
 
+def _write_chunked_knowledge_file(
+    tmp_path: Path,
+    *,
+    file_id: str = "lab-cps-members",
+    section_count: int = 8,
+    matching_indices: set[int] | None = None,
+) -> tuple[CampusLexicalSearch, list[KnowledgeChunk]]:
+    matching_indices = matching_indices or set()
+    sections = "\n\n".join(
+        f"## セクション{index}\n"
+        f"{'学生メンバー ' if index in matching_indices else ''}"
+        f"{file_id} のチャンク {index} です。"
+        for index in range(section_count)
+    )
+    (tmp_path / f"{file_id}.md").write_text(
+        f"""---
+id: {file_id}
+category: lab
+title: サイバーフィジカルシステム研究室 メンバー一覧
+source_urls:
+  - https://example.test/{file_id}
+retrieved_at: 2026-07-12
+confidence: high
+---
+
+{sections}
+""",
+        encoding="utf-8",
+    )
+    lexical = CampusLexicalSearch(tmp_path)
+    chunks = [section.chunk for section in lexical._load_sections() if section.chunk.file_id == file_id]
+    assert len(chunks) == section_count
+    return lexical, chunks
+
+
 async def test_estimate_tokens_uses_japanese_character_heuristic() -> None:
     assert estimate_tokens("") == 1
     assert estimate_tokens("あ") == 1
@@ -448,7 +484,7 @@ async def test_retrieve_searches_multiple_queries_dedupes_by_chunk_id_and_caps_r
 
     assert [call["query"] for call in store.calls] == ["食堂 メニュー", "カフェテリア 営業時間"]
     assert all(call["limit"] == 8 for call in store.calls)
-    assert len(result["knowledge_results"]) == 16
+    assert len(result["knowledge_results"]) == 17
     assert result["knowledge_results"][0].id == "shared"
     assert result["knowledge_results"][0].title == "高いスコア"
 
@@ -485,6 +521,131 @@ async def test_retrieve_preserves_grep_metadata_when_vector_hit_has_higher_score
     assert merged.score == 0.95
     assert merged.grep_hit is True
     assert merged.grep_keywords == ("研究室", "山口高康")
+
+
+async def test_retrieve_expands_same_file_sibling_chunks_with_limit_and_trace(tmp_path: Path, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="agent.trace")
+    lexical, chunks = _write_chunked_knowledge_file(tmp_path, section_count=16)
+    direct_chunks = [
+        replace(chunks[0], score=0.82),
+        replace(chunks[3], score=0.75),
+    ]
+    store = FakeKnowledgeStore({"学生メンバー": direct_chunks})
+    agent = _agent(store=store, lexical=lexical)
+
+    result = await agent._retrieve(
+        {
+            "trace_id": "trace-expand",
+            "question": "学生メンバーは？",
+            "retrieval_queries": ["学生メンバー"],
+        }
+    )
+
+    direct_ids = {chunk.id for chunk in direct_chunks}
+    expanded = [chunk for chunk in result["knowledge_results"] if chunk.id not in direct_ids]
+    expected_indices = [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    assert len(result["knowledge_results"]) == 14
+    assert {chunk.id for chunk in direct_chunks}.issubset({chunk.id for chunk in result["knowledge_results"]})
+    assert [chunk.chunk_index for chunk in expanded] == expected_indices
+    assert [chunk.score for chunk in expanded] == pytest.approx([0.74] * 12)
+    assert all(chunk.grep_hit is False for chunk in expanded)
+    assert all(chunk.same_file_expanded is True for chunk in expanded)
+    assert result["same_file_expanded_file_ids"] == ["lab-cps-members"]
+    assert result["same_file_expanded_chunk_ids"] == [chunk.id for chunk in expanded]
+
+    records = [json.loads(record.getMessage()) for record in caplog.records if record.name == "agent.trace"]
+    expand_records = [record for record in records if record["event"] == "expand"]
+    assert expand_records == [
+        {
+            "event": "expand",
+            "trace_id": "trace-expand",
+            "file_id": "lab-cps-members",
+            "added_chunk_indices": expected_indices,
+        }
+    ]
+
+
+async def test_retrieve_does_not_expand_single_same_file_hit(tmp_path: Path, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="agent.trace")
+    lexical, chunks = _write_chunked_knowledge_file(tmp_path, section_count=6)
+    direct_chunk = replace(chunks[0], score=0.88)
+    agent = _agent(store=FakeKnowledgeStore({"学生メンバー": [direct_chunk]}), lexical=lexical)
+
+    result = await agent._retrieve(
+        {
+            "trace_id": "trace-single",
+            "question": "学生メンバーは？",
+            "retrieval_queries": ["学生メンバー"],
+        }
+    )
+
+    assert result["knowledge_results"] == [direct_chunk]
+    assert result["same_file_expanded_file_ids"] == []
+    assert result["same_file_expanded_chunk_ids"] == []
+    records = [json.loads(record.getMessage()) for record in caplog.records if record.name == "agent.trace"]
+    assert [record for record in records if record["event"] == "expand"] == []
+
+
+async def test_same_file_expansion_uses_only_remaining_cap_slots(tmp_path: Path) -> None:
+    lexical, chunks = _write_chunked_knowledge_file(tmp_path, section_count=20)
+    same_file_direct = [
+        replace(chunks[0], score=0.80),
+        replace(chunks[1], score=0.79),
+    ]
+    other_direct = [
+        _chunk(
+            id=f"other-direct-{index}",
+            title=f"直接ヒット{index}",
+            score=0.98 - index / 1000,
+            file_id=f"other-file-{index}",
+            chunk_index=0,
+        )
+        for index in range(21)
+    ]
+    direct_chunks = [*same_file_direct, *other_direct]
+    agent = _agent(store=FakeKnowledgeStore({"学生メンバー": direct_chunks}), lexical=lexical)
+
+    result = await agent._retrieve(
+        {
+            "trace_id": "trace-cap",
+            "question": "学生メンバーは？",
+            "retrieval_queries": ["学生メンバー"],
+        }
+    )
+
+    result_ids = {chunk.id for chunk in result["knowledge_results"]}
+    direct_ids = {chunk.id for chunk in direct_chunks}
+    expanded = [chunk for chunk in result["knowledge_results"] if chunk.id not in direct_ids]
+    assert len(result["knowledge_results"]) == 24
+    assert direct_ids.issubset(result_ids)
+    assert len(expanded) == 1
+    assert expanded[0].chunk_index == 2
+    assert expanded[0].score == pytest.approx(0.78)
+    assert expanded[0].same_file_expanded is True
+
+
+async def test_same_file_expansion_is_idempotent_across_repeated_retrieve_merges(tmp_path: Path) -> None:
+    lexical, chunks = _write_chunked_knowledge_file(tmp_path, section_count=16)
+    direct_chunks = [
+        replace(chunks[0], score=0.82),
+        replace(chunks[3], score=0.75),
+    ]
+    agent = _agent(store=FakeKnowledgeStore({"学生メンバー": direct_chunks}), lexical=lexical)
+    base_state = {
+        "trace_id": "trace-idempotent",
+        "question": "学生メンバーは？",
+        "retrieval_queries": ["学生メンバー"],
+    }
+
+    first = await agent._retrieve(base_state)
+    second = await agent._retrieve({**base_state, **first})
+
+    assert [chunk.id for chunk in second["knowledge_results"]] == [
+        chunk.id for chunk in first["knowledge_results"]
+    ]
+    assert second["same_file_expanded_file_ids"] == first["same_file_expanded_file_ids"]
+    assert second["same_file_expanded_chunk_ids"] == first["same_file_expanded_chunk_ids"]
+    assert len(second["knowledge_results"]) == 14
 
 
 async def test_evaluate_insufficient_triggers_two_web_rounds_then_generates() -> None:
