@@ -148,7 +148,7 @@ generate に届けられない事象の一因（AGENT_HARNESS.md §V5-0）。複
 - gouin の IP は本機ルートの `.env` に **`Second_GPUsever`** キーで記載済み（利用者管理・値はコミットしない）。
   ルート docker-compose.yml の backend は
   `EMBEDDING_BASE_URL: http://${Second_GPUsever}:8001/v1` で参照する。
-- `--task embed` の正確なフラグ名は実装時に vLLM 現行ドキュメントで確認（版により `--runner pooling` 等）。
+- 埋め込みモードのフラグは **`--runner pooling`**（2026-07-12 gouin 実機で確定。旧 `--task embed` は現行 vLLM イメージで廃止済み。モデルは位置引数で渡す）。
 - backend / ingest は `EMBEDDING_BASE_URL` 経由で接続。
   **未設定時は従来の bge-m3(CPU) ローカル実行にフォールバック**（開発環境用）。
 - ベクトル次元は **4096**（bge-m3 の 1024 から変更）。**Qdrant コレクションの再作成と全ナレッジの
