@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2024-csci-2023
 category: lab
-title: "CPS研究室 Blog: 国際会議冒険記 in CSCI 2023"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 国際会議冒険記 in CSCI 2023"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E6%BA%96%E5%82%99%E3%81%A8%E6%85%A3%E3%82%8C%E3%81%8C%E8%82%9D%E5%BF%83%EF%BC%81%E5%9B%BD%E9%9A%9B%E4%BC%9A%E8%AD%B0%E5%86%92%E9%99%BA%E8%A8%98-in-%F0%9F%87%BA%F0%9F%87%B8csci-2023/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 国際会議冒険記 in CSCI 2023」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - 著者: Riku Sato

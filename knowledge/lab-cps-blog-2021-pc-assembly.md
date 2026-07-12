@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2021-pc-assembly
 category: lab
-title: "CPS研究室 Blog: パソコンの組み立て"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: パソコンの組み立て"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E3%83%91%E3%82%BD%E3%82%B3%E3%83%B3%E3%81%AE%E7%B5%84%E3%81%BF%E7%AB%8B%E3%81%A6%E2%9C%A8/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: パソコンの組み立て」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - 著者: Chihiro Sato

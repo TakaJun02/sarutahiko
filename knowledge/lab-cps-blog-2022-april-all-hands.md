@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2022-april-all-hands
 category: lab
-title: "CPS研究室 Blog: 4月だョ！全員集合！"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 4月だョ！全員集合！"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/4%E6%9C%88%E3%81%A0%E3%83%A7%EF%BC%81%E5%85%A8%E5%93%A1%E9%9B%86%E5%90%88%EF%BC%81/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 4月だョ！全員集合！」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - 著者: Riku Sato

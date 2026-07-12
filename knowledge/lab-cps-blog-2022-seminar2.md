@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2022-seminar2
 category: lab
-title: "CPS研究室 Blog: 2022年度セミナーII発表会 開催！！"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 2022年度セミナーII発表会 開催！！"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E3%82%BB%E3%83%9F%E3%83%8A%E3%83%BCii%E7%99%BA%E8%A1%A8%E4%BC%9A-%E9%96%8B%E5%82%AC%EF%BC%81%EF%BC%81-2/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 2022年度セミナーII発表会 開催！！」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 

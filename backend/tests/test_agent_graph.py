@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import logging
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -240,6 +243,41 @@ def _long_context_chunk() -> KnowledgeChunk:
     return _chunk(id="ctx", title="長い根拠", score=0.99, text="CTX_START " + ("根拠本文" * 1200) + " CTX_END")
 
 
+def _write_chunked_knowledge_file(
+    tmp_path: Path,
+    *,
+    file_id: str = "lab-cps-members",
+    section_count: int = 8,
+    matching_indices: set[int] | None = None,
+) -> tuple[CampusLexicalSearch, list[KnowledgeChunk]]:
+    matching_indices = matching_indices or set()
+    sections = "\n\n".join(
+        f"## セクション{index}\n"
+        f"{'学生メンバー ' if index in matching_indices else ''}"
+        f"{file_id} のチャンク {index} です。"
+        for index in range(section_count)
+    )
+    (tmp_path / f"{file_id}.md").write_text(
+        f"""---
+id: {file_id}
+category: lab
+title: サイバーフィジカルシステム研究室 メンバー一覧
+source_urls:
+  - https://example.test/{file_id}
+retrieved_at: 2026-07-12
+confidence: high
+---
+
+{sections}
+""",
+        encoding="utf-8",
+    )
+    lexical = CampusLexicalSearch(tmp_path)
+    chunks = [section.chunk for section in lexical._load_sections() if section.chunk.file_id == file_id]
+    assert len(chunks) == section_count
+    return lexical, chunks
+
+
 async def test_estimate_tokens_uses_japanese_character_heuristic() -> None:
     assert estimate_tokens("") == 1
     assert estimate_tokens("あ") == 1
@@ -294,6 +332,54 @@ confidence: high
     assert hits[0].chunk.grep_keywords == ("サイバーフィジカル", "山口高康")
 
 
+async def test_lexical_search_single_keyword_keeps_long_title_hit_in_top_six(tmp_path: Path) -> None:
+    long_path = tmp_path / "lab-cps-open-lab-2026.md"
+    long_path.write_text(
+        """---
+id: lab-cps-open-lab-2026
+category: lab
+title: サイバーフィジカルシステム研究室（CPS研） オープンキャンパス2026 出展
+source_urls:
+  - https://example.test/open-lab
+retrieved_at: 2026-07-12
+confidence: high
+---
+
+## 研究室公開・出展一覧
+サイバーフィジカルシステム研究室では、人間タワーバトルなどの出展を行います。
+""" + ("展示内容の詳しい説明です。" * 80),
+        encoding="utf-8",
+    )
+    short_sections = "\n\n".join(
+        f"## ブログ断片{i}\nサイバーフィジカルシステム研究室の短い紹介です。"
+        for i in range(7)
+    )
+    short_path = tmp_path / "lab-cps-blog.md"
+    short_path.write_text(
+        f"""---
+id: lab-cps-blog
+category: lab
+title: 研究室ブログ
+source_urls:
+  - https://example.test/blog
+retrieved_at: 2026-07-12
+confidence: high
+---
+
+{short_sections}
+""",
+        encoding="utf-8",
+    )
+    lexical = CampusLexicalSearch(tmp_path)
+
+    hits = lexical.grep_sections(["サイバーフィジカルシステム研究室"])
+
+    assert len(hits) == 6
+    assert hits[0].chunk.file_id == "lab-cps-open-lab-2026"
+    assert hits[0].title_heading_keyword_hit is True
+    assert hits[0].body_length > hits[1].body_length
+
+
 async def test_lexical_search_uses_keyword_variants_after_zero_primary_hits(tmp_path: Path) -> None:
     path = tmp_path / "lab.md"
     path.write_text(
@@ -337,6 +423,18 @@ async def test_analyze_parses_json_retrieval_queries() -> None:
     }
     assert llm.complete_calls[0]["temperature"] == 0.2
     assert llm.complete_calls[0]["max_tokens"] == 300
+
+
+async def test_analyze_prompt_allows_core_nouns_and_six_keywords() -> None:
+    agent = _agent()
+
+    messages = agent._build_analyze_messages("サイバーフィジカルシステム研究室では、どんな出展がありますか？", [])
+    system_prompt = messages[0]["content"]
+
+    assert "質問が求める対象を表す中核名詞" in system_prompt
+    assert "最大2語" in system_prompt
+    assert "keywords は合計最大6語" in system_prompt
+    assert "[\"サイバーフィジカルシステム研究室\", \"出展\"]" in system_prompt
 
 
 async def test_analyze_falls_back_to_raw_question_on_parse_failure() -> None:
@@ -385,8 +483,8 @@ async def test_retrieve_searches_multiple_queries_dedupes_by_chunk_id_and_caps_r
     )
 
     assert [call["query"] for call in store.calls] == ["食堂 メニュー", "カフェテリア 営業時間"]
-    assert all(call["limit"] == 6 for call in store.calls)
-    assert len(result["knowledge_results"]) == 10
+    assert all(call["limit"] == 8 for call in store.calls)
+    assert len(result["knowledge_results"]) == 17
     assert result["knowledge_results"][0].id == "shared"
     assert result["knowledge_results"][0].title == "高いスコア"
 
@@ -423,6 +521,131 @@ async def test_retrieve_preserves_grep_metadata_when_vector_hit_has_higher_score
     assert merged.score == 0.95
     assert merged.grep_hit is True
     assert merged.grep_keywords == ("研究室", "山口高康")
+
+
+async def test_retrieve_expands_same_file_sibling_chunks_with_limit_and_trace(tmp_path: Path, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="agent.trace")
+    lexical, chunks = _write_chunked_knowledge_file(tmp_path, section_count=16)
+    direct_chunks = [
+        replace(chunks[0], score=0.82),
+        replace(chunks[3], score=0.75),
+    ]
+    store = FakeKnowledgeStore({"学生メンバー": direct_chunks})
+    agent = _agent(store=store, lexical=lexical)
+
+    result = await agent._retrieve(
+        {
+            "trace_id": "trace-expand",
+            "question": "学生メンバーは？",
+            "retrieval_queries": ["学生メンバー"],
+        }
+    )
+
+    direct_ids = {chunk.id for chunk in direct_chunks}
+    expanded = [chunk for chunk in result["knowledge_results"] if chunk.id not in direct_ids]
+    expected_indices = [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    assert len(result["knowledge_results"]) == 14
+    assert {chunk.id for chunk in direct_chunks}.issubset({chunk.id for chunk in result["knowledge_results"]})
+    assert [chunk.chunk_index for chunk in expanded] == expected_indices
+    assert [chunk.score for chunk in expanded] == pytest.approx([0.74] * 12)
+    assert all(chunk.grep_hit is False for chunk in expanded)
+    assert all(chunk.same_file_expanded is True for chunk in expanded)
+    assert result["same_file_expanded_file_ids"] == ["lab-cps-members"]
+    assert result["same_file_expanded_chunk_ids"] == [chunk.id for chunk in expanded]
+
+    records = [json.loads(record.getMessage()) for record in caplog.records if record.name == "agent.trace"]
+    expand_records = [record for record in records if record["event"] == "expand"]
+    assert expand_records == [
+        {
+            "event": "expand",
+            "trace_id": "trace-expand",
+            "file_id": "lab-cps-members",
+            "added_chunk_indices": expected_indices,
+        }
+    ]
+
+
+async def test_retrieve_does_not_expand_single_same_file_hit(tmp_path: Path, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="agent.trace")
+    lexical, chunks = _write_chunked_knowledge_file(tmp_path, section_count=6)
+    direct_chunk = replace(chunks[0], score=0.88)
+    agent = _agent(store=FakeKnowledgeStore({"学生メンバー": [direct_chunk]}), lexical=lexical)
+
+    result = await agent._retrieve(
+        {
+            "trace_id": "trace-single",
+            "question": "学生メンバーは？",
+            "retrieval_queries": ["学生メンバー"],
+        }
+    )
+
+    assert result["knowledge_results"] == [direct_chunk]
+    assert result["same_file_expanded_file_ids"] == []
+    assert result["same_file_expanded_chunk_ids"] == []
+    records = [json.loads(record.getMessage()) for record in caplog.records if record.name == "agent.trace"]
+    assert [record for record in records if record["event"] == "expand"] == []
+
+
+async def test_same_file_expansion_uses_only_remaining_cap_slots(tmp_path: Path) -> None:
+    lexical, chunks = _write_chunked_knowledge_file(tmp_path, section_count=20)
+    same_file_direct = [
+        replace(chunks[0], score=0.80),
+        replace(chunks[1], score=0.79),
+    ]
+    other_direct = [
+        _chunk(
+            id=f"other-direct-{index}",
+            title=f"直接ヒット{index}",
+            score=0.98 - index / 1000,
+            file_id=f"other-file-{index}",
+            chunk_index=0,
+        )
+        for index in range(21)
+    ]
+    direct_chunks = [*same_file_direct, *other_direct]
+    agent = _agent(store=FakeKnowledgeStore({"学生メンバー": direct_chunks}), lexical=lexical)
+
+    result = await agent._retrieve(
+        {
+            "trace_id": "trace-cap",
+            "question": "学生メンバーは？",
+            "retrieval_queries": ["学生メンバー"],
+        }
+    )
+
+    result_ids = {chunk.id for chunk in result["knowledge_results"]}
+    direct_ids = {chunk.id for chunk in direct_chunks}
+    expanded = [chunk for chunk in result["knowledge_results"] if chunk.id not in direct_ids]
+    assert len(result["knowledge_results"]) == 24
+    assert direct_ids.issubset(result_ids)
+    assert len(expanded) == 1
+    assert expanded[0].chunk_index == 2
+    assert expanded[0].score == pytest.approx(0.78)
+    assert expanded[0].same_file_expanded is True
+
+
+async def test_same_file_expansion_is_idempotent_across_repeated_retrieve_merges(tmp_path: Path) -> None:
+    lexical, chunks = _write_chunked_knowledge_file(tmp_path, section_count=16)
+    direct_chunks = [
+        replace(chunks[0], score=0.82),
+        replace(chunks[3], score=0.75),
+    ]
+    agent = _agent(store=FakeKnowledgeStore({"学生メンバー": direct_chunks}), lexical=lexical)
+    base_state = {
+        "trace_id": "trace-idempotent",
+        "question": "学生メンバーは？",
+        "retrieval_queries": ["学生メンバー"],
+    }
+
+    first = await agent._retrieve(base_state)
+    second = await agent._retrieve({**base_state, **first})
+
+    assert [chunk.id for chunk in second["knowledge_results"]] == [
+        chunk.id for chunk in first["knowledge_results"]
+    ]
+    assert second["same_file_expanded_file_ids"] == first["same_file_expanded_file_ids"]
+    assert second["same_file_expanded_chunk_ids"] == first["same_file_expanded_chunk_ids"]
+    assert len(second["knowledge_results"]) == 14
 
 
 async def test_evaluate_insufficient_triggers_two_web_rounds_then_generates() -> None:
@@ -755,7 +978,7 @@ async def test_web_context_is_truncated_to_remaining_budget() -> None:
 
 
 async def test_evaluate_messages_use_summary_context_within_budget() -> None:
-    agent = _agent(llm_context_window=1400)
+    agent = _agent(llm_context_window=1800)
     state = {
         "question": "施設について教えて",
         "knowledge_results": [_chunk(id="facility", title="施設", text="施設情報 " + ("あ" * 2000), score=0.9)],
@@ -765,13 +988,13 @@ async def test_evaluate_messages_use_summary_context_within_budget() -> None:
     }
 
     messages = agent._build_evaluate_messages(state)
-    prompt_budget = 1400 - 300 - PROMPT_MARGIN_TOKENS
+    prompt_budget = 1800 - 300 - PROMPT_MARGIN_TOKENS
     combined = "\n".join(message["content"] for message in messages)
 
     assert _message_tokens(messages) <= prompt_budget
     assert "summary:" in combined
     assert "WEB_SUMMARY" in combined
-    assert "い" * 500 not in combined
+    assert "い" * 700 not in combined
 
 
 async def test_evaluate_messages_include_value_demand_criterion() -> None:
@@ -1050,3 +1273,110 @@ async def test_generation_retries_context_length_bad_request_once_with_smaller_c
     assert "RETRY_HISTORY_ASSISTANT" in first_prompt
     assert "RETRY_HISTORY_USER" in retry_prompt
     assert "RETRY_HISTORY_ASSISTANT" in retry_prompt
+
+
+async def test_agent_trace_logs_structured_json_lines(caplog, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_TRACE", "1")
+    caplog.set_level(logging.INFO, logger="agent.trace")
+    vector_chunk = _chunk(
+        id="vector",
+        title="ベクトル",
+        text="ベクトル根拠",
+        score=0.91,
+        file_id="file-vector",
+        chunk_index=2,
+    )
+    grep_chunk = _chunk(
+        id="grep",
+        title="全文検索",
+        text="全文検索根拠",
+        score=1102.0,
+        file_id="file-grep",
+        chunk_index=3,
+        grep_hit=True,
+        grep_keywords=("出展",),
+    )
+    lexical = FakeLexicalSearch(
+        LexicalSearchOutcome(
+            hits=[
+                SectionHit(
+                    chunk=grep_chunk,
+                    distinct_keyword_hits=1,
+                    title_heading_keyword_hit=True,
+                    total_hits=2,
+                    body_length=len(grep_chunk.text),
+                )
+            ],
+            searched_keywords=["出展"],
+            variant_keywords=[],
+            variants_attempted=False,
+        )
+    )
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries": ["CPS研 出展"], "keywords": ["CPS研", "出展"], "intent": "event"}',
+            '{"sufficient": false, "missing": "URL確認", "grep_keywords": [], "retrieval_queries": [], "web_queries": ["CPS研 出展"]}',
+            '{"sufficient": true, "missing": "", "grep_keywords": [], "retrieval_queries": [], "web_queries": []}',
+        ],
+        token_counts=[512],
+        tokens=["回答"],
+    )
+    search = FakeSearchProvider(
+        [
+            WebSearchResult(
+                "CPS研 出展",
+                "https://example.test/open-lab",
+                "snippet",
+                "CPS研の出展本文",
+            )
+        ]
+    )
+    agent = _agent(
+        llm=llm,
+        store=FakeKnowledgeStore([vector_chunk]),
+        search=search,
+        lexical=lexical,
+    )
+
+    await _collect(agent, "CPS研の出展は？")
+
+    records = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "agent.trace"
+    ]
+    events = [record["event"] for record in records]
+    assert events == ["analyze", "retrieve", "search", "evaluate", "web_search", "evaluate", "generate"]
+
+    retrieve = next(record for record in records if record["event"] == "retrieve")
+    assert retrieve["queries"][0]["hits"] == [
+        {"file_id": "file-vector", "chunk_index": 2, "score": 0.91}
+    ]
+    search_record = next(record for record in records if record["event"] == "search")
+    assert search_record["hits"] == [
+        {"file_id": "file-grep", "chunk_index": 3, "distinct": 1, "total": 2}
+    ]
+    web = next(record for record in records if record["event"] == "web_search")
+    assert web["queries"] == ["CPS研 出展"]
+    assert web["urls"] == ["https://example.test/open-lab"]
+    generate = records[-1]
+    assert generate["adopted_chunk_ids"]
+    assert "rejected_chunk_ids" in generate
+    assert generate["prompt_tokens"] == 512
+
+
+async def test_agent_trace_can_be_disabled(caplog, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_TRACE", "0")
+    caplog.set_level(logging.INFO, logger="agent.trace")
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries": ["食堂"], "keywords": ["食堂"], "intent": "facility"}',
+            '{"sufficient": true, "missing": "", "web_queries": []}',
+        ],
+        tokens=["回答"],
+    )
+    agent = _agent(llm=llm, store=FakeKnowledgeStore([_chunk()]), lexical=FakeLexicalSearch())
+
+    await _collect(agent, "食堂はどこ？")
+
+    assert [record for record in caplog.records if record.name == "agent.trace"] == []

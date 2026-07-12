@@ -1,12 +1,14 @@
 ---
 id: lab-cps-education-simulation
 category: lab
-title: "CPS研究室 Education: Simulation"
+title: "サイバーフィジカルシステム研究室（CPS研） 教育: シミュレーション（Simulation）"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/simulation/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） 教育: Simulation」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 授業の目的
 Simulation は、何らかのシステムで働く法則を推定・抽出し、他のシステムやコンピュータに組み込んで模擬することを扱う授業として紹介されている。対戦型ゲームを題材に、深層学習、強化学習、探索の3技術を学び、組み合わせて強い AI を作るプログラミング能力を身につけることを目指す。

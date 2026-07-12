@@ -1,12 +1,14 @@
 ---
 id: lab-cps-education-social-research-methods
 category: lab
-title: "CPS研究室 Education: Social Research Methods"
+title: "サイバーフィジカルシステム研究室（CPS研） 教育: 社会調査法（Social Research Methods）"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/social-research-methods/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） 教育: Social Research Methods」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 授業の目的
 Social Research Methods は、社会で観測できるデータの収集・分析を通じ、データの背後にあるものを探って社会を探求する授業として紹介されている。実データをコンピュータで分析し、社会調査で用いられる分析手法と、正確かつ効率よく調査するための基本知識を学ぶ。

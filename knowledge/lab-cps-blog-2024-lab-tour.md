@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2024-lab-tour
 category: lab
-title: "CPS研究室 Blog: 2024年度 研究室見学会"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 2024年度 研究室見学会"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E4%BB%A4%E5%92%8C6%E5%B9%B4%E5%BA%A6-%E7%A0%94%E7%A9%B6%E5%AE%A4%E8%A6%8B%E5%AD%A6%E4%BC%9A%E3%80%80/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 2024年度 研究室見学会」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - 著者: Aoi Yamada

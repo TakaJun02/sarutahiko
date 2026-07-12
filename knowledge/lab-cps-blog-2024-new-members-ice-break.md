@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2024-new-members-ice-break
 category: lab
-title: "CPS研究室 Blog: 新メンバーに加わりました"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 新メンバーに加わりました"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E6%96%B0%E3%83%A1%E3%83%B3%E3%83%90%E3%83%BC%E3%81%AB%E5%8A%A0%E3%82%8F%E3%82%8A%E3%81%BE%E3%81%97%E3%81%9F-%E2%80%95-%E3%82%A2%E3%82%A4%E3%82%B9%E3%83%96%E3%83%AC%E3%82%A4%E3%82%AF%E3%81%AE%E5%8A%B9/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 新メンバーに加わりました」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - 著者: Yuto Takahashi

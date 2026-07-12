@@ -16,3 +16,4 @@ class KnowledgeChunk:
     chunk_index: int | None = None
     grep_hit: bool = False
     grep_keywords: tuple[str, ...] = ()
+    same_file_expanded: bool = False

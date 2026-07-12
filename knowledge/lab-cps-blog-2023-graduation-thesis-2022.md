@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2023-graduation-thesis-2022
 category: lab
-title: "CPS研究室 Blog: 2022年度 卒論発表会 ＆ 卒業式"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 2022年度 卒論発表会 ＆ 卒業式"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E4%BB%A4%E5%92%8C4%E5%B9%B4%E5%BA%A6-%E5%8D%92%E8%AB%96%E7%99%BA%E8%A1%A8%E4%BC%9A-%EF%BC%86-%E5%8D%92%E6%A5%AD%E5%BC%8F%EF%BC%81/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 2022年度 卒論発表会 ＆ 卒業式」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - カテゴリ: 卒業イベント
