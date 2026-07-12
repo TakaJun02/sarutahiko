@@ -1,4 +1,94 @@
-# エージェントハーネス v3 仕様
+# エージェントハーネス仕様（v4 = v3 + Tavily 移行・柔軟再試行）
+
+- 版: v4.0（2026-07-12, Fable 起草）。**v3 本文（下記）を基底とし、§V4 のデルタを適用する。矛盾時は §V4 が優先。**
+- v4 の背景（利用者指示 2026-07-12）:
+  1. Web Search プロバイダを ddgs（DuckDuckGo）から **Tavily** に移行する。API キーは `.env` に記載済み。
+  2. 試行順序は **Agentic RAG → Agentic Search → Web Search**（v3 の逐次順を維持・明文化）。
+  3. **「回答不可」を避ける**ため、evaluate 主導でローカル/Web の再試行を柔軟に行えるループにする。
+
+## V4. デルタ仕様
+
+### V4-1. TavilySearchProvider（ddgs 廃止）
+
+- 新規 `backend/app/search/tavily.py` に `TavilySearchProvider` を実装。`backend/app/search/ddgs.py`・`ddgs` 依存・関連テストは削除（テストは Tavily 版に置換）。
+- インターフェース（`SearchProvider` 抽象は踏襲・拡張）:
+  `async def search(query: str, *, max_results: int = 3, include_domains: Sequence[str] | None = None) -> list[WebSearchResult]`
+- 実装は **httpx 直叩き**（新規依存を増やさない。tavily-python は使わない）:
+  - `POST https://api.tavily.com/search`、認証は `Authorization: Bearer <TAVILY_API_KEY>` ヘッダ
+    （Tavily 現行 API の推奨形式。実装時に公式ドキュメントで最終確認し、異なれば body の `api_key` 形式に合わせる）。
+  - body: `{"query", "max_results", "search_depth": "basic", "include_answer": false, "include_raw_content": true, "include_domains": [...]（指定時のみ）}`
+  - タイムアウト 8 秒（既存の fetch と同じ）。
+- レスポンスマッピング: `results[]` の `title`→title、`url`→url、`content`→snippet、
+  `raw_content`（存在すれば）→ `WebSearchResult.text`（全文として保持。窓切り出しはハーネス側 §4.3）。
+- `include_answer` は **false 固定**（Tavily の生成回答は使わない。回答生成の主導権と「ナレッジ優先」ルール（§5 ルール5）を守るため）。
+- **エラーの飲み込み（回答不可回避の要）**: HTTP エラー・タイムアウト・JSON 不正・キー未設定は
+  **例外を投げず `[]` を返す**（warning ログ）。0 件扱いになれば既存の 0 件リフォーミュレーション（§4.2）と
+  諦めゲート（§5）がそのまま機能する。ハーネスを 500 で落とすことは決して無いこと。
+- 設定: `Settings.tavily_api_key`（`os.getenv("TAVILY_API_KEY", "")`）。
+  `.env` に記載のキー名が正（標準名 `TAVILY_API_KEY` を想定。実物が別名ならコードを .env に合わせる）。
+  docker-compose.yml の backend `environment:` に `TAVILY_API_KEY: ${TAVILY_API_KEY:-}` を追加
+  （compose はルートの `.env` を自動で補間に使う）。
+- requirements.txt: `ddgs==9.14.4` を削除。`httpx==0.28.1` の pin は維持し、ddgs 由来のコメントを更新。
+
+### V4-2. `site:` 制限の廃止 → `include_domains`
+
+- v3 §4.1 の 1 周目 `site:akita-pu.ac.jp <query>` を廃止し、
+  **1 周目は `include_domains=["akita-pu.ac.jp"]`** を渡す（サブドメイン cps.akita-pu.ac.jp 等も含まれる）。
+  クエリ文字列自体は変形しない。2 周目以降はドメイン制限なし（v3 どおり「秋田県立大学」自動付与は維持）。
+- 使用済みクエリの重複判定は **（正規化クエリ, ドメイン制限の有無）の組**で行う
+  （同一文言でも 1 周目の制限付きと 2 周目の制限なしは別試行として許可）。
+- 0 件リフォーミュレーション（v3 §4.2）は維持。「`site:` を外す」は「`include_domains` を外す」に読み替え。
+
+### V4-3. raw_content の活用（focused extraction は維持）
+
+- ページ本文は **Tavily の `raw_content` を第一ソース**とし、`raw_content` が無い結果だけ従来の httpx fetch を行う
+  （fetch 回数が減る分レイテンシと取得失敗が減る）。
+- どちら由来でも v3 §4.3 の focused extraction（キーワード窓 1,400 字）をそのまま適用する。
+- フェッチ前 URL 選別（v3 §4.3 後段）も不変。
+
+### V4-4. 柔軟な再試行ループ（回答不可の回避）
+
+- **初回パスの順序は不変**: analyze → retrieve（Agentic RAG）→ search（Agentic Search）→ evaluate。
+- evaluate の出力 JSON に `retrieval_queries` を追加（不足時のみ・最大 2・既出と別観点の言い換え）:
+
+```json
+{"sufficient": true|false, "missing": "...",
+ "grep_keywords": ["..."], "retrieval_queries": ["..."], "web_queries": ["...", "..."]}
+```
+
+- ルーティングを優先度型に統一（`_route_after_evaluate` を置換）:
+  1. `sufficient=true` → generate
+  2. `grep_keywords` 非空 かつ search 追加ラウンド未消化（最大 1、v3 踏襲）→ **search**
+  3. `retrieval_queries` 非空 かつ **re-retrieve 未消化（最大 1、v4 新規）** → **retrieve**
+     （使用済み retrieval クエリを正規化して記録し、全て既出ならこの分岐はスキップ）
+  4. Web ラウンド条件（v3 §4.1、最大 3）→ **web_search**
+  5. generate（諦めゲート v3 §5 不変: retrieve・search（変種込み）・web 2 周以上を消化するまで
+     「確認できなかった」系回答を出さない）
+- retrieve 再実行時のステータス実況: `FOLLOWUP_STATUS_TEXTS["retrieve"] = "観点を変えて学内ナレッジを検索しています…"`。
+  step enum・SSE スキーマの変更はなし。
+- LLM 呼び出し上限: analyze 1 + evaluate 最大 6 + generate 1 = **8**（v3 は 7）。
+  全体レイテンシ目標 60 秒以内は維持（V4-3 の fetch 削減分を充てる）。
+- アームが例外で落ちた場合も**残りのアームは必ず実行**して generate に進む（v3 §5 踏襲・スキップ理由はログ）。
+- 制御は引き続き `stream()` 内の逐次制御が正（Q-006 裁定）。LangGraph のノード定義は
+  stream() と矛盾しない範囲で現状維持でよい（v4 で書き換え必須なのは stream() 側のみ）。
+
+### V4-5. テスト・受け入れ基準（v3 §9 に追加）
+
+- ユニットテスト:
+  1. Tavily レスポンス → `WebSearchResult` マッピング（raw_content の text 反映含む）
+  2. 1 周目のみ `include_domains` が付くこと・2 周目以降は付かないこと
+  3. raw_content があるページは httpx fetch しないこと
+  4. API エラー・タイムアウト・キー未設定 → `[]`（例外にならない）
+  5. evaluate の `retrieval_queries` による re-retrieve（最大 1・使用済みクエリのスキップ）
+  6. ルーティング優先度（search > retrieve > web_search > generate）
+- 実測受け入れ（Fable が実施）:
+  1. v3 §9 の全基準を維持（CPS 研の先生・学長名・サークル列挙・OC プログラム・天気の誠実回答）。
+  2. ナレッジに無く Web にある情報が Tavily 経由で回答に入ること。
+  3. `TAVILY_API_KEY` 未設定でも 500 にならず、ローカル 2 アーム＋誠実回答で完結すること。
+
+---
+
+# （基底）エージェントハーネス v3 仕様
 
 - 版: v3.0（2026-07-12, Fable 起草）。v2.0（2026-07-11）を全面改訂。
 - 背景（利用者フィードバック）:
@@ -149,11 +239,30 @@ v2 のルール 1〜4 を維持し、以下を追加:
   ハーネスが実際の実行履歴から生成した 1 行（例:
   `調査ログ: 学内ナレッジ検索2回・全文検索(キーワード: …)・Web検索3回(クエリ: …)`）を
   プロンプトに渡し、それを根拠に書かせる。捏造防止。
-- **コンテキスト詰め込み順**（予算逼迫時の優先順）:
+- **コンテキスト詰め込み順**（予算逼迫時の優先順。2026-07-12 改訂）:
   1. **grep ヒットのセクション**（字句一致 = 精度最高）
-  2. Web 結果（focused extraction 済み。Web を回した質問では鮮度・補完価値が高い）
-  3. ベクトル検索のみのチャンク（スコア順）
-  ※ v2 の「web が存在すれば web 優先」を上記 3 段階に置き換える。
+  2. **高関連度のベクトルチャンク**（score ≥ `HIGH_RELEVANCE_CONTEXT_THRESHOLD = 0.60`、スコア順）
+  3. Web 結果（focused extraction 済み）
+  4. 残りのベクトルチャンク（スコア順）
+  ※ 旧順序（grep → Web → ベクトル全部）は、evaluate が誤って不足判定し Web を回した場合に、
+  正解を含む高スコアの学内ナレッジ（一次情報）が Web の薄いページに予算を奪われて
+  generate に届かない実測欠陥があった（CPS 研出展質問で再現、2026-07-12 検収）。
+  ルール5（ナレッジ優先）とも整合させ、高関連度ナレッジを Web より先に確保する。
+- **ルール6（会話履歴の常時保持）**: 会話履歴（`_format_history` 済み、
+  最大 `MAX_HISTORY_MESSAGES` 件・各 `MAX_HISTORY_CHARS` 字）は生成プロンプトに**常に含める**。
+  プロンプトが予算超過しても履歴を丸ごと落とすことは禁止（マルチターン会話が成立しなくなるため）。
+  縮退は次の順で行う:
+  1. 根拠コンテキストを縮小して再組み立て
+     （コンテキスト予算 = プロンプト予算 − system − **履歴** − user 骨格）。
+  2. 残余コンテキスト予算が `MIN_GENERATION_CONTEXT_TOKENS = 384`（推定トークン）を下回る場合、
+     履歴の**件数は維持**したまま各メッセージの文字上限を段階的に縮めて根拠予算を確保する
+     （500 → 250 → 120 字。下限 120 字。下限でも届かなければ残余予算で妥協し、根拠 0 も許容）。
+  3. それでも超過する場合は最後の user メッセージ（根拠部分）を切り詰める。
+  この順序は強制コンテキスト予算パス（実トークン計測後の再構築・リトライ）にも同様に適用するが、
+  強制パスでは実測由来の予算を 384 へ単純に押し上げてはならない（実超過から回復不能になる）。
+  強制パスでの 384 確保は履歴短縮で捻出した推定トークン分の加算のみ
+  （最終予算 = min(残余推定予算, 強制予算 + 履歴短縮で浮いた分)）。
+  evaluate モードのプロンプト構築はこの最低根拠保証の対象外（詳細は QUESTIONS.md Q-011 裁定）。
 
 ### 諦めゲート（丸投げ・不明回答の機械的抑制）
 

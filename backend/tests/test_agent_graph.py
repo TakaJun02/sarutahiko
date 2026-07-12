@@ -6,7 +6,13 @@ import pytest
 import httpx
 from openai import BadRequestError
 
-from app.agent.graph import GENERATE_SYSTEM_PROMPT, PROMPT_MARGIN_TOKENS, RealCampusAgent, estimate_tokens
+from app.agent.graph import (
+    GENERATE_SYSTEM_PROMPT,
+    MIN_GENERATION_CONTEXT_TOKENS,
+    PROMPT_MARGIN_TOKENS,
+    RealCampusAgent,
+    estimate_tokens,
+)
 from app.models.auth import User
 from app.rag.lexical import (
     CampusLexicalSearch,
@@ -135,8 +141,14 @@ class FakeSearchProvider:
         self.results = results
         self.calls: list[dict] = []
 
-    async def search(self, query: str, *, max_results: int):
-        self.calls.append({"query": query, "max_results": max_results})
+    async def search(self, query: str, *, max_results: int, include_domains=None):
+        self.calls.append(
+            {
+                "query": query,
+                "max_results": max_results,
+                "include_domains": include_domains,
+            }
+        )
         offset = (len(self.calls) - 1) * max_results
         rows = self.results[offset : offset + max_results] or self.results[:max_results]
         return rows[:max_results]
@@ -213,6 +225,19 @@ def _http_factory(html_by_url: dict[str, str]):
 
 def _message_tokens(messages: list[dict[str, str]]) -> int:
     return sum(estimate_tokens(message["content"]) for message in messages)
+
+
+def _long_history(prefix: str = "HISTORY") -> list[dict[str, str]]:
+    return [
+        {"role": "user", "content": f"{prefix}_USER_1 " + ("あ" * 600)},
+        {"role": "assistant", "content": f"{prefix}_ASSISTANT_1 " + ("い" * 600)},
+        {"role": "user", "content": f"{prefix}_USER_2 " + ("う" * 600)},
+        {"role": "assistant", "content": f"{prefix}_ASSISTANT_2 " + ("え" * 600)},
+    ]
+
+
+def _long_context_chunk() -> KnowledgeChunk:
+    return _chunk(id="ctx", title="長い根拠", score=0.99, text="CTX_START " + ("根拠本文" * 1200) + " CTX_END")
 
 
 async def test_estimate_tokens_uses_japanese_character_heuristic() -> None:
@@ -323,6 +348,26 @@ async def test_analyze_falls_back_to_raw_question_on_parse_failure() -> None:
     assert result == {"retrieval_queries": ["サークルは？"], "keywords": []}
 
 
+async def test_analyze_budget_preserves_history_and_truncates_current_question() -> None:
+    agent = _agent(llm_context_window=1000)
+    history = [
+        {"role": "user", "content": "ANALYZE_HISTORY_USER 食堂の質問済み"},
+        {"role": "assistant", "content": "ANALYZE_HISTORY_ASSISTANT 食堂の回答済み"},
+    ]
+
+    messages = agent._build_analyze_messages("CURRENT_QUESTION " + ("あ" * 2000), history)
+    prompt_budget = 1000 - 300 - PROMPT_MARGIN_TOKENS
+    combined = "\n".join(message["content"] for message in messages)
+
+    assert _message_tokens(messages) <= prompt_budget
+    assert messages[1] == history[0]
+    assert messages[2] == history[1]
+    assert "ANALYZE_HISTORY_USER" in combined
+    assert "ANALYZE_HISTORY_ASSISTANT" in combined
+    assert "CURRENT_QUESTION" in combined
+    assert "あ" * 1000 not in combined
+
+
 async def test_retrieve_searches_multiple_queries_dedupes_by_chunk_id_and_caps_results() -> None:
     llm = FakeLLMClient()
     shared_low = _chunk(id="shared", title="古いスコア", score=0.50)
@@ -344,6 +389,40 @@ async def test_retrieve_searches_multiple_queries_dedupes_by_chunk_id_and_caps_r
     assert len(result["knowledge_results"]) == 10
     assert result["knowledge_results"][0].id == "shared"
     assert result["knowledge_results"][0].title == "高いスコア"
+
+
+async def test_retrieve_preserves_grep_metadata_when_vector_hit_has_higher_score() -> None:
+    grep_chunk = _chunk(
+        id="shared",
+        title="全文検索ヒット",
+        score=0.50,
+        grep_hit=True,
+        grep_keywords=("研究室",),
+    )
+    vector_chunk = _chunk(
+        id="shared",
+        title="ベクトル再検索ヒット",
+        score=0.95,
+        grep_keywords=("山口高康",),
+    )
+    store = FakeKnowledgeStore({"研究室 教員": [vector_chunk]})
+    agent = _agent(store=store)
+
+    result = await agent._retrieve(
+        {
+            "question": "CPS研究室の教員は？",
+            "retrieval_queries": ["研究室 教員"],
+            "knowledge_results": [grep_chunk],
+        }
+    )
+
+    assert len(result["knowledge_results"]) == 1
+    merged = result["knowledge_results"][0]
+    assert merged.id == "shared"
+    assert merged.title == "ベクトル再検索ヒット"
+    assert merged.score == 0.95
+    assert merged.grep_hit is True
+    assert merged.grep_keywords == ("研究室", "山口高康")
 
 
 async def test_evaluate_insufficient_triggers_two_web_rounds_then_generates() -> None:
@@ -386,11 +465,37 @@ async def test_evaluate_insufficient_triggers_two_web_rounds_then_generates() ->
         "generate",
     ]
     assert [call["query"] for call in search.calls] == [
-        "site:akita-pu.ac.jp 秋田県立大学 学長",
+        "秋田県立大学 学長",
         "秋田県立大学 学長 プロフィール",
     ]
+    assert [call["include_domains"] for call in search.calls] == [["akita-pu.ac.jp"], None]
     assert events[-2] == ("token", {"text": "最終回答"})
     assert llm.stream_calls[0]["temperature"] == 0.7
+
+
+async def test_web_search_uses_include_domains_only_on_first_round() -> None:
+    search = FakeSearchProvider(
+        [
+            WebSearchResult("公式1", "https://example.test/page1", "snippet1", "raw content 1"),
+            WebSearchResult("公式2", "https://example.test/page2", "snippet2", "raw content 2"),
+        ]
+    )
+    agent = _agent(search=search)
+    state = {
+        "question": "学長は誰ですか？",
+        "keywords": ["学長"],
+        "web_queries": ["秋田県立大学 学長"],
+        "web_results": [],
+        "web_search_rounds": 0,
+        "used_web_queries": [],
+        "used_web_query_keys": [],
+    }
+
+    state.update(await agent._web_search(state))
+    state.update(await agent._web_search(state))
+
+    assert [call["query"] for call in search.calls] == ["秋田県立大学 学長", "秋田県立大学 学長"]
+    assert [call["include_domains"] for call in search.calls] == [["akita-pu.ac.jp"], None]
 
 
 async def test_stream_emits_search_status_step() -> None:
@@ -432,6 +537,37 @@ async def test_web_page_fetch_and_extraction_drops_tags_and_truncates() -> None:
     assert len(text) == 1400
 
 
+async def test_fetch_search_results_uses_raw_content_without_http_fetch() -> None:
+    fetch_calls: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        fetch_calls.append(str(request.url))
+        return httpx.Response(500)
+
+    agent = _agent(
+        http_client_factory=lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            timeout=8.0,
+        )
+    )
+    result = WebSearchResult(
+        "Raw page",
+        "https://example.test/raw",
+        "snippet",
+        "先頭" + ("あ" * 1600) + "サイバーフィジカルシステム研究室 山口高康" + ("い" * 1600),
+    )
+
+    fetched = await agent._fetch_search_results(
+        [result],
+        keywords=["サイバーフィジカルシステム研究室", "山口高康"],
+    )
+
+    assert fetch_calls == []
+    assert len(fetched) == 1
+    assert fetched[0].text.startswith("…")
+    assert "山口高康" in fetched[0].text
+
+
 async def test_focused_extraction_centers_window_on_keyword_match() -> None:
     text = "先頭" + ("あ" * 1600) + "サイバーフィジカルシステム研究室 山口高康" + ("い" * 1600)
 
@@ -458,44 +594,147 @@ async def test_context_budget_truncates_and_drops_knowledge_chunks_by_score() ->
     assert len(context.text) < len(high.text)
 
 
-async def test_context_packing_prioritizes_grep_hits_then_web_then_vector_only_chunks() -> None:
+async def test_context_packing_prioritizes_grep_hits_high_vector_web_then_remaining_vectors() -> None:
     agent = _agent()
-    grep = _chunk(id="grep", score=0.10, text="GREP_CONTEXT", grep_hit=True, grep_keywords=("研究室",))
-    vector = _chunk(id="vector", score=0.99, text="VECTOR_CONTEXT")
+    grep = _chunk(
+        id="grep",
+        title="Grep",
+        score=0.10,
+        text="GREP_CONTEXT",
+        source_urls=["https://example.test/grep"],
+        grep_hit=True,
+        grep_keywords=("研究室",),
+    )
+    high_vector = _chunk(
+        id="high-vector",
+        title="High vector",
+        score=0.60,
+        text="HIGH_VECTOR_CONTEXT",
+        source_urls=["https://example.test/high"],
+    )
+    low_vector = _chunk(
+        id="low-vector",
+        title="Low vector",
+        score=0.59,
+        text="LOW_VECTOR_CONTEXT",
+        source_urls=["https://example.test/low"],
+    )
+    none_score_vector = _chunk(
+        id="none-score-vector",
+        title="None score vector",
+        score=None,
+        text="NONE_SCORE_VECTOR_CONTEXT",
+        source_urls=["https://example.test/none"],
+    )
     web = WebSearchResult("Web", "https://example.test/web", "snippet", "WEB_CONTEXT")
 
-    context = agent._assemble_context_with_budget([vector, grep], [web], mode="generate", token_budget=400)
+    context = agent._assemble_context_with_budget(
+        [low_vector, high_vector, grep, none_score_vector],
+        [web],
+        mode="generate",
+        token_budget=500,
+    )
 
-    assert context.text.index("GREP_CONTEXT") < context.text.index("WEB_CONTEXT")
-    assert context.text.index("WEB_CONTEXT") < context.text.index("VECTOR_CONTEXT")
-    assert [chunk.id for chunk in context.knowledge_results] == ["grep", "vector"]
+    assert context.text.index("GREP_CONTEXT") < context.text.index("HIGH_VECTOR_CONTEXT")
+    assert context.text.index("HIGH_VECTOR_CONTEXT") < context.text.index("WEB_CONTEXT")
+    assert context.text.index("WEB_CONTEXT") < context.text.index("LOW_VECTOR_CONTEXT")
+    assert context.text.index("LOW_VECTOR_CONTEXT") < context.text.index("NONE_SCORE_VECTOR_CONTEXT")
+    assert [chunk.id for chunk in context.knowledge_results] == [
+        "grep",
+        "high-vector",
+        "low-vector",
+        "none-score-vector",
+    ]
     assert [result.url for result in context.web_results] == ["https://example.test/web"]
 
 
-async def test_generation_budget_drops_history_before_trimming_context() -> None:
+async def test_generation_budget_preserves_history_and_trims_context() -> None:
     agent = _agent(llm_context_window=1200, llm_answer_max_tokens=200)
     history = [
-        {"role": "user", "content": "HISTORY_USER " + ("あ" * 800)},
-        {"role": "assistant", "content": "HISTORY_ASSISTANT " + ("い" * 800)},
+        {"role": "user", "content": "HISTORY_USER 食堂について聞いていました。"},
+        {"role": "assistant", "content": "HISTORY_ASSISTANT 食堂はカフェテリア棟にあります。"},
     ]
+    context_text = "HIGH_CONTEXT " + ("う" * 2400) + " END_CONTEXT"
     state = {
         "question": "食堂はどこですか？",
         "role": "highschool",
         "history": history,
         "knowledge_results": [
-            _chunk(id="high", title="High score", score=0.99, text="HIGH_CONTEXT " + ("う" * 2400))
+            _chunk(id="high", title="High score", score=0.99, text=context_text)
         ],
         "web_results": [],
     }
 
-    messages = agent._build_generation_messages(state)
+    messages, context = agent._build_generation_messages_with_sources(state)
     prompt_budget = 1200 - 200 - PROMPT_MARGIN_TOKENS
     combined = "\n".join(message["content"] for message in messages)
 
     assert _message_tokens(messages) <= prompt_budget
-    assert "HISTORY_USER" not in combined
-    assert "HISTORY_ASSISTANT" not in combined
+    assert messages[1] == history[0]
+    assert messages[2] == history[1]
+    assert "HISTORY_USER" in combined
+    assert "HISTORY_ASSISTANT" in combined
     assert "HIGH_CONTEXT" in combined
+    assert "END_CONTEXT" not in combined
+    assert len(context.text) < len(context_text)
+
+
+async def test_generation_budget_shrinks_history_to_250_to_preserve_minimum_context() -> None:
+    agent = _agent(llm_context_window=2816, llm_answer_max_tokens=640)
+    state = {
+        "question": "施設について教えて",
+        "role": "highschool",
+        "history": _long_history("MIN_CONTEXT"),
+        "knowledge_results": [_long_context_chunk()],
+        "web_results": [],
+    }
+
+    messages, context = agent._build_generation_messages_with_sources(state)
+    history_messages = messages[1:-1]
+
+    assert _message_tokens(messages) <= 2816 - 640 - PROMPT_MARGIN_TOKENS
+    assert len(history_messages) == 4
+    assert [len(message["content"]) for message in history_messages] == [250, 250, 250, 250]
+    assert estimate_tokens(context.text) >= MIN_GENERATION_CONTEXT_TOKENS
+    assert "CTX_START" in context.text
+
+
+async def test_generation_budget_uses_120_floor_and_accepts_sub_minimum_context() -> None:
+    agent = _agent(llm_context_window=1800, llm_answer_max_tokens=640)
+    state = {
+        "question": "施設について教えて",
+        "role": "highschool",
+        "history": _long_history("LOW_CONTEXT"),
+        "knowledge_results": [_long_context_chunk()],
+        "web_results": [],
+    }
+
+    messages, context = agent._build_generation_messages_with_sources(state)
+    history_messages = messages[1:-1]
+
+    assert _message_tokens(messages) <= 1800 - 640 - PROMPT_MARGIN_TOKENS
+    assert len(history_messages) == 4
+    assert [len(message["content"]) for message in history_messages] == [120, 120, 120, 120]
+    assert 0 < estimate_tokens(context.text) < MIN_GENERATION_CONTEXT_TOKENS
+    assert "CTX_START" in context.text
+
+
+async def test_forced_generation_budget_does_not_inflate_without_history_freed_tokens() -> None:
+    agent = _agent(llm_context_window=2816, llm_answer_max_tokens=640)
+    state = {
+        "question": "施設について教えて",
+        "role": "highschool",
+        "history": [],
+        "knowledge_results": [_long_context_chunk()],
+        "web_results": [],
+    }
+
+    messages, context = agent._build_generation_messages_with_sources(state, token_budget=100)
+
+    assert len(messages) == 2
+    assert estimate_tokens(context.text) <= 100
+    assert estimate_tokens(context.text) < MIN_GENERATION_CONTEXT_TOKENS
+    assert "CTX_START" in context.text
 
 
 async def test_web_context_is_truncated_to_remaining_budget() -> None:
@@ -578,6 +817,99 @@ async def test_evaluate_uses_centered_summary_for_grep_hit_chunks() -> None:
     assert "前" * 500 not in combined
 
 
+async def test_evaluate_retrieval_queries_trigger_one_reretrieve_and_skip_used_queries() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries": ["食堂"], "keywords": ["食堂"], "intent": "food"}',
+            '{"sufficient": false, "missing": "営業時間", "grep_keywords": [], "retrieval_queries": ["カフェテリア 営業時間", "食堂"], "web_queries": ["食堂 営業時間"]}',
+            '{"sufficient": true, "missing": "", "grep_keywords": [], "retrieval_queries": ["別クエリ"], "web_queries": []}',
+        ],
+        tokens=["回答"],
+    )
+    store = FakeKnowledgeStore(
+        {
+            "食堂": [_chunk(id="initial", title="食堂")],
+            "カフェテリア 営業時間": [_chunk(id="followup", title="カフェテリア")],
+        }
+    )
+    agent = _agent(llm=llm, store=store, lexical=FakeLexicalSearch())
+
+    events = await _collect(agent, "食堂の営業時間は？")
+
+    assert [call["query"] for call in store.calls] == ["食堂", "カフェテリア 営業時間"]
+    status_payloads = [payload for event, payload in events if event == "status"]
+    assert [payload["step"] for payload in status_payloads] == [
+        "analyze",
+        "retrieve",
+        "search",
+        "evaluate",
+        "retrieve",
+        "evaluate",
+        "generate",
+    ]
+    assert status_payloads[4]["text"] == "観点を変えて学内ナレッジを検索しています…"
+
+
+async def test_route_after_evaluate_prioritizes_search_retrieve_web_then_generate() -> None:
+    agent = _agent()
+
+    assert (
+        agent._route_after_evaluate(
+            {
+                "sufficient": False,
+                "grep_keywords": ["研究室"],
+                "followup_retrieval_queries": ["研究室 教員"],
+                "used_retrieval_queries": [],
+                "local_search_followups": 0,
+                "retrieval_followups": 0,
+                "web_search_rounds": 0,
+            }
+        )
+        == "search"
+    )
+    assert (
+        agent._route_after_evaluate(
+            {
+                "sufficient": False,
+                "grep_keywords": [],
+                "followup_retrieval_queries": ["研究室 教員"],
+                "used_retrieval_queries": [],
+                "local_search_followups": 0,
+                "retrieval_followups": 0,
+                "web_search_rounds": 0,
+            }
+        )
+        == "retrieve"
+    )
+    assert (
+        agent._route_after_evaluate(
+            {
+                "sufficient": False,
+                "grep_keywords": [],
+                "followup_retrieval_queries": ["研究室 教員"],
+                "used_retrieval_queries": [RealCampusAgent._retrieval_query_key("研究室 教員")],
+                "local_search_followups": 0,
+                "retrieval_followups": 0,
+                "web_search_rounds": 0,
+            }
+        )
+        == "web_search"
+    )
+    assert (
+        agent._route_after_evaluate(
+            {
+                "sufficient": False,
+                "grep_keywords": [],
+                "followup_retrieval_queries": [],
+                "used_retrieval_queries": [],
+                "web_search_rounds": 3,
+                "keywords": [],
+            }
+        )
+        == "generate"
+    )
+
+
 async def test_give_up_gate_controls_investigation_log() -> None:
     agent = _agent()
     state = {
@@ -593,7 +925,7 @@ async def test_give_up_gate_controls_investigation_log() -> None:
         "search_terms": ["不明な制度"],
         "search_variant_terms": ["制度"],
         "web_search_rounds": 2,
-        "used_web_queries": ["site:akita-pu.ac.jp 不明な制度", "不明な制度 秋田県立大学"],
+        "used_web_queries": ["不明な制度", "不明な制度 秋田県立大学"],
     }
 
     messages = agent._build_generation_messages(state)
@@ -676,13 +1008,19 @@ async def test_generation_preverify_rebuilds_over_budget_prompt_with_reduced_con
         [_chunk(id="long", title="長い根拠", text="CONTEXT_START " + ("秋田県立大学" * 400), score=0.99)]
     )
     agent = _agent(llm=llm, store=store, llm_context_window=1200, llm_answer_max_tokens=200)
+    history = [
+        {"role": "user", "content": "PRESERVED_HISTORY_USER 施設の場所を聞いていました。"},
+        {"role": "assistant", "content": "PRESERVED_HISTORY_ASSISTANT 施設案内を続けています。"},
+    ]
 
-    await _collect(agent, "施設について教えて")
+    await _collect(agent, "施設について教えて", history=history)
 
     streamed_prompt = "\n\n".join(message["content"] for message in llm.stream_calls[0]["messages"])
     assert len(llm.count_token_texts) == 2
     assert len(llm.count_token_texts[1]) < len(llm.count_token_texts[0])
     assert streamed_prompt == llm.count_token_texts[1]
+    assert "PRESERVED_HISTORY_USER" in streamed_prompt
+    assert "PRESERVED_HISTORY_ASSISTANT" in streamed_prompt
 
 
 async def test_generation_retries_context_length_bad_request_once_with_smaller_context() -> None:
@@ -696,11 +1034,19 @@ async def test_generation_retries_context_length_bad_request_once_with_smaller_c
         [_chunk(id="long", title="長い根拠", text="CONTEXT_START " + ("本荘キャンパス" * 400), score=0.99)]
     )
     agent = _agent(llm=llm, store=store, llm_context_window=1200, llm_answer_max_tokens=200)
+    history = [
+        {"role": "user", "content": "RETRY_HISTORY_USER 施設の概要を質問済みです。"},
+        {"role": "assistant", "content": "RETRY_HISTORY_ASSISTANT 続けて確認します。"},
+    ]
 
-    events = await _collect(agent, "施設について教えて")
+    events = await _collect(agent, "施設について教えて", history=history)
 
     first_prompt = "\n\n".join(message["content"] for message in llm.stream_calls[0]["messages"])
     retry_prompt = "\n\n".join(message["content"] for message in llm.stream_calls[1]["messages"])
     assert events[-2] == ("token", {"text": "retry ok"})
     assert len(llm.stream_calls) == 2
     assert len(retry_prompt) < len(first_prompt)
+    assert "RETRY_HISTORY_USER" in first_prompt
+    assert "RETRY_HISTORY_ASSISTANT" in first_prompt
+    assert "RETRY_HISTORY_USER" in retry_prompt
+    assert "RETRY_HISTORY_ASSISTANT" in retry_prompt

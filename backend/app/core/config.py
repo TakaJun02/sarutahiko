@@ -36,6 +36,7 @@ class Settings:
     retrieval_top_k: int = 6
     retrieval_min_score: float = 0.45
     knowledge_dir: Path = default_knowledge_dir()
+    tavily_api_key: str = ""
     allow_origins: tuple[str, ...] = (
         "http://localhost:5173",
         "http://127.0.0.1:5173",
@@ -71,8 +72,13 @@ def load_settings() -> Settings:
         retrieval_top_k=int(os.getenv("RAG_TOP_K", "6")),
         retrieval_min_score=float(os.getenv("RAG_MIN_SCORE", "0.45")),
         knowledge_dir=Path(os.getenv("KNOWLEDGE_DIR", str(default_knowledge_dir()))),
+        tavily_api_key=_load_tavily_api_key(),
         allow_origins=allow_origins,
     )
+
+
+def _load_tavily_api_key() -> str:
+    return os.getenv("TAVILY_API_KEY") or os.getenv("tavily_API", "")
 
 
 def _parse_agent_mode(value: str) -> AgentMode:

@@ -14,7 +14,7 @@ from app.llm.client import VLLMClient
 from app.rag.embeddings import EmbeddingModel
 from app.rag.lexical import CampusLexicalSearch
 from app.rag.qdrant_store import CampusKnowledgeStore
-from app.search.ddgs import DDGSSearchProvider
+from app.search.tavily import TavilySearchProvider
 from app.services.auth import AuthService
 from app.services.threads import ThreadService
 
@@ -73,7 +73,7 @@ def _configure_agent(app: FastAPI, settings: Settings) -> None:
         collection_name=settings.qdrant_collection,
         embedding_model=embedding_model,
     )
-    search_provider = DDGSSearchProvider()
+    search_provider = TavilySearchProvider(api_key=settings.tavily_api_key)
     lexical_search = CampusLexicalSearch(settings.knowledge_dir)
 
     app.state.agent = RealCampusAgent(

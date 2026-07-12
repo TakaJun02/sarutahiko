@@ -1,6 +1,7 @@
 # アーキテクチャ / 技術選定
 
-- 版: v0.1（2026-07-11, Fable 決定）
+- 版: v0.2（2026-07-12, Fable 改訂 — Web 検索を ddgs → Tavily に変更。ハーネス v4 と同時）
+- v0.1（2026-07-11, Fable 決定）
 - 「確定済み仕様」（CLAUDE.md）以外の選定はここに記録する。変更したい場合は Fable が本ファイルを更新してから実装する。
 
 ## 1. コンポーネント構成
@@ -8,7 +9,7 @@
 ```
 [Vue 3 SPA] --HTTP/SSE--> [FastAPI backend] --OpenAI互換API--> [vLLM (Qwen3)]
                                |--> [Qdrant] (学内ナレッジ ベクトル検索)
-                               |--> [Web Search] (ddgs, 抽象化レイヤ経由)
+                               |--> [Web Search] (Tavily API, 抽象化レイヤ経由)
 ```
 
 すべて docker compose で起動する（vLLM は GPU 割当、`--gpus all`）。
@@ -38,7 +39,7 @@ backend のローカル起動・Vite の `/api` プロキシ先はともに 8080
 | 埋め込み | `BAAI/bge-m3` | 日本語を含む多言語で高性能。ローカル実行可 |
 | リランカー | `BAAI/bge-reranker-v2-m3`（任意、Phase 3 で効果測定） | 検索精度向上の定番。効果がなければ外す |
 | ベクトル DB | Qdrant（docker） | 運用が軽く、メタデータフィルタが強い。compose に載せやすい |
-| Web 検索 | `ddgs`（DuckDuckGo, API キー不要）を既定。`SearchProvider` インターフェースで抽象化 | キーレスで開発が止まらない。後から Tavily 等に差し替え可能 |
+| Web 検索 | **Tavily API**（`TAVILY_API_KEY` を `.env` で供給。httpx 直、SDK 不使用）。`SearchProvider` インターフェースで抽象化 | **2026-07-12 利用者指示で ddgs から移行**。`include_domains` によるドメイン制限と `raw_content`（本文同梱）で検索品質とレイテンシを改善（AGENT_HARNESS.md §V4） |
 | ストリーミング | SSE（`text/event-stream`） | 単方向で十分。WebSocket より単純 |
 
 ## 3. API / SSE イベントスキーマ

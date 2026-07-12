@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
@@ -22,8 +23,11 @@ Step = Literal["analyze", "retrieve", "search", "web_search", "evaluate", "gener
 MAX_RETRIEVAL_QUERIES = 3
 MAX_ANALYZE_KEYWORDS = 4
 MAX_EVALUATE_GREP_KEYWORDS = 3
+MAX_EVALUATE_RETRIEVAL_QUERIES = 2
 MAX_KNOWLEDGE_CONTEXT_CHUNKS = 10
+HIGH_RELEVANCE_CONTEXT_THRESHOLD = 0.60
 MAX_LOCAL_SEARCH_FOLLOWUPS = 1
+MAX_RETRIEVAL_FOLLOWUPS = 1
 MAX_WEB_SEARCH_ROUNDS = 3
 MIN_WEB_ROUNDS_BEFORE_GIVE_UP = 2
 MAX_WEB_RESULTS_PER_ROUND = 5
@@ -43,6 +47,8 @@ REAL_TOKEN_REBUILD_SCALE = 0.95
 CONTEXT_RETRY_SCALE = 0.5
 MAX_HISTORY_MESSAGES = 4
 MAX_HISTORY_CHARS = 500
+MIN_GENERATION_CONTEXT_TOKENS = 384
+GENERATION_HISTORY_CHAR_STAGES = (MAX_HISTORY_CHARS, 250, 120)
 
 STATUS_TEXTS: dict[Step, str] = {
     "analyze": "質問の意図を整理しています…",
@@ -54,12 +60,16 @@ STATUS_TEXTS: dict[Step, str] = {
 }
 
 FOLLOWUP_STATUS_TEXTS: dict[Step, str] = {
+    "retrieve": "観点を変えて学内ナレッジを検索しています…",
     "search": "別のキーワードで学内資料を調べています…",
     "evaluate": "集めた情報を検証しています…",
     "web_search": "別の観点でWebを調べています…",
 }
 
 THIRD_WEB_SEARCH_STATUS_TEXT = "さらに手掛かりを探しています…"
+OFFICIAL_SEARCH_DOMAIN = "akita-pu.ac.jp"
+
+logger = logging.getLogger(__name__)
 
 GENERATE_SYSTEM_PROMPT = """あなたは秋田県立大学 本荘キャンパスのオープンキャンパス2026来場者向け案内AIです。
 回答は日本語で、丁寧でフレンドリーな文体にしてください。
@@ -91,9 +101,12 @@ class AgentState(TypedDict, total=False):
     sufficient: bool
     missing: str
     grep_keywords: list[str]
+    followup_retrieval_queries: list[str]
     web_queries: list[str]
     web_search_rounds: int
     local_search_followups: int
+    retrieval_followups: int
+    retrieval_rounds: int
     search_rounds: int
     retrieve_executed: bool
     search_executed: bool
@@ -102,6 +115,8 @@ class AgentState(TypedDict, total=False):
     search_variant_terms: list[str]
     search_hit_count: int
     used_web_queries: list[str]
+    used_web_query_keys: list[str]
+    used_retrieval_queries: list[str]
     generation_messages: list[dict[str, str]]
     generation_token_budget: int
     sources: list[Source]
@@ -141,6 +156,7 @@ class _ContextAssembly:
 class _WebRoundOutcome:
     candidates: list[WebSearchResult]
     executed_queries: list[str]
+    executed_query_keys: list[str]
 
 
 @dataclass(frozen=True)
@@ -190,6 +206,8 @@ class RealCampusAgent:
             "web_results": [],
             "web_search_rounds": 0,
             "local_search_followups": 0,
+            "retrieval_followups": 0,
+            "retrieval_rounds": 0,
             "search_rounds": 0,
             "retrieve_executed": False,
             "search_executed": False,
@@ -198,16 +216,36 @@ class RealCampusAgent:
             "search_variant_terms": [],
             "search_hit_count": 0,
             "used_web_queries": [],
+            "used_web_query_keys": [],
+            "used_retrieval_queries": [],
         }
 
         yield "status", self._status("analyze", state)
         state.update(await self._analyze(state))
 
         yield "status", self._status("retrieve", state)
-        state.update(await self._retrieve(state))
+        try:
+            state.update(await self._retrieve(state))
+        except Exception as exc:
+            logger.warning("Retrieve step failed: %s", exc.__class__.__name__)
+            state.update(
+                {
+                    "retrieve_executed": True,
+                    "retrieval_rounds": state.get("retrieval_rounds", 0) + 1,
+                }
+            )
 
         yield "status", self._status("search", state)
-        state.update(await self._search(state))
+        try:
+            state.update(await self._search(state))
+        except Exception as exc:
+            logger.warning("Search step failed: %s", exc.__class__.__name__)
+            state.update(
+                {
+                    "search_rounds": state.get("search_rounds", 0) + 1,
+                    "search_executed": True,
+                }
+            )
 
         yield "status", self._status("evaluate", state)
         state.update(await self._evaluate(state))
@@ -217,7 +255,34 @@ class RealCampusAgent:
             if route == "search":
                 state["local_search_followups"] = state.get("local_search_followups", 0) + 1
                 yield "status", self._status("search", state)
-                state.update(await self._search(state, keywords=state.get("grep_keywords") or []))
+                try:
+                    state.update(await self._search(state, keywords=state.get("grep_keywords") or []))
+                except Exception as exc:
+                    logger.warning("Search follow-up step failed: %s", exc.__class__.__name__)
+                    state.update(
+                        {
+                            "search_rounds": state.get("search_rounds", 0) + 1,
+                            "search_executed": True,
+                        }
+                    )
+
+                yield "status", self._status("evaluate", state)
+                state.update(await self._evaluate(state))
+                continue
+
+            if route == "retrieve":
+                state["retrieval_followups"] = state.get("retrieval_followups", 0) + 1
+                yield "status", self._status("retrieve", state)
+                try:
+                    state.update(await self._retrieve(state))
+                except Exception as exc:
+                    logger.warning("Retrieve follow-up step failed: %s", exc.__class__.__name__)
+                    state.update(
+                        {
+                            "retrieve_executed": True,
+                            "retrieval_rounds": state.get("retrieval_rounds", 0) + 1,
+                        }
+                    )
 
                 yield "status", self._status("evaluate", state)
                 state.update(await self._evaluate(state))
@@ -225,7 +290,11 @@ class RealCampusAgent:
 
             if route == "web_search":
                 yield "status", self._status("web_search", state)
-                state.update(await self._web_search(state))
+                try:
+                    state.update(await self._web_search(state))
+                except Exception as exc:
+                    logger.warning("Web search step failed: %s", exc.__class__.__name__)
+                    state.update({"web_search_rounds": state.get("web_search_rounds", 0) + 1})
 
                 yield "status", self._status("evaluate", state)
                 state.update(await self._evaluate(state))
@@ -255,6 +324,7 @@ class RealCampusAgent:
         workflow = StateGraph(AgentState)
         workflow.add_node("analyze", self._analyze)
         workflow.add_node("retrieve", self._retrieve)
+        workflow.add_node("retrieve_followup", self._retrieve)
         workflow.add_node("search", self._search)
         workflow.add_node("evaluate", self._evaluate)
         workflow.add_node("web_search", self._web_search)
@@ -271,10 +341,12 @@ class RealCampusAgent:
             self._route_after_evaluate,
             {
                 "search": "search",
+                "retrieve": "retrieve_followup",
                 "web_search": "web_search",
                 "generate": "generate",
             },
         )
+        workflow.add_edge("retrieve_followup", "evaluate")
         workflow.add_edge("web_search", "evaluate_after_web")
         workflow.add_conditional_edges(
             "evaluate_after_web",
@@ -310,19 +382,30 @@ class RealCampusAgent:
         )
         return {"retrieval_queries": queries, "keywords": keywords}
 
-    async def _retrieve(self, state: AgentState) -> dict:
-        by_id: dict[str, KnowledgeChunk] = {}
-        for query in state.get("retrieval_queries") or [state["question"]]:
+    async def _retrieve(self, state: AgentState, queries: Sequence[str] | None = None) -> dict:
+        existing_results = state.get("knowledge_results") or []
+        retrieved_results: list[KnowledgeChunk] = []
+        active_queries = self._unused_retrieval_queries(
+            state,
+            self._retrieval_queries_for_round(state, queries),
+        )
+        used_query_keys = list(state.get("used_retrieval_queries") or [])
+
+        for query in active_queries:
+            used_query_keys.append(self._retrieval_query_key(query))
             results = await self.knowledge_store.search(query, limit=self.top_k)
             for chunk in results:
                 if self._is_below_relevance_floor(chunk):
                     continue
-                current = by_id.get(chunk.id)
-                if current is None or self._score_value(chunk) > self._score_value(current):
-                    by_id[chunk.id] = chunk
+                retrieved_results.append(chunk)
 
-        merged = sorted(by_id.values(), key=self._score_value, reverse=True)
-        return {"knowledge_results": merged[:MAX_KNOWLEDGE_CONTEXT_CHUNKS], "retrieve_executed": True}
+        merged = self._merge_knowledge_results(existing_results, retrieved_results)
+        return {
+            "knowledge_results": merged[:MAX_KNOWLEDGE_CONTEXT_CHUNKS],
+            "retrieve_executed": True,
+            "retrieval_rounds": state.get("retrieval_rounds", 0) + 1,
+            "used_retrieval_queries": self._dedupe_keys(used_query_keys),
+        }
 
     async def _search(self, state: AgentState, keywords: Sequence[str] | None = None) -> dict:
         search_keywords = self._search_keywords(state, keywords)
@@ -361,7 +444,13 @@ class RealCampusAgent:
         )
         payload = self._parse_json_object(raw_output)
         if payload is None:
-            return {"sufficient": True, "missing": "", "grep_keywords": [], "web_queries": []}
+            return {
+                "sufficient": True,
+                "missing": "",
+                "grep_keywords": [],
+                "followup_retrieval_queries": [],
+                "web_queries": [],
+            }
 
         sufficient = self._parse_bool(payload.get("sufficient"), default=True)
         grep_keywords = self._normalize_queries(
@@ -374,10 +463,16 @@ class RealCampusAgent:
             fallback=[state["question"]] if not sufficient else [],
             limit=MAX_RETRIEVAL_QUERIES,
         )
+        followup_retrieval_queries = self._normalize_queries(
+            payload.get("retrieval_queries"),
+            fallback=[],
+            limit=MAX_EVALUATE_RETRIEVAL_QUERIES,
+        )
         return {
             "sufficient": sufficient,
             "missing": str(payload.get("missing") or ""),
             "grep_keywords": grep_keywords,
+            "followup_retrieval_queries": followup_retrieval_queries,
             "web_queries": web_queries,
         }
 
@@ -404,6 +499,9 @@ class RealCampusAgent:
             "web_results": web_results,
             "web_search_rounds": round_number,
             "used_web_queries": self._merge_strings(state.get("used_web_queries") or [], outcome.executed_queries),
+            "used_web_query_keys": self._dedupe_keys(
+                [*(state.get("used_web_query_keys") or []), *outcome.executed_query_keys]
+            ),
         }
 
     async def _web_search_second(self, state: AgentState) -> dict:
@@ -477,12 +575,18 @@ class RealCampusAgent:
             and state.get("local_search_followups", 0) < MAX_LOCAL_SEARCH_FOLLOWUPS
         ):
             return "search"
+        if (
+            state.get("followup_retrieval_queries")
+            and state.get("retrieval_followups", 0) < MAX_RETRIEVAL_FOLLOWUPS
+            and self._has_unused_retrieval_queries(state)
+        ):
+            return "retrieve"
         if self._should_run_web_search(state):
             return "web_search"
         return "generate"
 
     def _route_after_first_web_evaluate(self, state: AgentState) -> str:
-        if not state.get("sufficient", True) and state.get("web_search_rounds", 0) < MAX_WEB_SEARCH_ROUNDS:
+        if self._route_after_evaluate(state) == "web_search":
             return "web_search_second"
         return "generate"
 
@@ -495,7 +599,9 @@ class RealCampusAgent:
             return "evaluate"
         if node_name == "evaluate":
             route = self._route_after_evaluate(state)
-            return route if route in {"search", "web_search"} else "generate"
+            return route if route in {"search", "retrieve", "web_search"} else "generate"
+        if node_name == "retrieve_followup":
+            return "evaluate"
         if node_name == "web_search":
             return "evaluate"
         if node_name == "evaluate_after_web":
@@ -511,6 +617,8 @@ class RealCampusAgent:
         current_state = state or {}
         if step == "web_search" and current_state.get("web_search_rounds", 0) >= 2:
             text = THIRD_WEB_SEARCH_STATUS_TEXT
+        elif step == "retrieve" and current_state.get("retrieve_executed"):
+            text = FOLLOWUP_STATUS_TEXTS["retrieve"]
         elif step == "search" and current_state.get("search_rounds", 0) >= 1:
             text = FOLLOWUP_STATUS_TEXTS["search"]
         else:
@@ -519,19 +627,14 @@ class RealCampusAgent:
         return StatusPayload(step=step, text=text).model_dump()
 
     def _build_analyze_messages(self, question: str, history: Sequence[dict]) -> list[dict[str, str]]:
-        history_text = RealCampusAgent._format_history_for_prompt(history)
-        messages = self._raw_analyze_messages(question, history_text)
-        if self._fits_prompt_budget(messages, ANALYZE_MAX_TOKENS):
-            return messages
-
-        messages = self._raw_analyze_messages(question, "なし")
+        messages = self._raw_analyze_messages(question, self._format_history(history))
         if self._fits_prompt_budget(messages, ANALYZE_MAX_TOKENS):
             return messages
         return self._truncate_last_user_message(messages, ANALYZE_MAX_TOKENS)
 
     @staticmethod
-    def _raw_analyze_messages(question: str, history_text: str) -> list[dict[str, str]]:
-        return [
+    def _raw_analyze_messages(question: str, history_messages: Sequence[dict[str, str]]) -> list[dict[str, str]]:
+        messages = [
             {
                 "role": "system",
                 "content": (
@@ -542,11 +645,10 @@ class RealCampusAgent:
                     "出力はJSONのみで、形式は {\"retrieval_queries\": [\"...\", \"...\"], \"keywords\": [\"...\"], \"intent\": \"...\"} です。"
                 ),
             },
-            {
-                "role": "user",
-                "content": f"直近履歴:\n{history_text}\n\n質問:\n{question}",
-            },
         ]
+        messages.extend(history_messages)
+        messages.append({"role": "user", "content": f"質問:\n{question}"})
+        return messages
 
     def _build_evaluate_messages(self, state: AgentState) -> list[dict[str, str]]:
         messages, _ = self._build_budgeted_context_messages(
@@ -555,8 +657,9 @@ class RealCampusAgent:
                 "来場者に具体的な回答（数字・固有名詞・手順）を返せるかを判定してください。"
                 "一般論しか言えない、重要な詳細が欠ける、根拠が曖昧な場合は insufficient としてください。"
                 "質問が特定の値（人名・数値・日時・場所・URL）を尋ねている場合、その値そのものがコンテキストに含まれていなければ、関連説明があっても必ず insufficient としてください。"
-                "出力はJSONのみで、形式は {\"sufficient\": true|false, \"missing\": \"...\", \"grep_keywords\": [\"...\"], \"web_queries\": [\"...\", \"...\"]} です。"
+                "出力はJSONのみで、形式は {\"sufficient\": true|false, \"missing\": \"...\", \"grep_keywords\": [\"...\"], \"retrieval_queries\": [\"...\", \"...\"], \"web_queries\": [\"...\", \"...\"]} です。"
                 "不足時、学内資料を全文検索すれば埋まりそうな固有名詞があれば grep_keywords に最大3語で返してください。"
+                "不足時、ベクトル検索の観点を変えれば埋まりそうなら retrieval_queries に既出と別観点の短いクエリを最大2件で返してください。"
                 "不足時のweb_queriesは、追加Web検索で使う短い日本語クエリにしてください。"
                 "web_queries は前回までと違う観点にしてください。"
             ),
@@ -582,9 +685,7 @@ class RealCampusAgent:
         *,
         token_budget: int | None = None,
     ) -> tuple[list[dict[str, str]], _ContextAssembly]:
-        return self._build_budgeted_context_messages(
-            system_content=GENERATE_SYSTEM_PROMPT,
-            user_content_factory=lambda context: (
+        user_content_factory = lambda context: (
                 f"利用者ロール: {state.get('role', 'other')}\n"
                 f"現在日付: {date.today().isoformat()}\n"
                 f"質問: {state['question']}\n\n"
@@ -592,14 +693,86 @@ class RealCampusAgent:
                 f"{context}\n\n"
                 f"{self._generation_investigation_log_line(state)}"
                 "上の根拠だけに基づいて回答してください。"
-            ),
+        )
+        history_messages, context_budget = self._generation_history_and_context_budget(
+            state.get("history", []),
+            GENERATE_SYSTEM_PROMPT,
+            user_content_factory,
+            self.llm_answer_max_tokens,
+            requested_context_budget=token_budget,
+        )
+
+        if token_budget is None:
+            full_context = self._assemble_context_with_budget(
+                state.get("knowledge_results") or [],
+                state.get("web_results") or [],
+                mode="generate",
+                token_budget=None,
+            )
+            messages = self._compose_context_messages(
+                GENERATE_SYSTEM_PROMPT,
+                history_messages,
+                user_content_factory,
+                full_context.text,
+            )
+            if self._fits_prompt_budget(messages, self.llm_answer_max_tokens):
+                return messages, full_context
+
+        return self._build_messages_with_context_budget(
+            system_content=GENERATE_SYSTEM_PROMPT,
+            user_content_factory=user_content_factory,
             knowledge_results=state.get("knowledge_results") or [],
             web_results=state.get("web_results") or [],
             max_tokens=self.llm_answer_max_tokens,
             context_mode="generate",
-            history_messages=self._format_history(state.get("history", [])),
-            context_token_budget=token_budget,
+            history_messages=history_messages,
+            context_token_budget=context_budget,
         )
+
+    def _generation_history_and_context_budget(
+        self,
+        raw_history: Sequence[dict],
+        system_content: str,
+        user_content_factory: Callable[[str], str],
+        max_tokens: int,
+        *,
+        requested_context_budget: int | None,
+    ) -> tuple[list[dict[str, str]], int]:
+        selected_history: list[dict[str, str]] = []
+        selected_budget = 0
+        baseline_remaining_budget: int | None = None
+        for char_limit in GENERATION_HISTORY_CHAR_STAGES:
+            history_messages = self._format_history(raw_history, max_chars=char_limit)
+            remaining_budget = self._remaining_context_budget(
+                system_content,
+                history_messages,
+                user_content_factory,
+                max_tokens,
+            )
+            if baseline_remaining_budget is None:
+                baseline_remaining_budget = remaining_budget
+            context_budget = self._generation_context_budget(
+                remaining_budget,
+                requested_context_budget=requested_context_budget,
+                freed_history_tokens=max(remaining_budget - baseline_remaining_budget, 0),
+            )
+            selected_history = history_messages
+            selected_budget = context_budget
+            if context_budget >= MIN_GENERATION_CONTEXT_TOKENS:
+                break
+        return selected_history, selected_budget
+
+    @staticmethod
+    def _generation_context_budget(
+        remaining_budget: int,
+        *,
+        requested_context_budget: int | None,
+        freed_history_tokens: int = 0,
+    ) -> int:
+        if requested_context_budget is None:
+            return remaining_budget
+        requested_budget = max(requested_context_budget, 0) + max(freed_history_tokens, 0)
+        return min(remaining_budget, requested_budget)
 
     def _build_budgeted_context_messages(
         self,
@@ -635,31 +808,66 @@ class RealCampusAgent:
         if self._fits_prompt_budget(messages, max_tokens):
             return messages, full_context
 
-        if active_history:
-            active_history = []
-            messages = self._compose_context_messages(
-                system_content,
-                active_history,
-                user_content_factory,
-                full_context.text,
-            )
-            if self._fits_prompt_budget(messages, max_tokens):
-                return messages, full_context
-
-        base_messages = self._compose_context_messages(system_content, active_history, user_content_factory, "")
-        context_budget = max(self._prompt_budget(max_tokens) - self._estimate_messages(base_messages), 0)
-        context = self._assemble_context_with_budget(
-            knowledge_results,
-            web_results,
-            mode=context_mode,
-            token_budget=context_budget,
+        context_budget = self._remaining_context_budget(
+            system_content,
+            active_history,
+            user_content_factory,
+            max_tokens,
         )
-        messages = self._compose_context_messages(system_content, active_history, user_content_factory, context.text)
-        if self._fits_prompt_budget(messages, max_tokens):
-            return messages, context
-        return self._truncate_last_user_message(messages, max_tokens), context
+        return self._build_messages_with_context_budget(
+            system_content=system_content,
+            user_content_factory=user_content_factory,
+            knowledge_results=knowledge_results,
+            web_results=web_results,
+            max_tokens=max_tokens,
+            context_mode=context_mode,
+            history_messages=active_history,
+            context_token_budget=context_budget,
+        )
 
     def _build_messages_with_forced_context_budget(
+        self,
+        *,
+        system_content: str,
+        user_content_factory: Callable[[str], str],
+        knowledge_results: Sequence[KnowledgeChunk],
+        web_results: Sequence[WebSearchResult],
+        max_tokens: int,
+        context_mode: Literal["evaluate", "generate"],
+        history_messages: Sequence[dict[str, str]],
+        context_token_budget: int,
+    ) -> tuple[list[dict[str, str]], _ContextAssembly]:
+        context_budget = min(
+            max(context_token_budget, 0),
+            self._remaining_context_budget(
+                system_content,
+                history_messages,
+                user_content_factory,
+                max_tokens,
+            ),
+        )
+        return self._build_messages_with_context_budget(
+            system_content=system_content,
+            user_content_factory=user_content_factory,
+            knowledge_results=knowledge_results,
+            web_results=web_results,
+            max_tokens=max_tokens,
+            context_mode=context_mode,
+            history_messages=history_messages,
+            context_token_budget=context_budget,
+        )
+
+    def _remaining_context_budget(
+        self,
+        system_content: str,
+        history_messages: Sequence[dict[str, str]],
+        user_content_factory: Callable[[str], str],
+        max_tokens: int,
+    ) -> int:
+        base_messages = self._compose_context_messages(system_content, history_messages, user_content_factory, "")
+        return max(self._prompt_budget(max_tokens) - self._estimate_messages(base_messages), 0)
+
+    def _build_messages_with_context_budget(
         self,
         *,
         system_content: str,
@@ -681,10 +889,46 @@ class RealCampusAgent:
         if self._fits_prompt_budget(messages, max_tokens):
             return messages, context
 
-        messages = self._compose_context_messages(system_content, [], user_content_factory, context.text)
-        if self._fits_prompt_budget(messages, max_tokens):
-            return messages, context
-        return self._truncate_last_user_message(messages, max_tokens), context
+        best_messages: list[dict[str, str]] | None = None
+        best_context: _ContextAssembly | None = None
+        low = 0
+        high = max(context_token_budget - 1, 0)
+        while low <= high:
+            candidate_budget = (low + high) // 2
+            candidate_context = self._assemble_context_with_budget(
+                knowledge_results,
+                web_results,
+                mode=context_mode,
+                token_budget=candidate_budget,
+            )
+            candidate_messages = self._compose_context_messages(
+                system_content,
+                history_messages,
+                user_content_factory,
+                candidate_context.text,
+            )
+            if self._fits_prompt_budget(candidate_messages, max_tokens):
+                best_messages = candidate_messages
+                best_context = candidate_context
+                low = candidate_budget + 1
+            else:
+                high = candidate_budget - 1
+
+        if best_messages is not None and best_context is not None:
+            return best_messages, best_context
+        empty_context = self._assemble_context_with_budget(
+            knowledge_results,
+            web_results,
+            mode=context_mode,
+            token_budget=0,
+        )
+        empty_messages = self._compose_context_messages(
+            system_content,
+            history_messages,
+            user_content_factory,
+            empty_context.text,
+        )
+        return self._truncate_last_user_message(empty_messages, max_tokens), empty_context
 
     @staticmethod
     def _compose_context_messages(
@@ -699,7 +943,11 @@ class RealCampusAgent:
         return messages
 
     @staticmethod
-    def _format_history(history: Sequence[dict]) -> list[dict[str, str]]:
+    def _format_history(
+        history: Sequence[dict],
+        *,
+        max_chars: int = MAX_HISTORY_CHARS,
+    ) -> list[dict[str, str]]:
         formatted: list[dict[str, str]] = []
         for message in history[-MAX_HISTORY_MESSAGES:]:
             role = message.get("role")
@@ -707,7 +955,7 @@ class RealCampusAgent:
                 continue
             content = str(message.get("content", "")).strip()
             if content:
-                formatted.append({"role": role, "content": content[:MAX_HISTORY_CHARS]})
+                formatted.append({"role": role, "content": content[:max_chars]})
         return formatted
 
     @staticmethod
@@ -767,9 +1015,20 @@ class RealCampusAgent:
 
         grep_chunks = [chunk for chunk in knowledge_results if chunk.grep_hit]
         vector_chunks = [chunk for chunk in knowledge_results if not chunk.grep_hit]
+        high_relevance_vector_chunks = [
+            chunk
+            for chunk in vector_chunks
+            if chunk.score is not None and chunk.score >= HIGH_RELEVANCE_CONTEXT_THRESHOLD
+        ]
+        remaining_vector_chunks = [
+            chunk
+            for chunk in vector_chunks
+            if chunk.score is None or chunk.score < HIGH_RELEVANCE_CONTEXT_THRESHOLD
+        ]
         next_index = add_knowledge(grep_chunks, start_index=1) + 1
+        next_index += add_knowledge(high_relevance_vector_chunks, start_index=next_index)
         add_web()
-        add_knowledge(vector_chunks, start_index=next_index)
+        add_knowledge(remaining_vector_chunks, start_index=next_index)
 
         return _ContextAssembly(
             text="\n\n".join(parts),
@@ -1009,14 +1268,16 @@ class RealCampusAgent:
         results: list[WebSearchResult] = []
         seen_urls = set(existing_urls)
         executed_queries: list[str] = []
-        used_queries = set(state.get("used_web_queries") or [])
+        executed_query_keys: list[str] = []
+        used_query_keys = set(state.get("used_web_query_keys") or [])
         queries = self._build_web_round_queries(state, round_number, reformulated=False)
         first_execution = await self._execute_web_queries(
             queries=queries,
             round_number=round_number,
             seen_urls=seen_urls,
-            used_queries=used_queries,
+            used_query_keys=used_query_keys,
             executed_queries=executed_queries,
+            executed_query_keys=executed_query_keys,
         )
         results.extend(first_execution.results)
 
@@ -1026,13 +1287,18 @@ class RealCampusAgent:
                 queries=reformulated_queries,
                 round_number=round_number,
                 seen_urls=seen_urls,
-                used_queries=used_queries,
+                used_query_keys=used_query_keys,
                 executed_queries=executed_queries,
+                executed_query_keys=executed_query_keys,
                 force_unrestricted=True,
             )
             results.extend(reformulated_execution.results)
 
-        return _WebRoundOutcome(candidates=results[:MAX_WEB_RESULTS_PER_ROUND], executed_queries=executed_queries)
+        return _WebRoundOutcome(
+            candidates=results[:MAX_WEB_RESULTS_PER_ROUND],
+            executed_queries=executed_queries,
+            executed_query_keys=executed_query_keys,
+        )
 
     async def _execute_web_queries(
         self,
@@ -1040,8 +1306,9 @@ class RealCampusAgent:
         queries: Sequence[str],
         round_number: int,
         seen_urls: set[str],
-        used_queries: set[str],
+        used_query_keys: set[str],
         executed_queries: list[str],
+        executed_query_keys: list[str],
         force_unrestricted: bool = False,
     ) -> _WebExecutionOutcome:
         results: list[WebSearchResult] = []
@@ -1054,13 +1321,21 @@ class RealCampusAgent:
                 round_number=round_number,
                 force_unrestricted=force_unrestricted,
             )
-            if search_query in used_queries:
+            include_domains = (
+                [OFFICIAL_SEARCH_DOMAIN]
+                if round_number == 1 and not force_unrestricted
+                else None
+            )
+            query_key = self._web_query_key(search_query, include_domains=include_domains)
+            if query_key in used_query_keys:
                 continue
-            used_queries.add(search_query)
+            used_query_keys.add(query_key)
             executed_queries.append(search_query)
+            executed_query_keys.append(query_key)
             rows = await self.search_provider.search(
                 search_query,
                 max_results=MAX_WEB_RESULTS_PER_ROUND - len(results),
+                include_domains=include_domains,
             )
             raw_result_count += len(rows)
             for result in rows:
@@ -1080,10 +1355,13 @@ class RealCampusAgent:
     ) -> list[WebSearchResult]:
         fetched: list[WebSearchResult] = []
         for result in results:
-            try:
-                text = await self._fetch_page_text(result.url, keywords=keywords)
-            except Exception:
-                continue
+            if result.text.strip():
+                text = self._focus_page_text(result.text, keywords)
+            else:
+                try:
+                    text = await self._fetch_page_text(result.url, keywords=keywords)
+                except Exception:
+                    continue
             if not text:
                 continue
             fetched.append(
@@ -1152,8 +1430,6 @@ class RealCampusAgent:
         round_number: int,
         force_unrestricted: bool = False,
     ) -> str:
-        if round_number == 1 and not force_unrestricted:
-            return f"site:akita-pu.ac.jp {query}".strip()
         return query.strip()
 
     @staticmethod
@@ -1266,6 +1542,61 @@ class RealCampusAgent:
             keywords.append(state["question"])
         return self._merge_strings([], keywords)
 
+    def _retrieval_queries_for_round(
+        self,
+        state: AgentState,
+        queries: Sequence[str] | None,
+    ) -> list[str]:
+        if queries is not None:
+            return self._merge_strings([], queries)
+        if state.get("retrieve_executed") and state.get("followup_retrieval_queries"):
+            return self._merge_strings([], state.get("followup_retrieval_queries") or [])
+        return self._merge_strings([], state.get("retrieval_queries") or [state["question"]])
+
+    def _unused_retrieval_queries(
+        self,
+        state: AgentState,
+        queries: Sequence[str],
+    ) -> list[str]:
+        used_keys = set(state.get("used_retrieval_queries") or [])
+        unused: list[str] = []
+        for query in queries:
+            key = self._retrieval_query_key(query)
+            if not key or key in used_keys:
+                continue
+            used_keys.add(key)
+            unused.append(query)
+        return unused
+
+    def _has_unused_retrieval_queries(self, state: AgentState) -> bool:
+        return bool(
+            self._unused_retrieval_queries(
+                state,
+                self._retrieval_queries_for_round(state, state.get("followup_retrieval_queries") or []),
+            )
+        )
+
+    @staticmethod
+    def _retrieval_query_key(query: str) -> str:
+        return normalize_text(" ".join(str(query).split()))
+
+    @staticmethod
+    def _web_query_key(query: str, *, include_domains: Sequence[str] | None) -> str:
+        normalized_query = normalize_text(" ".join(str(query).split()))
+        domain_limited = "1" if include_domains else "0"
+        return f"{normalized_query}\t{domain_limited}"
+
+    @staticmethod
+    def _dedupe_keys(values: Sequence[str]) -> list[str]:
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
+
     def _search_keywords(self, state: AgentState, keywords: Sequence[str] | None) -> list[str]:
         search_keywords = list(keywords or [])
         if not search_keywords:
@@ -1373,7 +1704,7 @@ class RealCampusAgent:
         )
 
     def _build_investigation_log(self, state: AgentState) -> str:
-        retrieval_count = len(state.get("retrieval_queries") or [])
+        retrieval_count = state.get("retrieval_rounds", 0) or len(state.get("retrieval_queries") or [])
         search_terms = "、".join(state.get("search_terms") or [])
         variant_terms = "、".join(state.get("search_variant_terms") or [])
         web_queries = "、".join(state.get("used_web_queries") or [])
