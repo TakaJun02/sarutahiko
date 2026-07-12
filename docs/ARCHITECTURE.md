@@ -1,6 +1,7 @@
 # アーキテクチャ / 技術選定
 
-- 版: v0.3（2026-07-12, Fable 改訂 — **利用者指示によるモデル構成変更**。①埋め込みを bge-m3(CPU) → **Qwen/Qwen3-Embedding-8B（第2GPUサーバー・vLLM serve）** に変更。②生成 LLM を Gemma4-31B → **より小パラメータの Gemma 4**（同時利用者数とコンテキスト長を優先）に変更。ハーネス v5 と同時）
+- 版: v0.4（2026-07-13, Fable 改訂 — ブラッシュアップ対応。①スレッド一覧/名前変更/削除 API を追加（FR-7）②登録 API から属性 `role` を削除（FR-6 改訂・users テーブルは rebuild マイグレーション）③時間コンテキスト注入を新設（FR-8, §7））
+- v0.3（2026-07-12, Fable 改訂 — **利用者指示によるモデル構成変更**。①埋め込みを bge-m3(CPU) → **Qwen/Qwen3-Embedding-8B（第2GPUサーバー・vLLM serve）** に変更。②生成 LLM を Gemma4-31B → **より小パラメータの Gemma 4**（同時利用者数とコンテキスト長を優先）に変更。ハーネス v5 と同時）
 - v0.2（2026-07-12, Fable 改訂 — Web 検索を ddgs → Tavily に変更。ハーネス v4 と同時）
 - v0.1（2026-07-11, Fable 決定）
 - 「確定済み仕様」（CLAUDE.md）以外の選定はここに記録する。変更したい場合は Fable が本ファイルを更新してから実装する。
@@ -52,12 +53,15 @@ backend のローカル起動・Vite の `/api` プロキシ先はともに 8080
 ### エンドポイント一覧
 
 ```
-POST /api/auth/register   ニックネーム登録（docs/UI_LOGIN.md）
-POST /api/auth/login      ログイン
-GET  /api/auth/me         セッション確認 (Bearer)
-POST /api/chat            チャット送信 → SSE ストリーム (Bearer)
-GET  /api/threads/{id}    スレッド履歴取得 (Bearer)
-GET  /api/health          ヘルスチェック（vLLM/Qdrant 疎通含む）
+POST   /api/auth/register   ニックネーム登録（docs/UI_LOGIN.md。2026-07-13 から role なし）
+POST   /api/auth/login      ログイン
+GET    /api/auth/me         セッション確認 (Bearer)
+POST   /api/chat            チャット送信 → SSE ストリーム (Bearer)
+GET    /api/threads         自分のスレッド一覧（updated_at 降順。id/title/created_at/updated_at）(Bearer)
+GET    /api/threads/{id}    スレッド履歴取得 (Bearer)
+PATCH  /api/threads/{id}    スレッド名変更（body: {"title": "..."} 1〜60文字）(Bearer)
+DELETE /api/threads/{id}    スレッド削除（メッセージも CASCADE 削除、204）(Bearer)
+GET    /api/health          ヘルスチェック（vLLM/Qdrant 疎通含む）
 ```
 
 - ユーザー・スレッドの永続化は **SQLite**（`backend/data/`、ボリュームマウント）。
@@ -159,3 +163,14 @@ generate に届けられない事象の一因（AGENT_HARNESS.md §V5-0）。複
 
 - モデル名・vLLM URL・Qdrant URL 等はすべて環境変数（`.env`）で注入。`.env` はコミットしない。
 - 外部 API キー（使う場合のみ）も同様。
+
+## 7. 時間コンテキスト注入（FR-8, 2026-07-13 追加）
+
+- `backend/app/services/time_context.py` が **JST（zoneinfo Asia/Tokyo）** の現在時刻から
+  日本語の時間コンテキスト文字列を**決定論的に**生成し、`graph.py` の generate 用システムプロンプト
+  （および mock エージェント）へ注入する。LLM には計算済みの値だけを渡す。
+- 状態遷移: 開催前（あと N 日）→ 当日開場前（開場まであと M 分）→ 開催中（開催中イベント＋60 分以内に始まるイベント）→ 当日終了後 → 開催後。
+- イベントスケジュールは `backend/app/data/oc2026_schedule.json`。**検証済みの時刻のみ収載**
+  （出典: knowledge/ の転記または大学公式 PDF。検証できない時刻は載せず、載っていないイベントの
+  時刻を LLM が推測しないようプロンプトで禁止する）。
+- プロンプト側ルール: 「残り日数・分数・開催中イベントは時間コンテキストの記載値のみを使う。自分で計算・推測しない」。
