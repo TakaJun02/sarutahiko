@@ -1,0 +1,16 @@
+---
+id: lab-cps-blog-2024-csci-2023
+category: lab
+title: "CPS研究室 Blog: 国際会議冒険記 in CSCI 2023"
+source_urls:
+  - https://www.cps.akita-pu.ac.jp/%E6%BA%96%E5%82%99%E3%81%A8%E6%85%A3%E3%82%8C%E3%81%8C%E8%82%9D%E5%BF%83%EF%BC%81%E5%9B%BD%E9%9A%9B%E4%BC%9A%E8%AD%B0%E5%86%92%E9%99%BA%E8%A8%98-in-%F0%9F%87%BA%F0%9F%87%B8csci-2023/
+retrieved_at: 2026-07-12
+confidence: high
+---
+
+## 投稿メタデータ
+- 著者: Riku Sato
+- 公開日時: 2024年3月18日 09:00
+
+## 内容
+CSCI 2023 に関する国際会議参加記。Blog 一覧では、大学院1年のサリクさんによる挨拶が表示されている。タイトルから、国際会議参加における準備と慣れをテーマにした投稿であることが分かる。

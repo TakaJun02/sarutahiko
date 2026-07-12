@@ -1,0 +1,16 @@
+---
+id: lab-cps-blog-2024-new-members-ice-break
+category: lab
+title: "CPS研究室 Blog: 新メンバーに加わりました"
+source_urls:
+  - https://www.cps.akita-pu.ac.jp/%E6%96%B0%E3%83%A1%E3%83%B3%E3%83%90%E3%83%BC%E3%81%AB%E5%8A%A0%E3%82%8F%E3%82%8A%E3%81%BE%E3%81%97%E3%81%9F-%E2%80%95-%E3%82%A2%E3%82%A4%E3%82%B9%E3%83%96%E3%83%AC%E3%82%A4%E3%82%AF%E3%81%AE%E5%8A%B9/
+retrieved_at: 2026-07-12
+confidence: high
+---
+
+## 投稿メタデータ
+- 著者: Yuto Takahashi
+- 公開日時: 2024年10月16日 12:00
+
+## 内容
+2024年度に研究室へ新メンバーが加わったことと、アイスブレイクの効能を扱う投稿。Blog 一覧では、サイバーフィジカルシステム研究室への初めての挨拶が本文冒頭として表示されている。

@@ -1,0 +1,16 @@
+---
+id: lab-cps-blog-2024-lab-tour
+category: lab
+title: "CPS研究室 Blog: 2024年度 研究室見学会"
+source_urls:
+  - https://www.cps.akita-pu.ac.jp/%E4%BB%A4%E5%92%8C6%E5%B9%B4%E5%BA%A6-%E7%A0%94%E7%A9%B6%E5%AE%A4%E8%A6%8B%E5%AD%A6%E4%BC%9A%E3%80%80/
+retrieved_at: 2026-07-12
+confidence: high
+---
+
+## 投稿メタデータ
+- 著者: Aoi Yamada
+- 公開日時: 2024年6月18日 15:00
+
+## 内容
+2024年度の研究室見学会に関する投稿。Blog 一覧では、学部4年のアオさんによる挨拶が表示されている。令和6年度の研究室見学会を扱う個別ページとして取得できた。

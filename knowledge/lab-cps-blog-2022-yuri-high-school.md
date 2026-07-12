@@ -1,0 +1,16 @@
+---
+id: lab-cps-blog-2022-yuri-high-school
+category: lab
+title: "CPS研究室 Blog: 由利高校高大連携授業"
+source_urls:
+  - https://www.cps.akita-pu.ac.jp/%E7%94%B1%E5%88%A9%E9%AB%98%E6%A0%A1%E9%AB%98%E5%A4%A7%E9%80%A3%E6%90%BA%E6%8E%88%E6%A5%AD%E3%82%92%E8%A1%8C%E3%81%84%E3%81%BE%E3%81%97%E3%81%9F%EF%BC%8E/
+retrieved_at: 2026-07-12
+confidence: high
+---
+
+## 投稿メタデータ
+- 著者: Chihiro Sato
+- 公開日時: 2022年3月7日 09:00
+
+## 内容
+由利高校との高大連携授業に関する投稿。Blog 一覧では、サイバーフィジカルシステム研究室からの挨拶が表示されている。個別ページは取得できたが、逐語全文の再掲載は行っていない。

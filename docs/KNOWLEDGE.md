@@ -1,6 +1,8 @@
 # RAG ナレッジ構築計画
 
-- 版: v0.2（2026-07-11, Fable 改訂 — **全文書き起こし方針に変更**。利用者フィードバック「回答できるはずの質問に情報がないと答える。ページの端から端まで情報を漏らさず起こすこと」による）
+- 版: v0.4（2026-07-12, Fable 改訂 — OC2026 学科別出展ガイド PDF・模擬講義概要 PDF・CPS 研究室大公開 2026 を収集対象に追加。§1.2 参照）
+- v0.3（2026-07-12）: CPS 研究室サイトを収集対象に追加、オープンキャンパス年度区別ルールを明文化
+- v0.2（2026-07-11）: **全文書き起こし方針に変更**。利用者フィードバック「回答できるはずの質問に情報がないと答える。ページの端から端まで情報を漏らさず起こすこと」による
 - v0.1 の「200〜800字に要約」方針は**廃止**。
 - 担当: **Codex**（WebSearch で収集・整形）／ Fable が検収
 - 対象: 秋田県立大学 **本荘キャンパス**（システム科学技術学部）
@@ -16,8 +18,51 @@
 | P1 | 入試情報 | 入試方式の概要、オープンキャンパスでの相談先 | 公式入試ページ |
 | P1 | 学生生活 | 部活・サークル、寮・下宿、学食 | 公式サイト、大学案内 |
 | P1 | オープンキャンパス当日情報 | 日程・プログラム（2026 年度分が公開され次第） | 公式サイト |
+| P1 | 研究室 | サイバーフィジカルシステム研究室（CPS 研）の研究内容・メンバー・業績等 | **https://www.cps.akita-pu.ac.jp/ （全ページ対象）** |
 | P2 | 進路・就職 | 就職実績、進学 | 公式サイト |
 | P2 | 周辺情報 | 由利本荘市の基本情報、コンビニ・昼食 | 公式・自治体サイト |
+
+### 1.1 CPS 研究室サイト（v0.3 追加・利用者指示）
+
+- https://www.cps.akita-pu.ac.jp/ 配下の**全ページ**を、§2 の全文書き起こしルールに従ってナレッジ化する。
+- category は `lab` を使う。id は `lab-cps-<topic>` の形式（例: `lab-cps-overview`, `lab-cps-members`, `lab-cps-research`, `lab-cps-publications`）。
+- 研究テーマ・メンバー・業績・ニュース等、ページ構成に沿って 1 ページ 1 ファイルで転記する。
+
+### 1.2 OC2026 出展・模擬講義 PDF ＋ CPS 研究室大公開（v0.4 追加・利用者指示）
+
+本システムの主用途（オープンキャンパス 2026 当日の質問対応）に直結する最優先（P0）収集対象。
+「情報工学科ではどんな出展がありますか？」等の質問はこの資料群がないと回答不能。
+
+**(a) 学科別模擬講義・出展ガイド PDF（6 件）** — category: `event`
+
+| id | 出典 URL（source_urls に記載する URL） |
+|---|---|
+| `event-oc2026-mogikougi` | https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026_mogikougi_hp(1).pdf |
+| `event-oc2026-guide-kikai` | https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026_guide_kikai.pdf |
+| `event-oc2026-guide-chimeka` | https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026_guide_chimeka_2.pdf |
+| `event-oc2026-guide-joho` | https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026_guide_joho.pdf |
+| `event-oc2026-guide-kenchiku` | https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026_guide_kenchiku.pdf |
+| `event-oc2026-guide-keiei` | https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026_guide_keiei.pdf |
+
+- PDF はレイアウト重視のフライヤー（研究室公開マップ等）であり、単純なテキスト抽出では読み順が崩れる。
+  `pdftotext` と `pdftotext -layout` の両方を突き合わせ、**部屋番号・ゾーン・階・時間・研究室名・教員名・展示/講義タイトル・概要文**を
+  1 件も漏らさず、学科ごとに「模擬講義」「研究室公開（出展一覧）」等の見出しで構造化して転記する。
+- 読み順が確定できない箇所は推測で並べず、本文に「配置上の対応が確認できない」旨を注記して `confidence: medium` とする。
+- title には必ず「オープンキャンパス2026」と学科名を含める（例:「オープンキャンパス2026 情報工学科 出展ガイド」）。
+  検索で「〇〇学科 出展」「〇〇学科 模擬講義」が当たる語彙（出展・展示・研究室公開・模擬講義・体験）を本文見出しに含めること。
+- 既存 `event-open-campus-2026-systems.md` の「未完全転記」注記（学科ガイド PDF 未抽出）は、本件完了後に解消済みへ更新する。
+
+**(b) CPS 研究室大公開 2026** — category: `lab`, id: `lab-cps-open-lab-2026`
+
+- https://www.cps.akita-pu.ac.jp/%E7%A0%94%E7%A9%B6%E5%AE%A4%E5%A4%A7%E5%85%AC%E9%96%8B-2026/ を全文転記。
+- オープンキャンパス 2026 当日の CPS 研の出展内容として、経営システム工学科の出展質問にも当たるようにする。
+
+**(c) ブログ取得失敗分の再取得**
+
+- 「2021年度セミナーII発表会 開催！！」「2022年度セミナーII発表会 開催！！」の個別ページ 2 件
+  （`lab-cps-blog-page-2.md` / `lab-cps-blog-page-3.md` の「取得失敗」注記参照）を再取得し、
+  成功したら `lab-cps-blog-2021-seminar2.md` / `lab-cps-blog-2022-seminar2.md` として転記、
+  索引ファイルの取得失敗注記を解消する。再失敗時は注記を取得日つきで更新して残す。
 
 ## 2. ファイル形式
 
@@ -26,7 +71,7 @@
 ```markdown
 ---
 id: faculty-systems-science          # kebab-case 一意 ID
-category: faculty | facility | access | admission | campus-life | event | career | area
+category: faculty | facility | access | admission | campus-life | event | career | area | lab
 title: システム科学技術学部の概要
 source_urls:
   - https://www.akita-pu.ac.jp/...
@@ -53,6 +98,7 @@ confidence: high | medium | low      # 情報源の確からしさ
 2. **出典 URL を必ず記録**（`source_urls`）。URL のない情報は書かない。
 3. **数値・固有名詞は出典の記載どおり**に書く。推測で補完しない。曖昧なら `confidence: low` を付けて本文にもその旨を書く。
 4. 年度依存の情報（入試日程・オープンキャンパス日程等）は**年度を本文に明記**する。
+   - **オープンキャンパス情報は特に厳格に**（v0.3 追記・利用者指示）: 本システムは「オープンキャンパス **2026**」に特化している。過年度（2025 以前）のオープンキャンパス情報は原則採録しない。参考として採録する場合は、**title・本文の双方に開催年度を明記**し、2026 年度の情報と混同されない書き方にする（「今年」「例年どおり」等の年度が曖昧になる表現は禁止）。
 5. 古い情報しか見つからない場合は、取得できた年度を明記した上で採録し、`confidence: medium` 以下とする。
 6. 収集のたびに `knowledge/SOURCES.md` に「カテゴリ / ファイル / 主要 URL / 取得日」を追記する（検収用台帳）。
 
