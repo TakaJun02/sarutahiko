@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
@@ -21,10 +22,10 @@ from app.search.models import WebSearchResult
 Step = Literal["analyze", "retrieve", "search", "web_search", "evaluate", "generate"]
 
 MAX_RETRIEVAL_QUERIES = 3
-MAX_ANALYZE_KEYWORDS = 4
+MAX_ANALYZE_KEYWORDS = 6
 MAX_EVALUATE_GREP_KEYWORDS = 3
 MAX_EVALUATE_RETRIEVAL_QUERIES = 2
-MAX_KNOWLEDGE_CONTEXT_CHUNKS = 10
+MAX_KNOWLEDGE_CONTEXT_CHUNKS = 16
 HIGH_RELEVANCE_CONTEXT_THRESHOLD = 0.60
 MAX_LOCAL_SEARCH_FOLLOWUPS = 1
 MAX_RETRIEVAL_FOLLOWUPS = 1
@@ -37,10 +38,11 @@ MAX_WEB_PAGES_PER_ROUND = 3
 # source. Smaller slices let 2-3 pages coexist — diversity answers more
 # questions than depth at this window size.
 MAX_WEB_PAGE_CHARS = 1400
+EVALUATE_CONTEXT_CHARS = 600
 ANALYZE_MAX_TOKENS = 300
 EVALUATE_MAX_TOKENS = 300
-DEFAULT_LLM_CONTEXT_WINDOW = 2816
-DEFAULT_LLM_ANSWER_MAX_TOKENS = 640
+DEFAULT_LLM_CONTEXT_WINDOW = 16384
+DEFAULT_LLM_ANSWER_MAX_TOKENS = 1024
 PROMPT_MARGIN_TOKENS = 192
 REAL_TOKEN_HEADROOM = 64
 REAL_TOKEN_REBUILD_SCALE = 0.95
@@ -70,6 +72,7 @@ THIRD_WEB_SEARCH_STATUS_TEXT = "さらに手掛かりを探しています…"
 OFFICIAL_SEARCH_DOMAIN = "akita-pu.ac.jp"
 
 logger = logging.getLogger(__name__)
+trace_logger = logging.getLogger("agent.trace")
 
 GENERATE_SYSTEM_PROMPT = """あなたは秋田県立大学 本荘キャンパスのオープンキャンパス2026来場者向け案内AIです。
 回答は日本語で、丁寧でフレンドリーな文体にしてください。
@@ -91,6 +94,7 @@ def estimate_tokens(text: str) -> int:
 
 
 class AgentState(TypedDict, total=False):
+    trace_id: str
     question: str
     role: str
     history: list[dict]
@@ -119,6 +123,10 @@ class AgentState(TypedDict, total=False):
     used_retrieval_queries: list[str]
     generation_messages: list[dict[str, str]]
     generation_token_budget: int
+    generation_prompt_tokens: int | None
+    generation_adopted_chunk_ids: list[str]
+    generation_rejected_chunk_ids: list[str]
+    generation_adopted_web_urls: list[str]
     sources: list[Source]
 
 
@@ -173,7 +181,7 @@ class RealCampusAgent:
         knowledge_store: Any,
         search_provider: Any,
         lexical_search: Any | None = None,
-        top_k: int = 6,
+        top_k: int = 8,
         min_relevance_score: float = 0.45,
         http_client_factory: Callable[[], Any] | None = None,
         llm_context_window: int = DEFAULT_LLM_CONTEXT_WINDOW,
@@ -199,6 +207,7 @@ class RealCampusAgent:
         history: list[dict] | None = None,
     ) -> AsyncIterator[tuple[str, dict]]:
         state: AgentState = {
+            "trace_id": message_id,
             "question": question.strip(),
             "role": user.role,
             "history": (history or [])[-MAX_HISTORY_MESSAGES:],
@@ -305,6 +314,16 @@ class RealCampusAgent:
         yield "status", self._status("generate", state)
         state.update(await self._prepare_generation(state))
         state.update(await self._verify_generation_prompt(state))
+        self._trace(
+            "generate",
+            state,
+            {
+                "adopted_chunk_ids": state.get("generation_adopted_chunk_ids", []),
+                "rejected_chunk_ids": state.get("generation_rejected_chunk_ids", []),
+                "adopted_web_urls": state.get("generation_adopted_web_urls", []),
+                "prompt_tokens": state.get("generation_prompt_tokens"),
+            },
+        )
 
         messages = state.get("generation_messages") or self._build_generation_messages(state)
         async for token in self._stream_generation_with_retry(state, messages):
@@ -380,6 +399,7 @@ class RealCampusAgent:
             fallback=[],
             limit=MAX_ANALYZE_KEYWORDS,
         )
+        self._trace("analyze", state, {"retrieval_queries": queries, "keywords": keywords})
         return {"retrieval_queries": queries, "keywords": keywords}
 
     async def _retrieve(self, state: AgentState, queries: Sequence[str] | None = None) -> dict:
@@ -390,16 +410,24 @@ class RealCampusAgent:
             self._retrieval_queries_for_round(state, queries),
         )
         used_query_keys = list(state.get("used_retrieval_queries") or [])
+        trace_queries: list[dict[str, Any]] = []
 
         for query in active_queries:
             used_query_keys.append(self._retrieval_query_key(query))
             results = await self.knowledge_store.search(query, limit=self.top_k)
+            trace_queries.append(
+                {
+                    "query": query,
+                    "hits": [self._trace_chunk_hit(chunk) for chunk in results[: self.top_k]],
+                }
+            )
             for chunk in results:
                 if self._is_below_relevance_floor(chunk):
                     continue
                 retrieved_results.append(chunk)
 
         merged = self._merge_knowledge_results(existing_results, retrieved_results)
+        self._trace("retrieve", state, {"queries": trace_queries})
         return {
             "knowledge_results": merged[:MAX_KNOWLEDGE_CONTEXT_CHUNKS],
             "retrieve_executed": True,
@@ -411,6 +439,7 @@ class RealCampusAgent:
         search_keywords = self._search_keywords(state, keywords)
         existing_results = state.get("knowledge_results") or []
         if self.lexical_search is None:
+            self._trace("search", state, {"keywords": search_keywords, "variants": [], "hits": []})
             return {
                 "knowledge_results": existing_results,
                 "search_rounds": state.get("search_rounds", 0) + 1,
@@ -422,6 +451,23 @@ class RealCampusAgent:
         outcome = self.lexical_search.grep_sections_with_trace(search_keywords)
         grep_chunks = [hit.chunk for hit in outcome.hits]
         merged = self._merge_knowledge_results(existing_results, grep_chunks)
+        self._trace(
+            "search",
+            state,
+            {
+                "keywords": outcome.searched_keywords,
+                "variants": outcome.variant_keywords,
+                "hits": [
+                    {
+                        "file_id": hit.chunk.file_id,
+                        "chunk_index": hit.chunk.chunk_index,
+                        "distinct": hit.distinct_keyword_hits,
+                        "total": hit.total_hits,
+                    }
+                    for hit in outcome.hits
+                ],
+            },
+        )
         return {
             "knowledge_results": merged[:MAX_KNOWLEDGE_CONTEXT_CHUNKS],
             "search_rounds": state.get("search_rounds", 0) + 1,
@@ -444,6 +490,18 @@ class RealCampusAgent:
         )
         payload = self._parse_json_object(raw_output)
         if payload is None:
+            self._trace(
+                "evaluate",
+                state,
+                {
+                    "sufficient": True,
+                    "missing": "",
+                    "grep_keywords": [],
+                    "retrieval_queries": [],
+                    "web_queries": [],
+                    "parse_error": True,
+                },
+            )
             return {
                 "sufficient": True,
                 "missing": "",
@@ -467,6 +525,17 @@ class RealCampusAgent:
             payload.get("retrieval_queries"),
             fallback=[],
             limit=MAX_EVALUATE_RETRIEVAL_QUERIES,
+        )
+        self._trace(
+            "evaluate",
+            state,
+            {
+                "sufficient": sufficient,
+                "missing": str(payload.get("missing") or ""),
+                "grep_keywords": grep_keywords,
+                "retrieval_queries": followup_retrieval_queries,
+                "web_queries": web_queries,
+            },
         )
         return {
             "sufficient": sufficient,
@@ -495,6 +564,16 @@ class RealCampusAgent:
             keywords=self._web_focus_keywords(state),
         )
         web_results = self._dedupe_web_results([*(state.get("web_results") or []), *fetched_results])
+        self._trace(
+            "web_search",
+            state,
+            {
+                "round": round_number,
+                "queries": outcome.executed_queries,
+                "urls": [result.url for result in fetched_results],
+                "candidate_urls": [result.url for result in outcome.candidates],
+            },
+        )
         return {
             "web_results": web_results,
             "web_search_rounds": round_number,
@@ -510,9 +589,11 @@ class RealCampusAgent:
     async def _prepare_generation(self, state: AgentState) -> dict:
         messages, context = self._build_generation_messages_with_sources(state)
         sources = self._assemble_sources(context.knowledge_results, context.web_results)
+        generation_trace = self._generation_context_trace(state, context)
         return {
             "generation_messages": messages,
             "generation_token_budget": estimate_tokens(context.text),
+            **generation_trace,
             "sources": sources,
         }
 
@@ -520,7 +601,7 @@ class RealCampusAgent:
         messages = state.get("generation_messages") or self._build_generation_messages(state)
         count = await self._count_real_tokens(messages)
         if count is None or not self._exceeds_generation_context(count):
-            return {}
+            return {"generation_prompt_tokens": count}
 
         available_prompt_tokens = self._available_generation_prompt_tokens()
         factor = (available_prompt_tokens / count) * REAL_TOKEN_REBUILD_SCALE if count > 0 else 0
@@ -528,10 +609,12 @@ class RealCampusAgent:
         reduced_budget = max(int(current_budget * factor), 0)
         messages, context = self._build_generation_messages_with_sources(state, token_budget=reduced_budget)
         sources = self._assemble_sources(context.knowledge_results, context.web_results)
-        await self._count_real_tokens(messages)
+        rebuilt_count = await self._count_real_tokens(messages)
         return {
             "generation_messages": messages,
             "generation_token_budget": reduced_budget,
+            "generation_prompt_tokens": rebuilt_count,
+            **self._generation_context_trace(state, context),
             "sources": sources,
         }
 
@@ -640,8 +723,10 @@ class RealCampusAgent:
                 "content": (
                     "あなたは秋田県立大学 本荘キャンパス案内AIの検索計画担当です。"
                     "質問と直近履歴から、学内ナレッジ検索に使う観点違いの検索クエリを2〜3本作ってください。"
-                    "質問中の固有名詞・専門用語・レアな語（研究室名・人名・制度名・建物名など）を言い換えず最大4語 keywords に入れてください。"
-                    "一般語（先生、場所、方法など）は keywords に含めないでください。"
+                    "質問中の固有名詞・専門用語・レアな語（研究室名・人名・制度名・建物名など）を言い換えず keywords に入れてください。"
+                    "加えて、質問が求める対象を表す中核名詞（出展、メンバー、学費、日程、部活など）を最大2語まで keywords に含めてください。"
+                    "keywords は合計最大6語です。助詞・動詞・先生・場所・方法のような漠然語は含めないでください。"
+                    "例: 「サイバーフィジカルシステム研究室では、どんな出展がありますか？」なら keywords は [\"サイバーフィジカルシステム研究室\", \"出展\"] です。"
                     "出力はJSONのみで、形式は {\"retrieval_queries\": [\"...\", \"...\"], \"keywords\": [\"...\"], \"intent\": \"...\"} です。"
                 ),
             },
@@ -1078,9 +1163,9 @@ class RealCampusAgent:
         body_label = "text"
         if mode == "evaluate":
             if chunk.grep_hit:
-                body = self._center_excerpt_on_keywords(body, chunk.grep_keywords, limit=400)
+                body = self._center_excerpt_on_keywords(body, chunk.grep_keywords, limit=EVALUATE_CONTEXT_CHARS)
             else:
-                body = body[:400]
+                body = body[:EVALUATE_CONTEXT_CHARS]
             body_label = "summary"
         metadata_lines = [
             f"[knowledge:{index}] {chunk.title}",
@@ -1113,13 +1198,13 @@ class RealCampusAgent:
         body = (result.text or result.snippet).strip()
         body_label = "text"
         if mode == "evaluate":
-            body = body[:400]
+            body = body[:EVALUATE_CONTEXT_CHARS]
             body_label = "summary"
         return self._fit_context_item(
             [
                 f"[web:{index}] {result.title}",
                 f"url: {result.url}",
-                f"snippet: {result.snippet[:400]}",
+                f"snippet: {result.snippet[:EVALUATE_CONTEXT_CHARS]}",
             ],
             body_label=body_label,
             body=body,
@@ -1257,6 +1342,43 @@ class RealCampusAgent:
             seen.add(key)
             sources.append(Source(title=result.title, url=result.url, type="web"))
         return sources
+
+    @staticmethod
+    def _generation_context_trace(state: AgentState, context: _ContextAssembly) -> dict[str, list[str]]:
+        adopted_chunk_ids = [chunk.id for chunk in context.knowledge_results]
+        adopted_chunk_id_set = set(adopted_chunk_ids)
+        rejected_chunk_ids = [
+            chunk.id
+            for chunk in state.get("knowledge_results", [])
+            if chunk.id not in adopted_chunk_id_set
+        ]
+        return {
+            "generation_adopted_chunk_ids": adopted_chunk_ids,
+            "generation_rejected_chunk_ids": rejected_chunk_ids,
+            "generation_adopted_web_urls": [result.url for result in context.web_results],
+        }
+
+    @staticmethod
+    def _trace_chunk_hit(chunk: KnowledgeChunk) -> dict[str, Any]:
+        return {
+            "file_id": chunk.file_id,
+            "chunk_index": chunk.chunk_index,
+            "score": chunk.score,
+        }
+
+    @staticmethod
+    def _trace_enabled() -> bool:
+        return os.getenv("AGENT_TRACE", "1").strip() != "0"
+
+    def _trace(self, event: str, state: AgentState, payload: dict[str, Any]) -> None:
+        if not self._trace_enabled():
+            return
+        record = {
+            "event": event,
+            "trace_id": state.get("trace_id"),
+            **payload,
+        }
+        trace_logger.info(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
 
     async def _search_web_round(
         self,

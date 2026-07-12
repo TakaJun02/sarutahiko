@@ -67,7 +67,11 @@ def _configure_agent(app: FastAPI, settings: Settings) -> None:
         return
 
     llm_client = VLLMClient(base_url=settings.vllm_base_url, model=settings.llm_model)
-    embedding_model = EmbeddingModel(model_name=settings.embedding_model, device="cpu")
+    embedding_model = EmbeddingModel(
+        model_name=settings.embedding_model,
+        device="cpu",
+        base_url=settings.embedding_base_url,
+    )
     knowledge_store = CampusKnowledgeStore(
         url=settings.qdrant_url,
         collection_name=settings.qdrant_collection,
