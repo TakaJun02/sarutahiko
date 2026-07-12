@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI
@@ -19,7 +21,19 @@ from app.services.auth import AuthService
 from app.services.threads import ThreadService
 
 
+def _configure_trace_logger() -> None:
+    if os.getenv("AGENT_TRACE", "1").strip() == "0":
+        return
+    trace_logger = logging.getLogger("agent.trace")
+    trace_logger.setLevel(logging.INFO)
+    if not trace_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(name)s %(message)s"))
+        trace_logger.addHandler(handler)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
+    _configure_trace_logger()
     app_settings = settings or load_settings()
     database = Database(app_settings.database_path)
 
