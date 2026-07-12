@@ -1,12 +1,14 @@
 ---
 id: lab-cps-home
 category: lab
-title: CPS研究室トップページ
+title: "サイバーフィジカルシステム研究室（CPS研） トップページ"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） トップページ」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## ページ概要
 秋田県立大学 山口高康研究室（Ylab - CPS）のトップページ。研究室名は Cyber-Physical System Laboratory として示されている。

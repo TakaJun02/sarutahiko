@@ -1,14 +1,18 @@
 ---
 id: lab-cps-publications-awards
 category: lab
-title: CPS研究室 Publications & Awards
+title: "サイバーフィジカルシステム研究室（CPS研） 業績・受賞（Publications & Awards）"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/publications-awards/
 retrieved_at: 2026-07-12
 confidence: high
 ---
 
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） 業績・受賞（Publications & Awards）」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
+
 ## 国際会議（査読あり）
+
+以下は「国際会議（査読あり）」に関する一覧である。
 
 | 著者 | 題目 | 会議・掲載先 | 年月 |
 |---|---|---|---|
@@ -21,6 +25,8 @@ confidence: high
 | Satona Shirai, Takayasu Yamaguchi, Hiroshi Uehara | Bringing Discovery of Low-Profile Sightseeing Spots for Inbound Tourists - Acquiring Touring Serendipity Using a Joint Topic Model - | the 19th International Conference on e-Society (ES), pp. 303-308 | Mar. 2021 |
 
 ## 国内発表（オーラル）
+
+以下は「国内発表（オーラル）」に関する一覧である。
 
 | 著者 | 題目 | 会議・掲載先 | 年月 |
 |---|---|---|---|
@@ -42,6 +48,8 @@ confidence: high
 
 ## 国内発表（ポスター）
 
+以下は「国内発表（ポスター）」に関する一覧である。
+
 | 発表者 | 題目 | 会議・発表先 | 年月 |
 |---|---|---|---|
 | 小川 春翔 | 体験型ツアー企画AIによる旅行支出拡大の研究 | HYper Net Akita秋田県立大学学生発表会・コンテスト, HYper Net Akita | Feb. 2026 |
@@ -59,6 +67,8 @@ confidence: high
 
 ## 招待講演
 
+以下は「招待講演」に関する一覧である。
+
 | 講演者 | 題目 | 会議・主催 | 年月 |
 |---|---|---|---|
 | 山口 高康 | インターネットと人工知能を活用した高等教育のケーススタディ | シンITRC 第56回研究会, 産学協力研究コンソーシアム インターネット技術研究会 | Nov. 2024 |
@@ -66,6 +76,8 @@ confidence: high
 | 山口 高康 | CPSとAIによる地域課題への挑戦 | 環鳥海山エリア観光フォーラム in 由利本荘, 由利本荘市 | Mar. 2023 |
 
 ## 共同研究・助成事業
+
+以下は「共同研究・助成事業」に関する一覧である。
 
 | 制度・事業 | 主体 | 題目 | 年月・期間 |
 |---|---|---|---|
@@ -79,6 +91,8 @@ confidence: high
 
 ## メディア掲載・出演
 
+以下は「メディア掲載・出演」に関する一覧である。
+
 | 対象者 | 題目 | 媒体・掲載先 | 年月 |
 |---|---|---|---|
 | 吉田 快 | 卒業生・修了生インタビュー | イスナ, 秋田県立大学, Vol. 33, p. 7 | Mar. 2025 |
@@ -90,6 +104,8 @@ confidence: high
 | 佐藤 千優 | 秋田からメジャーリーグへ羽ばたく野球選手を育てよう | Gateway, 秋田県立大学, p. 64 | Jul. 2022 |
 
 ## 受賞
+
+以下は「受賞」に関する一覧である。
 
 | 受賞者 | 題目 | 表彰・コンテスト | 年度・年月 | 賞名 |
 |---|---|---|---|---|

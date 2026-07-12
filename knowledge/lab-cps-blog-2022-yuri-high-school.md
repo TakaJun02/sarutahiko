@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2022-yuri-high-school
 category: lab
-title: "CPS研究室 Blog: 由利高校高大連携授業"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 由利高校高大連携授業"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E7%94%B1%E5%88%A9%E9%AB%98%E6%A0%A1%E9%AB%98%E5%A4%A7%E9%80%A3%E6%90%BA%E6%8E%88%E6%A5%AD%E3%82%92%E8%A1%8C%E3%81%84%E3%81%BE%E3%81%97%E3%81%9F%EF%BC%8E/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 由利高校高大連携授業」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - 著者: Chihiro Sato

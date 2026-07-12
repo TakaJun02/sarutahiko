@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2025-hana-yori-dango
 category: lab
-title: "CPS研究室 Blog: 花より団子な春の思い出"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 花より団子な春の思い出"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E8%8A%B1%E3%82%88%E3%82%8A%E5%9B%A3%E5%AD%90%E3%81%AA%E6%98%A5%E3%81%AE%E6%80%9D%E3%81%84%E5%87%BA/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 花より団子な春の思い出」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - 著者: Yuto Takahashi

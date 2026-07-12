@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2022-thesis-crunch
 category: lab
-title: "CPS研究室 Blog: 卒論追い込んでます"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 卒論追い込んでます"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E5%8D%92%E8%AB%96%E5%A4%A7%E5%A4%89%E3%81%9D%E3%81%86%E3%81%A7%E3%83%AF%E3%83%AD%E3%82%BFwww/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 卒論追い込んでます」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - 著者: Riku Sato

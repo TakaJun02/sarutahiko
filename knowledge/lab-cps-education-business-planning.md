@@ -1,12 +1,14 @@
 ---
 id: lab-cps-education-business-planning
 category: lab
-title: "CPS研究室 Education: Business Planning"
+title: "サイバーフィジカルシステム研究室（CPS研） 教育: ビジネスプランニング（Business Planning）"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/business-planning/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） 教育: Business Planning」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 授業の目的
 Business Planning は、新規事業立ち上げを想定し、事業計画書の作成方法を学ぶ授業として紹介されている。顧客満足、経済的価値、環境変化への対応、企業の持続的成長を企画する活動としてビジネスプランニングを扱う。

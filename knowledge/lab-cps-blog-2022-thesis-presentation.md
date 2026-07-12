@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2022-thesis-presentation
 category: lab
-title: "CPS研究室 Blog: 卒論発表会緊張しました"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 卒論発表会緊張しました"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E5%8D%92%E8%AB%96%E7%99%BA%E8%A1%A8%E4%BC%9A%E7%B7%8A%E5%BC%B5%E3%81%97%E3%81%BE%E3%81%97%E3%81%9F/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 卒論発表会緊張しました」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - カテゴリ: 卒業イベント

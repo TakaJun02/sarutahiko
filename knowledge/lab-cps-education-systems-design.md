@@ -1,12 +1,14 @@
 ---
 id: lab-cps-education-systems-design
 category: lab
-title: "CPS研究室 Education: Systems Design"
+title: "サイバーフィジカルシステム研究室（CPS研） 教育: システムデザイン（Systems Design）"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/lectures-on-systems-design/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） 教育: Systems Design」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 授業の目的
 Systems Design は、ソフトウェアやハードウェアを開発・調達し、組み合わせて動作する仕組みを作るシステム構築を扱う授業として紹介されている。情報システムを題材に、要件定義、設計、テスト、デプロイ、最新の構築技術までを学ぶ。
