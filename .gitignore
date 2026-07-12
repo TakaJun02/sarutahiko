@@ -21,7 +21,7 @@ node_modules/
 dist/
 
 # tools
-.serena/cache/
+.serena/
 .codex/
 .claude/settings.local.json
 
