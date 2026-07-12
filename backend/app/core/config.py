@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Literal
 
 AgentMode = Literal["mock", "real"]
-DEFAULT_LLM_MODEL = "google/gemma-4-31B-it-qat-w4a16-ct"
-DEFAULT_LLM_CONTEXT_WINDOW = 2816
-DEFAULT_LLM_ANSWER_MAX_TOKENS = 640
+DEFAULT_LLM_MODEL = "google/gemma-4-12B-it-qat-w4a16-ct"
+DEFAULT_LLM_CONTEXT_WINDOW = 16384
+DEFAULT_LLM_ANSWER_MAX_TOKENS = 1024
+DEFAULT_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-8B"
 
 
 def default_knowledge_dir() -> Path:
@@ -32,8 +33,9 @@ class Settings:
     llm_answer_max_tokens: int = DEFAULT_LLM_ANSWER_MAX_TOKENS
     qdrant_url: str = "http://127.0.0.1:6333"
     qdrant_collection: str = "campus_knowledge"
-    embedding_model: str = "BAAI/bge-m3"
-    retrieval_top_k: int = 6
+    embedding_base_url: str = ""
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    retrieval_top_k: int = 8
     retrieval_min_score: float = 0.45
     knowledge_dir: Path = default_knowledge_dir()
     tavily_api_key: str = ""
@@ -68,8 +70,9 @@ def load_settings() -> Settings:
         llm_answer_max_tokens=int(os.getenv("LLM_ANSWER_MAX_TOKENS", str(DEFAULT_LLM_ANSWER_MAX_TOKENS))),
         qdrant_url=os.getenv("QDRANT_URL", "http://127.0.0.1:6333"),
         qdrant_collection=os.getenv("QDRANT_COLLECTION", "campus_knowledge"),
-        embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
-        retrieval_top_k=int(os.getenv("RAG_TOP_K", "6")),
+        embedding_base_url=os.getenv("EMBEDDING_BASE_URL", ""),
+        embedding_model=os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
+        retrieval_top_k=int(os.getenv("RAG_TOP_K", "8")),
         retrieval_min_score=float(os.getenv("RAG_MIN_SCORE", "0.45")),
         knowledge_dir=Path(os.getenv("KNOWLEDGE_DIR", str(default_knowledge_dir()))),
         tavily_api_key=_load_tavily_api_key(),

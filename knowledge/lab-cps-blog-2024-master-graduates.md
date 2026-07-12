@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2024-master-graduates
 category: lab
-title: "CPS研究室 Blog: 2023年度修士卒業生 思い出話"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 2023年度修士卒業生 思い出話"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E4%BB%A4%E5%92%8C5%E5%B9%B4%E5%BA%A6%E4%BF%AE%E5%A3%AB%E5%8D%92%E6%A5%AD%E7%94%9F%E3%80%80%E6%80%9D%E3%81%84%E5%87%BA%E8%A9%B1/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 2023年度修士卒業生 思い出話」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - カテゴリ: 卒業イベント

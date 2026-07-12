@@ -20,11 +20,11 @@ services:
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
     environment:
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-    # --task embed exposes the pooling/embedding runner (verify flag name if the
-    # vllm image is newer than 2026-07; some versions use `--runner pooling`).
+    # `--task embed` was removed in newer vLLM images; `--runner pooling` is the
+    # replacement. The model must be a positional argument (--model is deprecated).
     command: >-
-      --model Qwen/Qwen3-Embedding-8B
-      --task embed
+      Qwen/Qwen3-Embedding-8B
+      --runner pooling
       --gpu-memory-utilization 0.90
       --max-model-len 8192
     healthcheck:

@@ -17,7 +17,7 @@ KATAKANA_RUN_PATTERN = re.compile(r"[ァ-ヶー]+")
 KANJI_RUN_PATTERN = re.compile(r"[一-龯々〆ヵヶ]+")
 STABLE_ID_NAMESPACE = uuid.UUID("b9499827-2758-4b72-bc99-cbfb92c37f69")
 VARIANT_SUFFIXES = ("研究グループ", "について", "研究室", "先生", "教授", "講座", "学科")
-MAX_LEXICAL_HITS = 4
+MAX_LEXICAL_HITS = 6
 
 
 @dataclass(frozen=True)
@@ -25,12 +25,14 @@ class LexicalSection:
     chunk: KnowledgeChunk
     heading: str
     normalized_text: str
+    normalized_title_heading: str
 
 
 @dataclass(frozen=True)
 class SectionHit:
     chunk: KnowledgeChunk
     distinct_keyword_hits: int
+    title_heading_keyword_hit: bool
     total_hits: int
     body_length: int
 
@@ -80,12 +82,15 @@ class CampusLexicalSearch:
         for section in self._load_sections():
             matched_keywords: list[str] = []
             total_hits = 0
+            title_heading_hit = False
             for keyword in normalized_keywords:
-                count = section.normalized_text.count(normalize_text(keyword))
+                normalized_keyword = normalize_text(keyword)
+                count = section.normalized_text.count(normalized_keyword)
                 if count <= 0:
                     continue
                 matched_keywords.append(keyword)
                 total_hits += count
+                title_heading_hit = title_heading_hit or normalized_keyword in section.normalized_title_heading
             if not matched_keywords:
                 continue
 
@@ -97,7 +102,7 @@ class CampusLexicalSearch:
                 confidence=section.chunk.confidence,
                 title=section.chunk.title,
                 source_urls=section.chunk.source_urls,
-                score=_lexical_score(distinct_hits, total_hits),
+                score=_lexical_score(distinct_hits, title_heading_hit, total_hits, len(section.chunk.text)),
                 file_id=section.chunk.file_id,
                 chunk_index=section.chunk.chunk_index,
                 grep_hit=True,
@@ -107,6 +112,7 @@ class CampusLexicalSearch:
                 SectionHit(
                     chunk=chunk,
                     distinct_keyword_hits=distinct_hits,
+                    title_heading_keyword_hit=title_heading_hit,
                     total_hits=total_hits,
                     body_length=len(section.chunk.text),
                 )
@@ -114,7 +120,12 @@ class CampusLexicalSearch:
 
         return sorted(
             hits,
-            key=lambda hit: (-hit.distinct_keyword_hits, -hit.total_hits, hit.body_length),
+            key=lambda hit: (
+                -hit.distinct_keyword_hits,
+                -int(hit.title_heading_keyword_hit),
+                -hit.total_hits,
+                -hit.body_length,
+            ),
         )[:MAX_LEXICAL_HITS]
 
     def _load_sections(self) -> list[LexicalSection]:
@@ -151,6 +162,7 @@ class CampusLexicalSearch:
                         chunk=chunk,
                         heading=heading,
                         normalized_text=normalize_text(searchable),
+                        normalized_title_heading=normalize_text("\n".join((title, heading))),
                     )
                 )
 
@@ -306,5 +318,15 @@ def _longest_run(pattern: re.Pattern[str], text: str) -> str:
     return max(runs, key=len)
 
 
-def _lexical_score(distinct_keyword_hits: int, total_hits: int) -> float:
-    return float(distinct_keyword_hits) + (total_hits / 1000)
+def _lexical_score(
+    distinct_keyword_hits: int,
+    title_heading_keyword_hit: bool,
+    total_hits: int,
+    body_length: int,
+) -> float:
+    return (
+        distinct_keyword_hits * 1000
+        + int(title_heading_keyword_hit) * 100
+        + total_hits
+        + min(body_length, 10000) / 100000
+    )

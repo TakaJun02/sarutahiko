@@ -1,12 +1,14 @@
 ---
 id: lab-cps-vision
 category: lab
-title: CPS研究室 Our Vision
+title: "サイバーフィジカルシステム研究室（CPS研） ビジョン（Our Vision）"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/our-vision/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ビジョン（Our Vision）」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## ページ概要
 Our Vision ページは、秋田県の人口減少や生活の質向上という地域課題を背景に、CPSとAIで地域社会の課題解決と産業支援に取り組む研究室の方向性を説明している。

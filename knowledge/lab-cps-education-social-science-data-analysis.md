@@ -1,12 +1,14 @@
 ---
 id: lab-cps-education-social-science-data-analysis
 category: lab
-title: "CPS研究室 Education: Social Science Data Analysis"
+title: "サイバーフィジカルシステム研究室（CPS研） 教育: 社会科学データ分析（Social Science Data Analysis）"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/social-science-data-analysis/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） 教育: Social Science Data Analysis」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 授業の目的
 Social Science Data Analysis は、地域の商圏・観光分析やまちづくりを題材に、地理情報システムと空間データベースで地域の地理情報を分析し、都市・地域・建築空間の造形に関わる数理モデルを学ぶ授業として紹介されている。

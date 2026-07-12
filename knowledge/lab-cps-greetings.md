@@ -1,12 +1,14 @@
 ---
 id: lab-cps-greetings
 category: lab
-title: CPS研究室 Greetings
+title: "サイバーフィジカルシステム研究室（CPS研） あいさつ"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/greetings/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） あいさつ」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 概要
 Greetings ページは、山口研究室の設立、受け入れ学生数、研究テーマ、研究室の特色を説明している。

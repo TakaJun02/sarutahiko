@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2022-international-students
 category: lab
-title: "CPS研究室 Blog: 留学生と交流しました"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 留学生と交流しました"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/%E7%95%99%E5%AD%A6%E7%94%9F%E3%81%A8%E4%BA%A4%E6%B5%81%E3%81%97%E3%81%BE%E3%81%97%E3%81%9F%EF%BC%81/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 留学生と交流しました」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - 著者: Riku Sato

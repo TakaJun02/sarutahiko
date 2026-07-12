@@ -1,12 +1,14 @@
 ---
 id: lab-cps-comfortable-entertainable-living
 category: lab
-title: CPS研究室 Comfortable & Entertainable Living
+title: "サイバーフィジカルシステム研究室（CPS研） 研究テーマ: 快適で楽しい生活（Comfortable & Entertainable Living）"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/comfortable-and-entertainable-living/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） 研究テーマ: 快適で楽しい生活（Comfortable & Entertainable Living）」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 表情推定による視聴コンテンツのインタラクティブ化
 三浦未来さんの研究として、視聴者の選択によりストーリーが変化するコンテンツで、視聴者に自然な視聴体験を提供する技術が紹介されている。従来は、視聴者が画面操作をしたり専用装置を装着したりする必要があった。研究では、ドラマ視聴者の表情から AI が気持ちを推定し、視聴者ごとに楽しめるようストーリーを変化させる。動画配信サービスなどの映像メディアサービスへの付加価値提供が想定されている。

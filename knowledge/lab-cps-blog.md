@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog
 category: lab
-title: CPS研究室 Blog
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/blog/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## ページ概要
 Blog ページ1は、2026年2月から2023年7月までの投稿一覧を掲載している。

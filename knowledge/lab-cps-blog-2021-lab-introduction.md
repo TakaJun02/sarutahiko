@@ -1,12 +1,14 @@
 ---
 id: lab-cps-blog-2021-lab-introduction
 category: lab
-title: "CPS研究室 Blog: 2021年度研究室紹介"
+title: "サイバーフィジカルシステム研究室（CPS研） ブログ: 2021年度研究室紹介"
 source_urls:
   - https://www.cps.akita-pu.ac.jp/2021%E5%B9%B4%E5%BA%A6%E7%A0%94%E7%A9%B6%E5%AE%A4%E7%B4%B9%E4%BB%8B%EF%BC%81/
 retrieved_at: 2026-07-12
 confidence: high
 ---
+
+これは、秋田県立大学 経営システム工学科 サイバーフィジカルシステム研究室（CPS研、山口研究室）に関する「サイバーフィジカルシステム研究室（CPS研） ブログ: 2021年度研究室紹介」の情報である。サイバーフィジカルシステム研究室（CPS研）の研究、教育、メンバー、活動を確認するためのページである。
 
 ## 投稿メタデータ
 - カテゴリ: 研究室紹介
