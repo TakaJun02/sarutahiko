@@ -1,26 +1,30 @@
 # アーキテクチャ / 技術選定
 
-- 版: v0.2（2026-07-12, Fable 改訂 — Web 検索を ddgs → Tavily に変更。ハーネス v4 と同時）
+- 版: v0.3（2026-07-12, Fable 改訂 — **利用者指示によるモデル構成変更**。①埋め込みを bge-m3(CPU) → **Qwen/Qwen3-Embedding-8B（第2GPUサーバー・vLLM serve）** に変更。②生成 LLM を Gemma4-31B → **より小パラメータの Gemma 4**（同時利用者数とコンテキスト長を優先）に変更。ハーネス v5 と同時）
+- v0.2（2026-07-12, Fable 改訂 — Web 検索を ddgs → Tavily に変更。ハーネス v4 と同時）
 - v0.1（2026-07-11, Fable 決定）
 - 「確定済み仕様」（CLAUDE.md）以外の選定はここに記録する。変更したい場合は Fable が本ファイルを更新してから実装する。
 
 ## 1. コンポーネント構成
 
 ```
-[Vue 3 SPA] --HTTP/SSE--> [FastAPI backend] --OpenAI互換API--> [vLLM (Qwen3)]
+[Vue 3 SPA] --HTTP/SSE--> [FastAPI backend] --OpenAI互換API--> [vLLM 生成 (Gemma 4 小型)]  ← GPUサーバー1（本機 RTX 3090 Ti）
+                               |--OpenAI互換 /v1/embeddings--> [vLLM 埋め込み (Qwen3-Embedding-8B)]  ← GPUサーバー2（別マシン）
                                |--> [Qdrant] (学内ナレッジ ベクトル検索)
                                |--> [Web Search] (Tavily API, 抽象化レイヤ経由)
 ```
 
-すべて docker compose で起動する（vLLM は GPU 割当、`--gpus all`）。
+frontend/backend/vllm(生成)/qdrant は本機の docker compose で起動する（vLLM は GPU 割当、`--gpus all`）。
+**埋め込み用 vLLM は第2GPUサーバーで別途起動**し、backend からは `EMBEDDING_BASE_URL` で接続する（2026-07-12 利用者指示）。
 
-### ポート割当（2026-07-11 Fable 決定）
+### ポート割当（2026-07-11 Fable 決定、2026-07-12 v0.3 追記）
 
 | サービス | ポート |
 |---|---|
 | frontend (Vite dev / nginx) | 5173 |
 | backend (FastAPI) | **8080** |
-| vLLM | 8000 |
+| vLLM（生成、本機） | 8000 |
+| vLLM（埋め込み、第2GPUサーバー gouin） | 8001（`EMBEDDING_BASE_URL` = `http://${Second_GPUsever}:8001/v1`） |
 | Qdrant | 6333 |
 
 backend のローカル起動・Vite の `/api` プロキシ先はともに 8080 とする（8000 は vLLM が使うため）。
@@ -35,8 +39,9 @@ backend のローカル起動・Vite の `/api` プロキシ先はともに 8080
 | バックエンド | Python 3.11+ / FastAPI | SSE・非同期・LLM エコシステムとの親和性 |
 | エージェント制御 | LangGraph | Agentic RAG のループ（検索→評価→再検索）とステップ通知フックを素直に書ける |
 | LLM サービング | vLLM（OpenAI 互換サーバ） | 確定仕様。バックエンドからは OpenAI クライアントで接続 |
-| LLM モデル | `google/gemma-4-31B-it-qat-w4a16-ct`（**2026-07-11 利用者指定**） | 利用者指示によりQwen3-14B-AWQから変更。Apache-2.0・w4a16 量子化 31B。Gemma は thinking モード非対応のため Qwen 固有の `chat_template_kwargs` は送らない（AGENT_HARNESS.md §4） |
-| 埋め込み | `BAAI/bge-m3` | 日本語を含む多言語で高性能。ローカル実行可 |
+| LLM モデル | **`google/gemma-4-12B-it-qat-w4a16-ct`**（**2026-07-12 利用者指示・Fable が HF 存在確認済み**） | 複数人同時利用を優先し 31B の1段下へ縮小（利用者指示「31B より1段階小さいもの、おそらく 12B」。Gemma 4 の系列は E2B / E4B / 12B / 26B-A4B / 31B で、31B と同じ vLLM ネイティブ w4a16-ct 形式の 12B を採用）。KV に余裕ができ、コンテキスト長（≥8192）と同時シーケンス数（≥8）を確保する。thinking 非対応・`chat_template_kwargs` を送らない規約は 31B と同じ（AGENT_HARNESS.md §4） |
+| 埋め込み | **`Qwen/Qwen3-Embedding-8B`（第2GPUサーバー・vLLM serve・OpenAI 互換 /v1/embeddings）** | **2026-07-12 利用者指示**: bge-m3(CPU) から変更。MTEB 多言語で最高水準・日本語検索に強い。生成用 GPU と取り合わないよう別マシンで提供。クエリ側 instruct プレフィックス等の利用規約はハーネス v5 §V5-1 | 
+| 埋め込み（旧） | `BAAI/bge-m3`（CPU） | v0.2 までの構成。`EMBEDDING_BASE_URL` 未設定時の開発用フォールバックとしてコードパスは残す |
 | リランカー | `BAAI/bge-reranker-v2-m3`（任意、Phase 3 で効果測定） | 検索精度向上の定番。効果がなければ外す |
 | ベクトル DB | Qdrant（docker） | 運用が軽く、メタデータフィルタが強い。compose に載せやすい |
 | Web 検索 | **Tavily API**（`TAVILY_API_KEY` を `.env` で供給。httpx 直、SDK 不使用）。`SearchProvider` インターフェースで抽象化 | **2026-07-12 利用者指示で ddgs から移行**。`include_domains` によるドメイン制限と `raw_content`（本文同梱）で検索品質とレイテンシを改善（AGENT_HARNESS.md §V4） |
@@ -101,34 +106,54 @@ oc_2026/
 └── .env.example
 ```
 
-## 5. vLLM 起動構成（2026-07-11 改訂: Gemma 4 31B へ変更）
+## 5. vLLM 起動構成（2026-07-12 v0.3 改訂: 生成=小型 Gemma 4 / 埋め込み=第2GPUサーバー）
 
-利用者指定により `google/gemma-4-31B-it-qat-w4a16-ct` を使用する（旧 Qwen3-14B-AWQ 構成は撤去）:
+### 5.1 生成用 vLLM（本機 RTX 3090 Ti 24GB、ポート 8000）
+
+**2026-07-12 利用者指示**により、31B から**より小パラメータの Gemma 4** に変更する。
+背景: 31B は重みロードだけで 19.79GiB を消費し KV が極めて重く（約0.85MB/token）、
+**max-model-len 2816 が上限**だった（実測）。RAG コンテキストが窮屈になり検索ヒットを
+generate に届けられない事象の一因（AGENT_HARNESS.md §V5-0）。複数人同時利用にも不足。
+
+- モデル: **`google/gemma-4-12B-it-qat-w4a16-ct` で確定**（2026-07-12 利用者承認・Fable が HF 存在確認済み）。
+- 受け入れ条件（実測で確認・Fable 検収）:
+  - `--max-model-len` **8192 以上**（目標 16384）
+  - `--max-num-seqs` **8 以上**（オープンキャンパス当日の同時利用想定）
+  - 応答品質: EVAL_QUESTIONS.md の回帰質問（§G 含む）で v4 構成と同等以上
+- 起動構成（ルート docker-compose.yml の vllm サービスを更新。初期値、実測で調整）:
 
 ```bash
-docker run --gpus all \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  -v ~/.cache/huggingface:/root/.cache/huggingface \
-  -p 8000:8000 vllm/vllm-openai:latest \
-  --model google/gemma-4-31B-it-qat-w4a16-ct \
-  --max-model-len 2816 \
-  --max-num-seqs 4 \
-  --gpu-memory-utilization 0.95 \
-  --enforce-eager \
+  --model google/gemma-4-12B-it-qat-w4a16-ct \
+  --max-model-len 16384 \
+  --max-num-seqs 8 \
+  --gpu-memory-utilization 0.92 \
   --limit-mm-per-prompt '{"image": 0}'
 ```
 
-- **2026-07-12 Fable 実測で確定**。重みロードだけで 19.79GiB を消費し、Gemma4 は KV が極めて重い
-  （約0.85MB/token）ため、24GB では **max-model-len 2816 が上限**（8192/6144/4096/3584/3200/2880 で
-  KV不足または実行時OOMを確認済み）。FP8 KV は SM86（3090 Ti）非対応。
-- これに伴いハーネス側で**コンテキスト予算管理が必須**（環境変数 `LLM_CONTEXT_WINDOW=2816`、
-  回答は `LLM_ANSWER_MAX_TOKENS=640`。チャンク・Webページ・履歴を予算内に切り詰める）。
-- `--reasoning-parser qwen3` は**削除**（Gemma に不要）。
+  12B w4a16 の重みは概ね 7〜8GiB のため 24GB で 16384 コンテキスト × 8 seqs は
+  収まる見込み（KV 実測で OOM するなら 12288 → 8192 の順に縮退。8192 未満は不可）。
+  31B で必要だった `--enforce-eager` は外して起動を試し、OOM 時のみ復活させる。
+- 確定後、`LLM_CONTEXT_WINDOW` / `LLM_ANSWER_MAX_TOKENS` を実測値へ更新する
+  （目標: `LLM_CONTEXT_WINDOW=16384`（最低 8192）、`LLM_ANSWER_MAX_TOKENS=1024`）。
 - `chat_template_kwargs: {"enable_thinking": false}` は **Gemma に送らない**（Qwen 固有。AGENT_HARNESS.md §4）。
-- トレードオフ（利用者への注記）: Qwen3-14B-AWQ 構成では 16k コンテキストを確保できたが、
-  指定モデルへの変更で 2816 に縮小。RAG の同時投入コンテキスト量が大きく制限される。
-- モデル重みと `BAAI/bge-m3` はホストの HF キャッシュにダウンロード済み。compose では同じボリュームを使う（再ダウンロード禁止）。
-- 埋め込み（bge-m3）は従来どおり **CPU で実行**。
+- 旧 31B 構成（`google/gemma-4-31B-it-qat-w4a16-ct`、max-model-len 2816、enforce-eager）は撤去。
+
+### 5.2 埋め込み用 vLLM（第2GPUサーバー「gouin」、ポート 8001）
+
+**2026-07-12 利用者指示**: 生成用 GPU と取り合わないため、別マシン **gouin** の GPU で
+`Qwen/Qwen3-Embedding-8B` を vLLM の embedding タスクで提供する（OpenAI 互換 `/v1/embeddings`）。
+
+- 起動ファイル: **`deploy/gouin/docker-compose.yml`**（Fable 作成済み）。gouin 上で
+  `docker compose up -d` するだけでよい（起動は利用者が実施）。ポートは 8001。
+- gouin の IP は本機ルートの `.env` に **`Second_GPUsever`** キーで記載済み（利用者管理・値はコミットしない）。
+  ルート docker-compose.yml の backend は
+  `EMBEDDING_BASE_URL: http://${Second_GPUsever}:8001/v1` で参照する。
+- `--task embed` の正確なフラグ名は実装時に vLLM 現行ドキュメントで確認（版により `--runner pooling` 等）。
+- backend / ingest は `EMBEDDING_BASE_URL` 経由で接続。
+  **未設定時は従来の bge-m3(CPU) ローカル実行にフォールバック**（開発環境用）。
+- ベクトル次元は **4096**（bge-m3 の 1024 から変更）。**Qdrant コレクションの再作成と全ナレッジの
+  再インジェストが必須**（ハーネス v5 §V5-1）。
+- クエリ側 instruct プレフィックス・title 込み埋め込み等の利用規約は AGENT_HARNESS.md §V5-1 を正とする。
 
 ## 6. 設定・シークレット
 
