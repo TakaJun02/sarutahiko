@@ -145,7 +145,7 @@ async function submit() {
     } else {
       await auth.login(name.value)
     }
-    router.replace(route.query.redirect || '/app/chat')
+    router.replace(route.query.redirect || '/chat')
   } catch (submitError) {
     error.value = submitError.message || 'ログインに失敗しました。'
   } finally {
@@ -183,9 +183,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="login-page flex min-h-svh flex-col overflow-hidden bg-white text-zinc-900">
+  <main class="login-page flex min-h-dvh flex-col overflow-hidden bg-white text-zinc-900">
     <section class="bg-noise flex flex-1 items-center justify-center px-6 py-10 text-center">
-      <h1 class="max-w-4xl text-4xl font-bold leading-tight tracking-normal text-zinc-900 sm:text-5xl">
+      <h1 class="max-w-4xl text-4xl font-bold leading-tight tracking-tight text-zinc-900 sm:text-5xl">
         <span>{{ displayedPhrase }}</span>
         <span
           class="login-type-cursor"
@@ -197,7 +197,14 @@ onBeforeUnmount(() => {
 
     <footer class="login-sheet rounded-t-3xl bg-black p-6 text-white sm:p-8">
       <form class="mx-auto w-full max-w-md space-y-5" @submit.prevent="submit">
-        <p v-if="error" class="rounded-xl bg-red-900/50 px-4 py-3 text-sm text-red-100">
+        <p
+          v-if="error"
+          class="flex items-start gap-2.5 rounded-xl border border-red-500/30 bg-red-900/50 px-4 py-3 text-sm leading-6 text-red-100"
+          role="alert"
+        >
+          <svg aria-hidden="true" class="mt-1 h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
+            <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 8v5 M12 16.5h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
           {{ error }}
         </p>
 
@@ -205,7 +212,7 @@ onBeforeUnmount(() => {
           <span class="mb-2 block text-sm text-zinc-300">ニックネーム</span>
           <input
             v-model="name"
-            class="w-full rounded-xl bg-zinc-800 px-4 py-3 text-base text-white outline-none transition placeholder:text-zinc-500 focus:ring-2 focus:ring-white"
+            class="min-h-12 w-full rounded-xl bg-zinc-800 px-4 py-3 text-base text-white outline-none transition duration-200 ease-out placeholder:text-zinc-500 hover:bg-zinc-700/80 focus:bg-zinc-800 focus:ring-2 focus:ring-white"
             placeholder="例: さくら"
             autocomplete="nickname"
             maxlength="21"
@@ -215,7 +222,7 @@ onBeforeUnmount(() => {
 
         <button
           type="submit"
-          class="flex w-full items-center justify-center rounded-xl px-4 py-3 text-base font-semibold transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+          class="flex min-h-12 w-full items-center justify-center rounded-xl px-4 py-3 text-base font-semibold transition duration-200 ease-out active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100"
           :class="ctaClass"
           :disabled="isSubmitting"
         >
@@ -228,7 +235,7 @@ onBeforeUnmount(() => {
 
         <button
           type="button"
-          class="w-full rounded-xl bg-zinc-800 px-4 py-3 text-base font-semibold text-white transition hover:bg-zinc-700"
+          class="min-h-12 w-full rounded-xl bg-zinc-800 px-4 py-3 text-base font-semibold text-white transition duration-200 ease-out hover:bg-zinc-700 active:scale-[0.97]"
           @click="toggleMode"
         >
           {{ switchLabel }}
