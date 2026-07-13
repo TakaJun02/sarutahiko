@@ -43,6 +43,7 @@ const messagesEnd = ref(null)
 const inputRef = ref(null)
 const footerRef = ref(null)
 const footerClearancePx = ref(224)
+const expandedSourceKeys = ref(new Set())
 
 // Thread rename / delete confirmation dialog (replaces window.prompt/confirm).
 const dialog = ref(null) // { kind: 'rename' | 'delete', threadId, threadTitle }
@@ -135,6 +136,39 @@ function autoResizeInput() {
 
 function sourceTypeLabel(type) {
   return type === 'knowledge' ? '学内ナレッジ' : 'Web'
+}
+
+function messageSourceKey(message) {
+  return message.clientId || message.id
+}
+
+function sourceRegionId(message) {
+  const key = String(messageSourceKey(message)).replace(/[^A-Za-z0-9_-]/g, '-')
+  return `message-sources-${key}`
+}
+
+function isSourcesExpanded(message) {
+  return expandedSourceKeys.value.has(messageSourceKey(message))
+}
+
+function sourcesToggleLabel(message) {
+  const action = isSourcesExpanded(message) ? '出典を折りたたむ' : '出典を展開する'
+  return `${action}（${message.sources.length}件）`
+}
+
+function sourcesRegionLabel(message) {
+  return `出典 ${message.sources.length}件`
+}
+
+function toggleSources(message) {
+  const key = messageSourceKey(message)
+  const nextKeys = new Set(expandedSourceKeys.value)
+  if (nextKeys.has(key)) {
+    nextKeys.delete(key)
+  } else {
+    nextKeys.add(key)
+  }
+  expandedSourceKeys.value = nextKeys
 }
 
 function logout() {
@@ -335,6 +369,19 @@ watch(draft, () => {
 })
 
 watch(
+  () => chat.messages.map((message) => messageSourceKey(message)),
+  (keys) => {
+    const currentKeys = new Set(keys)
+    const nextKeys = new Set(
+      [...expandedSourceKeys.value].filter((key) => currentKeys.has(key)),
+    )
+    if (nextKeys.size !== expandedSourceKeys.value.size) {
+      expandedSourceKeys.value = nextKeys
+    }
+  },
+)
+
+watch(
   () => chat.messages.map((message) => {
     const sourceKey = message.sources.map((source) => source.url).join(',')
     return `${message.clientId || message.id}:${message.content.length}:${message.statusText}:${message.statusStep}:${sourceKey}`
@@ -525,53 +572,84 @@ onBeforeUnmount(() => {
                     <div class="space-y-4">
                       <MarkdownRenderer v-if="message.content" :content="message.content" />
                       <div v-if="message.sources.length" class="border-t border-edge pt-3">
-                        <p class="mb-2 text-xs font-medium tracking-wide text-white/45">出典</p>
-                        <ul class="flex flex-wrap gap-2">
-                          <li v-for="source in message.sources" :key="source.url">
-                            <a
-                              class="group flex min-h-9 items-center gap-2 rounded-full border border-edge bg-ink-surface py-1.5 pl-2 pr-3 text-xs text-white/70 transition duration-200 ease-out hover:border-edge-strong hover:bg-ink-raised hover:text-white"
-                              :href="source.url"
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              <span
-                                class="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold"
-                                :class="source.type === 'knowledge'
-                                  ? 'bg-brand-mint/15 text-brand-mint'
-                                  : 'bg-brand-coral/15 text-brand-coral'"
-                              >
-                                <svg aria-hidden="true" class="h-3 w-3" viewBox="0 0 24 24" fill="none">
-                                  <path
-                                    v-if="source.type === 'knowledge'"
-                                    d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21V5.5z M4 18.5A2.5 2.5 0 0 1 6.5 16H20"
-                                    stroke="currentColor"
-                                    stroke-width="1.8"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                  />
-                                  <path
-                                    v-else
-                                    d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M3 12h18 M12 3c2.4 2.4 3.6 5.6 3.6 9S14.4 18.6 12 21c-2.4-2.4-3.6-5.6-3.6-9S9.6 5.4 12 3z"
-                                    stroke="currentColor"
-                                    stroke-width="1.6"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                  />
-                                </svg>
-                                {{ sourceTypeLabel(source.type) }}
-                              </span>
-                              <span class="max-w-[14rem] truncate sm:max-w-[20rem]">{{ source.title }}</span>
-                              <svg
-                                aria-hidden="true"
-                                class="h-3 w-3 shrink-0 text-white/30 transition duration-200 ease-out group-hover:text-white/70"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                              >
-                                <path d="M14 5h5v5 M19 5l-9 9 M11 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                              </svg>
-                            </a>
-                          </li>
-                        </ul>
+                        <button
+                          type="button"
+                          class="group flex min-h-11 w-full items-center justify-between gap-3 rounded-xl px-3 py-1 text-left transition duration-200 ease-out hover:bg-fill-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-mint/45 active:scale-[0.99]"
+                          :aria-expanded="isSourcesExpanded(message)"
+                          :aria-controls="sourceRegionId(message)"
+                          :aria-label="sourcesToggleLabel(message)"
+                          @click="toggleSources(message)"
+                        >
+                          <span class="flex min-w-0 items-baseline gap-2">
+                            <span class="text-xs font-medium tracking-wide text-white/55">出典</span>
+                            <span class="text-xs text-white/40">{{ message.sources.length }}件</span>
+                          </span>
+                          <svg
+                            aria-hidden="true"
+                            class="sources-disclosure-icon h-4 w-4 shrink-0 text-white/40 transition duration-200 ease-out group-hover:text-white/70"
+                            :class="isSourcesExpanded(message) ? 'rotate-180' : 'rotate-0'"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                          >
+                            <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+                          </svg>
+                        </button>
+                        <Transition name="sources-collapse">
+                          <div
+                            v-show="isSourcesExpanded(message)"
+                            :id="sourceRegionId(message)"
+                            role="region"
+                            :aria-label="sourcesRegionLabel(message)"
+                            class="pt-2"
+                          >
+                            <ul class="flex flex-wrap gap-2">
+                              <li v-for="source in message.sources" :key="source.url">
+                                <a
+                                  class="group flex min-h-9 items-center gap-2 rounded-full border border-edge bg-ink-surface py-1.5 pl-2 pr-3 text-xs text-white/70 transition duration-200 ease-out hover:border-edge-strong hover:bg-ink-raised hover:text-white"
+                                  :href="source.url"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  <span
+                                    class="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                                    :class="source.type === 'knowledge'
+                                      ? 'bg-brand-mint/15 text-brand-mint'
+                                      : 'bg-brand-coral/15 text-brand-coral'"
+                                  >
+                                    <svg aria-hidden="true" class="h-3 w-3" viewBox="0 0 24 24" fill="none">
+                                      <path
+                                        v-if="source.type === 'knowledge'"
+                                        d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21V5.5z M4 18.5A2.5 2.5 0 0 1 6.5 16H20"
+                                        stroke="currentColor"
+                                        stroke-width="1.8"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                      />
+                                      <path
+                                        v-else
+                                        d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M3 12h18 M12 3c2.4 2.4 3.6 5.6 3.6 9S14.4 18.6 12 21c-2.4-2.4-3.6-5.6-3.6-9S9.6 5.4 12 3z"
+                                        stroke="currentColor"
+                                        stroke-width="1.6"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                      />
+                                    </svg>
+                                    {{ sourceTypeLabel(source.type) }}
+                                  </span>
+                                  <span class="max-w-[14rem] truncate sm:max-w-[20rem]">{{ source.title }}</span>
+                                  <svg
+                                    aria-hidden="true"
+                                    class="h-3 w-3 shrink-0 text-white/30 transition duration-200 ease-out group-hover:text-white/70"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                  >
+                                    <path d="M14 5h5v5 M19 5l-9 9 M11 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                                  </svg>
+                                </a>
+                              </li>
+                            </ul>
+                          </div>
+                        </Transition>
                       </div>
                     </div>
                   </LoadingSpinnerV5>
@@ -709,3 +787,32 @@ onBeforeUnmount(() => {
     </Transition>
   </div>
 </template>
+
+<style scoped>
+.sources-collapse-enter-active,
+.sources-collapse-leave-active {
+  transition:
+    opacity 180ms ease-out,
+    transform 180ms ease-out;
+}
+
+.sources-collapse-enter-from,
+.sources-collapse-leave-to {
+  opacity: 0;
+  transform: translateY(-0.25rem);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sources-collapse-enter-active,
+  .sources-collapse-leave-active,
+  .sources-disclosure-icon {
+    transition: none !important;
+  }
+
+  .sources-collapse-enter-from,
+  .sources-collapse-leave-to {
+    opacity: 1;
+    transform: none;
+  }
+}
+</style>
