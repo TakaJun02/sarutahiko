@@ -18,6 +18,22 @@ function createSseResponse(blocks) {
   }
 }
 
+function createJsonResponse(payload, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(payload),
+  }
+}
+
+function stubLocalStorage() {
+  vi.stubGlobal('localStorage', {
+    getItem: vi.fn(() => 'test-token'),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+  })
+}
+
 describe('chat store SSE helpers', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -138,5 +154,179 @@ describe('chat store SSE helpers', () => {
     expect(contentSnapshots).toContain('本荘キャンパス')
     expect(store.messages[1].content).toBe('本荘キャンパス')
     expect(store.messages[1].statusStep).toBe('retrieve')
+  })
+})
+
+describe('chat store thread history actions', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    stubLocalStorage()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('loads the thread list from the API', async () => {
+    const threads = [
+      { id: 'thread-2', title: '図書館について', created_at: 'c2', updated_at: 'u2' },
+      { id: 'thread-1', title: '食堂について', created_at: 'c1', updated_at: 'u1' },
+    ]
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(createJsonResponse({ threads }))))
+
+    const store = useChatStore()
+    await store.loadThreads()
+
+    expect(fetch).toHaveBeenCalledWith('/api/threads', expect.any(Object))
+    expect(store.threads).toEqual(threads)
+  })
+
+  it('restores a persisted thread with settled assistant messages and sources', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          createJsonResponse({
+            thread: { id: 'thread-1', title: '食堂について', created_at: 'c1', updated_at: 'u1' },
+            messages: [
+              { id: 'm1', role: 'user', content: '食堂はどこですか？', sources: [], created_at: 't1' },
+              {
+                id: 'm2',
+                role: 'assistant',
+                content: '学生ホールにあります。',
+                sources: [{ title: '公式', url: 'https://example.test', type: 'knowledge' }],
+                created_at: 't2',
+              },
+            ],
+          }),
+        ),
+      ),
+    )
+
+    const store = useChatStore()
+    await store.openThread('thread-1')
+
+    expect(store.threadId).toBe('thread-1')
+    expect(store.messages).toHaveLength(2)
+    expect(store.messages[0].role).toBe('user')
+    expect(store.messages[0].content).toBe('食堂はどこですか？')
+    expect(store.messages[1]).toMatchObject({
+      id: 'm2',
+      role: 'assistant',
+      content: '学生ホールにあります。',
+      pending: false,
+      streaming: false,
+    })
+    expect(store.messages[1].sources).toEqual([
+      { title: '公式', url: 'https://example.test', type: 'knowledge' },
+    ])
+  })
+
+  it('starts a new chat without dropping the sidebar list', () => {
+    const store = useChatStore()
+    store.threads = [{ id: 'thread-1', title: 't', created_at: 'c', updated_at: 'u' }]
+    store.threadId = 'thread-1'
+    store.messages = [createMessage('user', 'こんにちは')]
+    store.error = '一時的なエラー'
+
+    store.newChat()
+
+    expect(store.messages).toEqual([])
+    expect(store.threadId).toBeNull()
+    expect(store.error).toBe('')
+    expect(store.threads).toHaveLength(1)
+  })
+
+  it('renames a thread and updates the sidebar entry', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          createJsonResponse({
+            thread: { id: 'thread-1', title: '学食まとめ', created_at: 'c1', updated_at: 'u1' },
+          }),
+        ),
+      ),
+    )
+
+    const store = useChatStore()
+    store.threads = [
+      { id: 'thread-1', title: '食堂について', created_at: 'c1', updated_at: 'u1' },
+      { id: 'thread-2', title: '図書館について', created_at: 'c2', updated_at: 'u2' },
+    ]
+
+    await store.renameThread('thread-1', '学食まとめ')
+
+    const [url, options] = fetch.mock.calls[0]
+    expect(url).toBe('/api/threads/thread-1')
+    expect(options.method).toBe('PATCH')
+    expect(JSON.parse(options.body)).toEqual({ title: '学食まとめ' })
+    expect(store.threads[0].title).toBe('学食まとめ')
+    expect(store.threads[1].title).toBe('図書館について')
+  })
+
+  it('deletes a thread and resets the conversation when it was open', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(createJsonResponse(null, 204))))
+
+    const store = useChatStore()
+    store.threads = [
+      { id: 'thread-1', title: '食堂について', created_at: 'c1', updated_at: 'u1' },
+      { id: 'thread-2', title: '図書館について', created_at: 'c2', updated_at: 'u2' },
+    ]
+    store.threadId = 'thread-1'
+    store.messages = [createMessage('user', '食堂はどこですか？')]
+
+    await store.deleteThread('thread-1')
+
+    const [url, options] = fetch.mock.calls[0]
+    expect(url).toBe('/api/threads/thread-1')
+    expect(options.method).toBe('DELETE')
+    expect(store.threads.map((thread) => thread.id)).toEqual(['thread-2'])
+    expect(store.threadId).toBeNull()
+    expect(store.messages).toEqual([])
+  })
+
+  it('keeps the current conversation when deleting another thread', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(createJsonResponse(null, 204))))
+
+    const store = useChatStore()
+    store.threads = [
+      { id: 'thread-1', title: '食堂について', created_at: 'c1', updated_at: 'u1' },
+      { id: 'thread-2', title: '図書館について', created_at: 'c2', updated_at: 'u2' },
+    ]
+    store.threadId = 'thread-2'
+    store.messages = [createMessage('user', '図書館は使えますか？')]
+
+    await store.deleteThread('thread-1')
+
+    expect(store.threads.map((thread) => thread.id)).toEqual(['thread-2'])
+    expect(store.threadId).toBe('thread-2')
+    expect(store.messages).toHaveLength(1)
+  })
+
+  it('refreshes the thread list after a send resolves a thread id', async () => {
+    const threads = [{ id: 'thread-1', title: '食堂はどこですか？', created_at: 'c1', updated_at: 'u1' }]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url) => {
+        if (url === '/api/chat') {
+          return Promise.resolve(
+            createSseResponse([
+              'event: token\ndata: {"text":"学生ホールです。"}',
+              'event: done\ndata: {"thread_id":"thread-1","message_id":"message-1","sources":[]}',
+            ]),
+          )
+        }
+        return Promise.resolve(createJsonResponse({ threads }))
+      }),
+    )
+
+    const store = useChatStore()
+    await store.sendMessage('食堂はどこですか？')
+
+    expect(store.threadId).toBe('thread-1')
+    expect(fetch).toHaveBeenCalledWith('/api/threads', expect.any(Object))
+    expect(store.threads).toEqual(threads)
   })
 })

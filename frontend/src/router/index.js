@@ -11,7 +11,7 @@ const router = createRouter({
       path: '/',
       redirect: () => {
         const auth = useAuthStore()
-        return auth.token ? '/app/chat' : '/login'
+        return auth.token ? '/chat' : '/login'
       },
     },
     {
@@ -20,10 +20,15 @@ const router = createRouter({
       component: LoginView,
     },
     {
-      path: '/app/chat',
+      path: '/chat/:threadId?',
       name: 'chat',
       component: ChatView,
       meta: { requiresAuth: true },
+    },
+    {
+      // Legacy path still referenced by the login redirect.
+      path: '/app/chat',
+      redirect: '/chat',
     },
   ],
 })

@@ -1,6 +1,13 @@
 import { defineStore } from 'pinia'
 
-import { ApiError, getStoredToken } from '../services/api'
+import {
+  ApiError,
+  deleteThreadRequest,
+  fetchThread,
+  fetchThreads,
+  getStoredToken,
+  renameThreadRequest,
+} from '../services/api'
 
 export function createMessage(role, content = '', overrides = {}) {
   const id = overrides.id || crypto.randomUUID()
@@ -70,6 +77,7 @@ export const useChatStore = defineStore('chat', {
   state: () => ({
     messages: [],
     threadId: null,
+    threads: [],
     isSending: false,
     error: '',
   }),
@@ -77,8 +85,44 @@ export const useChatStore = defineStore('chat', {
     reset() {
       this.messages = []
       this.threadId = null
+      this.threads = []
       this.isSending = false
       this.error = ''
+    },
+    newChat() {
+      this.messages = []
+      this.threadId = null
+      this.error = ''
+    },
+    async loadThreads() {
+      this.threads = await fetchThreads()
+    },
+    async openThread(threadId) {
+      const payload = await fetchThread(threadId)
+      this.threadId = payload.thread.id
+      this.messages = payload.messages.map((message) =>
+        createMessage(message.role, message.content, {
+          id: message.id,
+          pending: false,
+          streaming: false,
+          sources: message.sources || [],
+        }),
+      )
+      this.error = ''
+    },
+    async renameThread(threadId, title) {
+      const updated = await renameThreadRequest(threadId, title)
+      const index = this.threads.findIndex((thread) => thread.id === threadId)
+      if (index !== -1) {
+        this.threads.splice(index, 1, { ...this.threads[index], ...updated })
+      }
+    },
+    async deleteThread(threadId) {
+      await deleteThreadRequest(threadId)
+      this.threads = this.threads.filter((thread) => thread.id !== threadId)
+      if (this.threadId === threadId) {
+        this.newChat()
+      }
     },
     async sendMessage(text) {
       const messageText = text.trim()
@@ -99,6 +143,15 @@ export const useChatStore = defineStore('chat', {
 
       try {
         await this.streamChatResponse(messageText, assistantMessage)
+        if (this.threadId) {
+          // Refresh the sidebar so new threads appear first and existing
+          // threads bubble up (updated_at descending on the server).
+          try {
+            await this.loadThreads()
+          } catch {
+            // A stale sidebar is not worth failing the whole send for.
+          }
+        }
       } catch (error) {
         assistantMessage.pending = false
         assistantMessage.streaming = false

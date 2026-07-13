@@ -82,6 +82,44 @@ class ThreadService:
             ).fetchall()
         return [self._message_to_dict(row) for row in reversed(rows)]
 
+    def list_threads(self, user: User) -> list[dict]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, title, created_at, updated_at
+                FROM threads
+                WHERE user_id = ?
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
+                """,
+                (user.id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def rename_thread(self, user: User, thread_id: str, title: str) -> dict:
+        normalized = title.strip()
+        if not normalized or len(normalized) > 60:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="スレッド名は1〜60文字で入力してください。",
+            )
+        with self.database.connect() as connection:
+            self._require_owned_thread(connection, user, thread_id)
+            connection.execute(
+                "UPDATE threads SET title = ? WHERE id = ?",
+                (normalized, thread_id),
+            )
+            thread = connection.execute(
+                "SELECT id, title, created_at, updated_at FROM threads WHERE id = ?",
+                (thread_id,),
+            ).fetchone()
+        return dict(thread)
+
+    def delete_thread(self, user: User, thread_id: str) -> None:
+        with self.database.connect() as connection:
+            self._require_owned_thread(connection, user, thread_id)
+            # messages are removed via ON DELETE CASCADE (PRAGMA foreign_keys = ON).
+            connection.execute("DELETE FROM threads WHERE id = ?", (thread_id,))
+
     def get_thread(self, user: User, thread_id: str) -> dict:
         with self.database.connect() as connection:
             thread = connection.execute(
@@ -106,6 +144,18 @@ class ThreadService:
             "thread": dict(thread),
             "messages": [self._message_to_dict(message) for message in messages],
         }
+
+    @staticmethod
+    def _require_owned_thread(connection: sqlite3.Connection, user: User, thread_id: str) -> None:
+        row = connection.execute(
+            "SELECT id FROM threads WHERE id = ? AND user_id = ?",
+            (thread_id, user.id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="スレッドが見つかりません。",
+            )
 
     @staticmethod
     def _message_to_dict(row: sqlite3.Row) -> dict:
