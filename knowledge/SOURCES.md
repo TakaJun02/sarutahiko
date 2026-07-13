@@ -198,3 +198,13 @@
 | lab | lab-cps-open-lab-2026.md | https://www.cps.akita-pu.ac.jp/%E7%A0%94%E7%A9%B6%E5%AE%A4%E5%A4%A7%E5%85%AC%E9%96%8B-2026/ | 2026-07-12 | `/tmp/.../cps_pages/open-lab-2026.html` の本文記事部分を全文転記。検索性向上のため見出しにキーワード付与（2026-07-12）。リードチャンクに出展一覧を追加（2026-07-12 検収対応） |
 | lab | lab-cps-blog-2021-seminar2.md | https://www.cps.akita-pu.ac.jp/%E3%82%BB%E3%83%9F%E3%83%8A%E3%83%BCii%E7%99%BA%E8%A1%A8%E4%BC%9A-%E9%96%8B%E5%82%AC%EF%BC%81%EF%BC%81/ | 2026-07-12 | `/tmp/.../cps_pages/seminar2-2021.html` の本文記事部分を全文転記 |
 | lab | lab-cps-blog-2022-seminar2.md | https://www.cps.akita-pu.ac.jp/%E3%82%BB%E3%83%9F%E3%83%8A%E3%83%BCii%E7%99%BA%E8%A1%A8%E4%BC%9A-%E9%96%8B%E5%82%AC%EF%BC%81%EF%BC%81-2/ | 2026-07-12 | `/tmp/.../cps_pages/seminar2-2022.html` の本文記事部分を全文転記 |
+
+## FR-11 経路案内ナレッジ（2026-07-13/14）
+
+| category | file | main URLs | retrieved_at |
+|---|---|---|---|
+| facility | facility-campus-map.md | https://www.akita-pu.ac.jp/gakubu/sys/honjocmps_honjocmps / https://www.akita-pu.ac.jp/about/access/acs_hnjo / https://www.akita-pu.ac.jp/oshirase/oshirase2026/9350 / OC2026タイムテーブルPDF / OC2026学科ガイドPDF各種 | 2026-07-14 |
+| event | event-oc2026-location-index.md | https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf / OC2026学科ガイドPDF各種 / https://www.cps.akita-pu.ac.jp/%E7%A0%94%E7%A9%B6%E5%AE%A4%E5%A4%A7%E5%85%AC%E9%96%8B-2026/ | 2026-07-14 |
+| facility | facility-campus-route-graph.md | https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026_guide_chimeka_2.pdf / https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026_guide_kikai.pdf / https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026_guide_kenchiku.pdf / https://www.akita-pu.ac.jp/gakubu/sys/honjocmps_honjocmps | 2026-07-14 |
+| facility | facility-oc2026-walking-routes.md（廃止・facility-campus-route-graph.mdへ統合） | https://www.akita-pu.ac.jp/about/access/acs_hnjo / https://www.akita-pu.ac.jp/oshirase/oshirase2026/9350 / https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026_guide_kenchiku.pdf / https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf | 2026-07-13（2026-07-14廃止・統合） |
+| access | access-oc2026-shuttle.md | https://www.akita-pu.ac.jp/oshirase/oshirase2026/9350 | 2026-07-13 |

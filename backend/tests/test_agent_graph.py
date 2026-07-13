@@ -909,7 +909,7 @@ async def test_generation_budget_preserves_history_and_trims_context() -> None:
 
 
 async def test_generation_budget_shrinks_history_to_250_to_preserve_minimum_context() -> None:
-    agent = _agent(llm_context_window=2816, llm_answer_max_tokens=640)
+    agent = _agent(llm_context_window=2900, llm_answer_max_tokens=640)
     state = {
         "question": "施設について教えて",
         "history": _long_history("MIN_CONTEXT"),
@@ -920,7 +920,7 @@ async def test_generation_budget_shrinks_history_to_250_to_preserve_minimum_cont
     messages, context = agent._build_generation_messages_with_sources(state)
     history_messages = messages[1:-1]
 
-    assert _message_tokens(messages) <= 2816 - 640 - PROMPT_MARGIN_TOKENS
+    assert _message_tokens(messages) <= 2900 - 640 - PROMPT_MARGIN_TOKENS
     assert len(history_messages) == 4
     assert [len(message["content"]) for message in history_messages] == [250, 250, 250, 250]
     assert estimate_tokens(context.text) >= MIN_GENERATION_CONTEXT_TOKENS
@@ -928,7 +928,7 @@ async def test_generation_budget_shrinks_history_to_250_to_preserve_minimum_cont
 
 
 async def test_generation_budget_uses_120_floor_and_accepts_sub_minimum_context() -> None:
-    agent = _agent(llm_context_window=2120, llm_answer_max_tokens=640)
+    agent = _agent(llm_context_window=2200, llm_answer_max_tokens=640)
     state = {
         "question": "施設について教えて",
         "history": _long_history("LOW_CONTEXT"),
@@ -939,7 +939,7 @@ async def test_generation_budget_uses_120_floor_and_accepts_sub_minimum_context(
     messages, context = agent._build_generation_messages_with_sources(state)
     history_messages = messages[1:-1]
 
-    assert _message_tokens(messages) <= 2120 - 640 - PROMPT_MARGIN_TOKENS
+    assert _message_tokens(messages) <= 2200 - 640 - PROMPT_MARGIN_TOKENS
     assert len(history_messages) == 4
     assert [len(message["content"]) for message in history_messages] == [120, 120, 120, 120]
     assert 0 < estimate_tokens(context.text) < MIN_GENERATION_CONTEXT_TOKENS
