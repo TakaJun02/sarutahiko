@@ -9,6 +9,19 @@ import {
   renameThreadRequest,
 } from '../services/api'
 
+const FRIENDLY_SEND_ERROR = 'うまく接続できませんでした。少し待ってからもう一度お試しください。'
+
+// Backend "detail" strings are written in Japanese guide tone; anything else
+// (raw HTTP status texts such as "Internal Server Error") is replaced with a
+// friendly message so visitors never see bare English errors.
+export function toFriendlyErrorMessage(message) {
+  // CJK punctuation / kana / kanji ranges (U+3000-30FF, U+3400-9FFF).
+  if (typeof message === 'string' && /[\u3000-\u30ff\u3400-\u9fff]/.test(message)) {
+    return message
+  }
+  return FRIENDLY_SEND_ERROR
+}
+
 export function createMessage(role, content = '', overrides = {}) {
   const id = overrides.id || crypto.randomUUID()
   return {
@@ -80,6 +93,7 @@ export const useChatStore = defineStore('chat', {
     threads: [],
     isSending: false,
     error: '',
+    lastFailedMessage: '',
   }),
   actions: {
     reset() {
@@ -88,11 +102,13 @@ export const useChatStore = defineStore('chat', {
       this.threads = []
       this.isSending = false
       this.error = ''
+      this.lastFailedMessage = ''
     },
     newChat() {
       this.messages = []
       this.threadId = null
       this.error = ''
+      this.lastFailedMessage = ''
     },
     async loadThreads() {
       this.threads = await fetchThreads()
@@ -140,6 +156,7 @@ export const useChatStore = defineStore('chat', {
       const assistantMessage = this.messages[this.messages.length - 1]
       this.isSending = true
       this.error = ''
+      this.lastFailedMessage = ''
 
       try {
         await this.streamChatResponse(messageText, assistantMessage)
@@ -158,11 +175,26 @@ export const useChatStore = defineStore('chat', {
         if (error.status === 401) {
           throw error
         }
-        this.error = error.message || '回答を取得できませんでした。'
+        this.error = toFriendlyErrorMessage(error.message)
         assistantMessage.content = this.error
+        this.lastFailedMessage = messageText
       } finally {
         this.isSending = false
       }
+    },
+    async retryLast() {
+      const text = this.lastFailedMessage
+      if (!text || this.isSending) {
+        return
+      }
+      // Replace the failed exchange (its user + assistant pair are always the
+      // two most recent messages while the error banner is visible).
+      if (this.messages.length >= 2) {
+        this.messages.splice(this.messages.length - 2, 2)
+      }
+      this.error = ''
+      this.lastFailedMessage = ''
+      await this.sendMessage(text)
     },
     async streamChatResponse(text, assistantMessage) {
       const token = getStoredToken()
