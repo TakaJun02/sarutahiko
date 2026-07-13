@@ -33,6 +33,15 @@ const footerRef = ref(null)
 const footerClearancePx = ref(224)
 const expandedSourceKeys = ref(new Set())
 
+const greetingNameParts = computed(() => {
+  const characters = Array.from(auth.user?.name || '')
+  const tailStart = Math.max(characters.length - 2, 0)
+  return {
+    head: characters.slice(0, tailStart).join(''),
+    tail: characters.slice(tailStart).join(''),
+  }
+})
+
 // Thread rename / delete confirmation dialog (replaces window.prompt/confirm).
 const dialog = ref(null) // { kind: 'rename' | 'delete', threadId, threadTitle }
 const dialogInput = ref('')
@@ -507,7 +516,7 @@ onBeforeUnmount(() => {
         >
           <div
             v-if="chat.messages.length === 0"
-            class="relative mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-5 py-8 sm:px-4 sm:py-12"
+            class="relative mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-5 py-8 sm:px-4 sm:py-12 md:max-lg:justify-end md:max-lg:pb-16"
           >
             <div class="chat-empty__identity flex items-center gap-3">
               <img src="/app-icon.png" alt="" class="h-10 w-10 rounded-ui-sm shadow-soft" />
@@ -519,7 +528,7 @@ onBeforeUnmount(() => {
 
             <h2 class="chat-empty__heading mt-6 max-w-2xl text-[clamp(2rem,5vw,3.6rem)] font-semibold leading-[1.12] tracking-[-0.05em] text-white/90">
               <span class="block">こんにちは、</span>
-              <span v-if="auth.user?.name" class="aurora-copy">{{ auth.user.name }} さん。</span>
+              <span v-if="auth.user?.name" class="aurora-copy chat-empty__name"><span>{{ greetingNameParts.head }}</span><span class="chat-empty__name-tail">{{ greetingNameParts.tail }} さん。</span></span>
               <span v-else>ようこそ。</span>
             </h2>
 

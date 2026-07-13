@@ -40,11 +40,6 @@ let reducedMotionQuery = null
 const isRegister = computed(() => mode.value === 'register')
 const ctaLabel = computed(() => (isRegister.value ? 'はじめる' : 'ログイン'))
 const switchLabel = computed(() => (isRegister.value ? 'ログインはこちら' : '新規登録'))
-const ctaClass = computed(() =>
-  isRegister.value
-    ? 'bg-ink-paper text-[#11130f] hover:bg-white'
-    : 'bg-brand-signal text-[#151713] hover:bg-brand-soft',
-)
 
 function clearTypewriterTimer() {
   if (typewriterTimer) {
@@ -276,8 +271,7 @@ onBeforeUnmount(() => {
 
             <button
               type="submit"
-              class="flex min-h-14 w-full items-center justify-center rounded-ui px-4 py-3 text-base font-semibold transition duration-base ease-expressive hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0 disabled:active:scale-100"
-              :class="ctaClass"
+              class="flex min-h-14 w-full items-center justify-center rounded-ui bg-ink-paper px-4 py-3 text-base font-semibold text-[#11130f] transition duration-base ease-expressive hover:-translate-y-0.5 hover:bg-white active:translate-y-0 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0 disabled:active:scale-100"
               :disabled="isSubmitting"
             >
               <span v-if="isSubmitting" class="inline-flex items-center gap-2">
