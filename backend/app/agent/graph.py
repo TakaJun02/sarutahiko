@@ -5,7 +5,6 @@ import logging
 import os
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import date
 from html.parser import HTMLParser
 from typing import Any, Literal, TypedDict
 
@@ -18,6 +17,7 @@ from app.models.chat import DonePayload, Source, StatusPayload, TokenPayload
 from app.rag.lexical import generate_keyword_variants, normalize_text, strip_keyword_suffix
 from app.rag.models import KnowledgeChunk
 from app.search.models import WebSearchResult
+from app.services.time_context import build_time_context
 
 Step = Literal["analyze", "retrieve", "search", "web_search", "evaluate", "generate"]
 
@@ -54,36 +54,39 @@ MIN_GENERATION_CONTEXT_TOKENS = 384
 GENERATION_HISTORY_CHAR_STAGES = (MAX_HISTORY_CHARS, 250, 120)
 
 STATUS_TEXTS: dict[Step, str] = {
-    "analyze": "質問の意図を整理しています…",
-    "retrieve": "学内ナレッジを検索しています…",
-    "search": "学内資料を全文検索しています…",
-    "evaluate": "情報が十分か確認しています…",
-    "web_search": "Webで最新情報を確認しています…",
-    "generate": "回答をまとめています…",
+    "analyze": "ご質問をじっくり読み解いています…",
+    "retrieve": "キャンパスの資料を探しています…",
+    "search": "学内資料をすみずみまで調べています…",
+    "evaluate": "集めた情報をチェックしています…",
+    "web_search": "Webで最新情報を探検しています…",
+    "generate": "とっておきの回答をまとめています…",
 }
 
 FOLLOWUP_STATUS_TEXTS: dict[Step, str] = {
-    "retrieve": "観点を変えて学内ナレッジを検索しています…",
-    "search": "別のキーワードで学内資料を調べています…",
-    "evaluate": "集めた情報を検証しています…",
-    "web_search": "別の観点でWebを調べています…",
+    "retrieve": "観点を変えて資料を探し直しています…",
+    "search": "別のキーワードで調べ直しています…",
+    "evaluate": "集めた情報を見比べています…",
+    "web_search": "別の角度からWebを調べています…",
 }
 
-THIRD_WEB_SEARCH_STATUS_TEXT = "さらに手掛かりを探しています…"
+THIRD_WEB_SEARCH_STATUS_TEXT = "もうひと粘り、手掛かりを探しています…"
 OFFICIAL_SEARCH_DOMAIN = "akita-pu.ac.jp"
 
 logger = logging.getLogger(__name__)
 trace_logger = logging.getLogger("agent.trace")
 
-GENERATE_SYSTEM_PROMPT = """あなたは秋田県立大学 本荘キャンパスのオープンキャンパス2026来場者向け案内AIです。
-回答は日本語で、丁寧でフレンドリーな文体にしてください。
+GENERATE_SYSTEM_PROMPT = """あなたは秋田県立大学 本荘キャンパスのオープンキャンパス2026で来場者を案内する、明るく元気な学生ガイドAIです。
+回答は日本語で、高校生にも分かる語彙を使い、来場者（高校生・保護者）がわくわくするような親しみやすい口調で答えてください（例: 「〜ですよ！」「ぜひ体験してみてください！」）。
+絵文字は1回答につき0〜3個までとし、見出しや箇条書きの構造を壊さない範囲で使ってください。
 
 回答ルール:
 1. 禁止: 「公式サイトでご確認ください」「当日の学科紹介でご確認いただけます」など、調べれば答えられる内容を利用者に丸投げする表現を回答の主内容にしないでください。
 2. コンテキストにある情報は、数字・固有名詞・手順まで具体的に盛り込み、省略しないでください。
 3. 検索を尽くしても根拠がない場合のみ「現時点で確認できなかった」と正直に述べ、何をどこまで調べたか（学内ナレッジ・大学公式サイトのWeb検索）を一言添えてください。その場合に限り、補助情報として問い合わせ先を案内して構いません。
 4. 年度依存情報は年度を明記し、根拠にない内容やURLを捏造しないでください。
-5. 学内ナレッジは大学公式サイトの最新転記です。Web検索結果と学内ナレッジが矛盾する場合は学内ナレッジを優先し、Webの古いページ（過去の役職者・旧年度情報など）に引きずられないでください。"""
+5. 学内ナレッジは大学公式サイトの最新転記です。Web検索結果と学内ナレッジが矛盾する場合は学内ナレッジを優先し、Webの古いページ（過去の役職者・旧年度情報など）に引きずられないでください。
+6. 盛り上げるのは言い回しだけです。事実（数字・固有名詞・日程）は誇張・改変しないでください。
+7. 残り日数・分数・開催中/開始間近のイベントは、時間コンテキストに記載された値だけを使い、自分で日付や残り時間を計算・推測しないでください。挨拶・当日の案内・日程の質問など、時間の話題が回答に自然に絡むときは、わくわく感を添えて織り込んでください。無関係な質問に無理に差し込まないでください。"""
 
 
 def estimate_tokens(text: str) -> int:
@@ -194,6 +197,7 @@ class RealCampusAgent:
         http_client_factory: Callable[[], Any] | None = None,
         llm_context_window: int = DEFAULT_LLM_CONTEXT_WINDOW,
         llm_answer_max_tokens: int = DEFAULT_LLM_ANSWER_MAX_TOKENS,
+        time_context_provider: Callable[[], str] | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.knowledge_store = knowledge_store
@@ -204,6 +208,7 @@ class RealCampusAgent:
         self.http_client_factory = http_client_factory or self._default_http_client
         self.llm_context_window = llm_context_window
         self.llm_answer_max_tokens = llm_answer_max_tokens
+        self.time_context_provider = time_context_provider or build_time_context
         self._graph = self._build_graph()
 
     async def stream(
@@ -783,8 +788,8 @@ class RealCampusAgent:
         *,
         token_budget: int | None = None,
     ) -> tuple[list[dict[str, str]], _ContextAssembly]:
+        system_content = self._generation_system_content()
         user_content_factory = lambda context: (
-                f"現在日付: {date.today().isoformat()}\n"
                 f"質問: {state['question']}\n\n"
                 "利用可能な根拠:\n"
                 f"{context}\n\n"
@@ -793,7 +798,7 @@ class RealCampusAgent:
         )
         history_messages, context_budget = self._generation_history_and_context_budget(
             state.get("history", []),
-            GENERATE_SYSTEM_PROMPT,
+            system_content,
             user_content_factory,
             self.llm_answer_max_tokens,
             requested_context_budget=token_budget,
@@ -807,7 +812,7 @@ class RealCampusAgent:
                 token_budget=None,
             )
             messages = self._compose_context_messages(
-                GENERATE_SYSTEM_PROMPT,
+                system_content,
                 history_messages,
                 user_content_factory,
                 full_context.text,
@@ -816,7 +821,7 @@ class RealCampusAgent:
                 return messages, full_context
 
         return self._build_messages_with_context_budget(
-            system_content=GENERATE_SYSTEM_PROMPT,
+            system_content=system_content,
             user_content_factory=user_content_factory,
             knowledge_results=state.get("knowledge_results") or [],
             web_results=state.get("web_results") or [],
@@ -825,6 +830,11 @@ class RealCampusAgent:
             history_messages=history_messages,
             context_token_budget=context_budget,
         )
+
+    def _generation_system_content(self) -> str:
+        # The time-context block is injected into the system prompt so token
+        # budgeting (estimate_tokens over composed messages) accounts for it.
+        return f"{GENERATE_SYSTEM_PROMPT}\n\n時間コンテキスト:\n{self.time_context_provider()}"
 
     def _generation_history_and_context_budget(
         self,

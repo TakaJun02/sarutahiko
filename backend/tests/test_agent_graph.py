@@ -171,6 +171,12 @@ def _user() -> User:
     return User(id="user-1", name="テスト")
 
 
+_FIXED_TIME_CONTEXT = (
+    "現在日時: 2026年7月13日（月）14:05\n"
+    "オープンキャンパス2026（2026年7月19日（日）9:30〜15:00・本荘キャンパス）まであと6日です。"
+)
+
+
 async def _collect(agent: RealCampusAgent, question: str, history: list[dict] | None = None):
     return [
         event
@@ -216,6 +222,7 @@ def _agent(
         http_client_factory=http_client_factory,
         llm_context_window=llm_context_window,
         llm_answer_max_tokens=llm_answer_max_tokens,
+        time_context_provider=lambda: _FIXED_TIME_CONTEXT,
     )
 
 
@@ -872,7 +879,7 @@ async def test_context_packing_prioritizes_grep_hits_high_vector_web_then_remain
 
 
 async def test_generation_budget_preserves_history_and_trims_context() -> None:
-    agent = _agent(llm_context_window=1200, llm_answer_max_tokens=200)
+    agent = _agent(llm_context_window=1520, llm_answer_max_tokens=200)
     history = [
         {"role": "user", "content": "HISTORY_USER 食堂について聞いていました。"},
         {"role": "assistant", "content": "HISTORY_ASSISTANT 食堂はカフェテリア棟にあります。"},
@@ -888,7 +895,7 @@ async def test_generation_budget_preserves_history_and_trims_context() -> None:
     }
 
     messages, context = agent._build_generation_messages_with_sources(state)
-    prompt_budget = 1200 - 200 - PROMPT_MARGIN_TOKENS
+    prompt_budget = 1520 - 200 - PROMPT_MARGIN_TOKENS
     combined = "\n".join(message["content"] for message in messages)
 
     assert _message_tokens(messages) <= prompt_budget
@@ -921,7 +928,7 @@ async def test_generation_budget_shrinks_history_to_250_to_preserve_minimum_cont
 
 
 async def test_generation_budget_uses_120_floor_and_accepts_sub_minimum_context() -> None:
-    agent = _agent(llm_context_window=1800, llm_answer_max_tokens=640)
+    agent = _agent(llm_context_window=2120, llm_answer_max_tokens=640)
     state = {
         "question": "施設について教えて",
         "history": _long_history("LOW_CONTEXT"),
@@ -932,7 +939,7 @@ async def test_generation_budget_uses_120_floor_and_accepts_sub_minimum_context(
     messages, context = agent._build_generation_messages_with_sources(state)
     history_messages = messages[1:-1]
 
-    assert _message_tokens(messages) <= 1800 - 640 - PROMPT_MARGIN_TOKENS
+    assert _message_tokens(messages) <= 2120 - 640 - PROMPT_MARGIN_TOKENS
     assert len(history_messages) == 4
     assert [len(message["content"]) for message in history_messages] == [120, 120, 120, 120]
     assert 0 < estimate_tokens(context.text) < MIN_GENERATION_CONTEXT_TOKENS
@@ -1066,7 +1073,7 @@ async def test_evaluate_retrieval_queries_trigger_one_reretrieve_and_skip_used_q
         "evaluate",
         "generate",
     ]
-    assert status_payloads[4]["text"] == "観点を変えて学内ナレッジを検索しています…"
+    assert status_payloads[4]["text"] == "観点を変えて資料を探し直しています…"
 
 
 async def test_route_after_evaluate_prioritizes_search_retrieve_web_then_generate() -> None:
@@ -1169,10 +1176,13 @@ async def test_generate_system_prompt_contains_deflection_ban_rule() -> None:
     await _collect(agent, "食堂はどこですか？")
 
     system_prompt = llm.stream_calls[0]["messages"][0]["content"]
-    assert system_prompt == GENERATE_SYSTEM_PROMPT
+    assert system_prompt.startswith(GENERATE_SYSTEM_PROMPT)
     assert "丸投げする表現を回答の主内容にしない" in system_prompt
     assert "公式サイトでご確認ください" in system_prompt
     assert "学内ナレッジを優先" in system_prompt
+    assert "誇張・改変しない" in system_prompt
+    assert "時間コンテキスト:" in system_prompt
+    assert "現在日時:" in system_prompt
 
 
 async def test_real_agent_deduplicates_sources_from_generation_context() -> None:
@@ -1219,13 +1229,13 @@ async def test_generation_preverify_rebuilds_over_budget_prompt_with_reduced_con
             '{"retrieval_queries": ["施設"], "intent": "facility"}',
             '{"sufficient": true, "missing": "", "web_queries": []}',
         ],
-        token_counts=[1000, 800],
+        token_counts=[1400, 800],
         tokens=["回答"],
     )
     store = FakeKnowledgeStore(
         [_chunk(id="long", title="長い根拠", text="CONTEXT_START " + ("秋田県立大学" * 400), score=0.99)]
     )
-    agent = _agent(llm=llm, store=store, llm_context_window=1200, llm_answer_max_tokens=200)
+    agent = _agent(llm=llm, store=store, llm_context_window=1520, llm_answer_max_tokens=200)
     history = [
         {"role": "user", "content": "PRESERVED_HISTORY_USER 施設の場所を聞いていました。"},
         {"role": "assistant", "content": "PRESERVED_HISTORY_ASSISTANT 施設案内を続けています。"},
@@ -1251,7 +1261,7 @@ async def test_generation_retries_context_length_bad_request_once_with_smaller_c
     store = FakeKnowledgeStore(
         [_chunk(id="long", title="長い根拠", text="CONTEXT_START " + ("本荘キャンパス" * 400), score=0.99)]
     )
-    agent = _agent(llm=llm, store=store, llm_context_window=1200, llm_answer_max_tokens=200)
+    agent = _agent(llm=llm, store=store, llm_context_window=1520, llm_answer_max_tokens=200)
     history = [
         {"role": "user", "content": "RETRY_HISTORY_USER 施設の概要を質問済みです。"},
         {"role": "assistant", "content": "RETRY_HISTORY_ASSISTANT 続けて確認します。"},
