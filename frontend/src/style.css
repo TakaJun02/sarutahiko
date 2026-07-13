@@ -321,6 +321,10 @@ textarea {
   overflow-x: auto;
   border-collapse: collapse;
   font-size: 0.9375rem;
+  /* Tables scroll horizontally, so cell contents (times such as "10:00",
+     numbers, station names) must never be broken mid-token. */
+  word-break: normal;
+  overflow-wrap: normal;
 }
 
 .markdown-body th,

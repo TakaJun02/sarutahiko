@@ -50,7 +50,13 @@ const dialogInput = ref('')
 const dialogError = ref('')
 const dialogBusy = ref(false)
 const dialogInputRef = ref(null)
-const dialogPrimaryRef = ref(null)
+const dialogCancelRef = ref(null)
+
+// Transient hint shown when Enter is pressed while a reply is streaming.
+const busyHint = ref('')
+
+let dialogReturnFocus = null
+let busyHintTimer = null
 
 let footerResizeObserver = null
 let pendingScrollBehavior = null
@@ -68,9 +74,24 @@ const countdownLabel = computed(() => {
   return ''
 })
 
+function showBusyHint() {
+  busyHint.value = '回答をまとめている途中です。少しだけ待っていてくださいね。'
+  if (busyHintTimer) {
+    window.clearTimeout(busyHintTimer)
+  }
+  busyHintTimer = window.setTimeout(() => {
+    busyHint.value = ''
+    busyHintTimer = null
+  }, 2500)
+}
+
 async function send() {
   const text = draft.value
-  if (!text.trim() || chat.isSending) {
+  if (!text.trim()) {
+    return
+  }
+  if (chat.isSending) {
+    showBusyHint()
     return
   }
   draft.value = ''
@@ -89,6 +110,10 @@ function onEnter(event) {
     return
   }
   event.preventDefault()
+  if (chat.isSending) {
+    showBusyHint()
+    return
+  }
   send()
 }
 
@@ -148,6 +173,10 @@ function startNewChat() {
 }
 
 function openDialog(kind, threadId) {
+  // The immediate trigger is a menu item that unmounts with its menu, so
+  // prefer the thread row's persistent kebab button for focus restoration.
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  dialogReturnFocus = active?.closest('li')?.querySelector('[aria-haspopup="menu"]') || active
   const thread = chat.threads.find((item) => item.id === threadId)
   dialog.value = { kind, threadId, threadTitle: thread?.title || '' }
   dialogInput.value = kind === 'rename' ? thread?.title || '' : ''
@@ -157,9 +186,17 @@ function openDialog(kind, threadId) {
       dialogInputRef.value?.focus()
       dialogInputRef.value?.select()
     } else {
-      dialogPrimaryRef.value?.focus()
+      // Destructive confirm: land on the safe choice so a stray Enter
+      // never deletes a conversation.
+      dialogCancelRef.value?.focus()
     }
   })
+}
+
+function restoreDialogFocus() {
+  const target = dialogReturnFocus && dialogReturnFocus.isConnected ? dialogReturnFocus : inputRef.value
+  dialogReturnFocus = null
+  nextTick(() => target?.focus())
 }
 
 function renameThread(threadId) {
@@ -175,6 +212,7 @@ function closeDialog() {
     return
   }
   dialog.value = null
+  restoreDialogFocus()
 }
 
 function onDialogEnter(event) {
@@ -201,6 +239,7 @@ async function confirmDialog() {
     try {
       await chat.renameThread(threadId, title)
       dialog.value = null
+      restoreDialogFocus()
     } catch (error) {
       if (handleAuthError(error)) {
         return
@@ -219,6 +258,7 @@ async function confirmDialog() {
   try {
     await chat.deleteThread(threadId)
     dialog.value = null
+    restoreDialogFocus()
     closeDrawer()
     if (wasCurrent) {
       router.replace('/chat')
@@ -336,6 +376,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown)
   footerResizeObserver?.disconnect()
+  if (busyHintTimer) {
+    window.clearTimeout(busyHintTimer)
+  }
 })
 </script>
 
@@ -374,6 +417,7 @@ onBeforeUnmount(() => {
           :current-thread-id="chat.threadId"
           :disabled="chat.isSending"
           :user-name="auth.user?.name || ''"
+          nav-label="会話履歴（ドロワー）"
           @select="selectThread"
           @new-chat="startNewChat"
           @rename="renameThread"
@@ -408,11 +452,18 @@ onBeforeUnmount(() => {
       </header>
 
       <section class="flex w-full flex-1 flex-col pt-6">
-        <div class="flex flex-1 flex-col space-y-6" :style="{ paddingBottom: `${footerClearancePx}px` }">
+        <div
+          class="flex flex-1 flex-col space-y-6"
+          :style="{ paddingBottom: chat.messages.length ? `${footerClearancePx}px` : '0px' }"
+        >
           <div
             v-if="chat.messages.length === 0"
-            class="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-5 py-10 text-center"
+            class="relative mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-5 py-10 text-center"
           >
+            <div
+              class="pointer-events-none absolute left-1/2 top-1/2 h-[34rem] w-[34rem] max-w-[120vw] -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse_at_center,rgba(255,138,101,0.07),rgba(255,235,59,0.03)_45%,transparent_70%)]"
+              aria-hidden="true"
+            ></div>
             <div class="relative mb-6">
               <div class="absolute -inset-5 rounded-full bg-brand-line opacity-25 blur-2xl" aria-hidden="true"></div>
               <img src="/app-icon.png" alt="" class="relative h-16 w-16 rounded-full shadow-soft" />
@@ -562,6 +613,8 @@ onBeforeUnmount(() => {
                 </svg>
               </button>
             </div>
+            <!-- The full error message lives in the conversation bubble; this
+                 banner is a compact retry affordance. -->
             <div
               v-if="chat.error"
               class="mt-2 flex items-center gap-2.5 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200"
@@ -570,7 +623,7 @@ onBeforeUnmount(() => {
               <svg aria-hidden="true" class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
                 <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 8v5 M12 16.5h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
-              <span class="min-w-0 flex-1">{{ chat.error }}</span>
+              <span class="min-w-0 flex-1">回答を受け取れませんでした</span>
               <button
                 v-if="chat.lastFailedMessage"
                 type="button"
@@ -581,6 +634,18 @@ onBeforeUnmount(() => {
                 再試行
               </button>
             </div>
+            <Transition name="dialog-fade">
+              <p
+                v-if="busyHint"
+                class="mt-2 flex items-center gap-2 rounded-xl border border-brand-mint/25 bg-brand-mint/10 px-3 py-2 text-sm text-brand-mint"
+                role="status"
+              >
+                <svg aria-hidden="true" class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                {{ busyHint }}
+              </p>
+            </Transition>
             <p class="mt-2 hidden text-center text-xs text-white/45 sm:block">
               Enter で送信 ・ Shift + Enter で改行
             </p>
@@ -619,6 +684,7 @@ onBeforeUnmount(() => {
           <p v-if="dialogError" class="mt-3 text-sm text-red-300" role="alert">{{ dialogError }}</p>
           <div class="mt-5 flex justify-end gap-2">
             <button
+              ref="dialogCancelRef"
               type="button"
               class="min-h-11 rounded-xl border border-edge px-4 py-2 text-sm text-white/70 transition duration-150 ease-out hover:bg-fill-hover hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="dialogBusy"
@@ -627,7 +693,6 @@ onBeforeUnmount(() => {
               キャンセル
             </button>
             <button
-              ref="dialogPrimaryRef"
               type="button"
               class="min-h-11 rounded-xl px-4 py-2 text-sm font-semibold transition duration-150 ease-out active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60"
               :class="dialog.kind === 'rename'

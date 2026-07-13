@@ -18,6 +18,12 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  // Differentiates the landmark label between the desktop rail and the
+  // mobile drawer instance (both exist in the DOM at once).
+  navLabel: {
+    type: String,
+    default: '会話履歴',
+  },
 })
 
 const emit = defineEmits(['select', 'new-chat', 'rename', 'delete', 'logout'])
@@ -61,7 +67,7 @@ function onDelete(threadId) {
       </button>
     </div>
 
-    <nav class="flex-1 overflow-y-auto px-2 pb-3" aria-label="会話履歴">
+    <nav class="flex-1 overflow-y-auto px-2 pb-3" :aria-label="navLabel">
       <p class="px-3.5 pb-1.5 pt-1 text-[11px] font-medium tracking-wider text-white/35">会話履歴</p>
       <p v-if="threads.length === 0" class="px-3.5 pt-1 text-xs leading-5 text-white/40">
         まだ会話がありません。
@@ -87,7 +93,7 @@ function onDelete(threadId) {
           </button>
           <button
             type="button"
-            class="absolute right-1 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-lg text-white/55 transition duration-150 ease-out hover:bg-fill-active hover:text-white disabled:cursor-not-allowed lg:opacity-0 lg:focus:opacity-100 lg:group-hover:opacity-100"
+            class="absolute right-1 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-lg text-white/55 transition duration-150 ease-out after:absolute after:-inset-1.5 after:content-[''] hover:bg-fill-active hover:text-white disabled:cursor-not-allowed lg:opacity-0 lg:focus:opacity-100 lg:group-hover:opacity-100"
             :class="openMenuId === thread.id ? 'bg-fill-active text-white lg:opacity-100' : ''"
             :disabled="disabled"
             :aria-label="`「${thread.title}」のメニュー`"
@@ -147,7 +153,7 @@ function onDelete(threadId) {
         </div>
         <button
           type="button"
-          class="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-white/55 transition duration-150 ease-out hover:bg-fill-hover hover:text-white active:scale-[0.97]"
+          class="relative grid h-10 w-10 shrink-0 place-items-center rounded-lg text-white/55 transition duration-150 ease-out after:absolute after:-inset-0.5 after:content-[''] hover:bg-fill-hover hover:text-white active:scale-[0.97]"
           title="ログアウト"
           aria-label="ログアウト"
           @click="emit('logout')"
