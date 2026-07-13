@@ -18,6 +18,10 @@ class ChatRequest(BaseModel):
         return normalized
 
 
+class ThreadRenameRequest(BaseModel):
+    title: str
+
+
 class Source(BaseModel):
     title: str
     url: str

@@ -3,12 +3,12 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.api.dependencies import get_agent, get_current_user, get_thread_service
 from app.models.auth import User
-from app.models.chat import ChatRequest
+from app.models.chat import ChatRequest, ThreadRenameRequest
 from app.services.threads import ThreadService
 
 router = APIRouter(tags=["chat"])
@@ -58,6 +58,14 @@ async def chat(
     )
 
 
+@router.get("/api/threads")
+async def list_threads(
+    user: Annotated[User, Depends(get_current_user)],
+    thread_service: Annotated[ThreadService, Depends(get_thread_service)],
+) -> dict:
+    return {"threads": thread_service.list_threads(user)}
+
+
 @router.get("/api/threads/{thread_id}")
 async def get_thread(
     thread_id: str,
@@ -65,3 +73,23 @@ async def get_thread(
     thread_service: Annotated[ThreadService, Depends(get_thread_service)],
 ) -> dict:
     return thread_service.get_thread(user, thread_id)
+
+
+@router.patch("/api/threads/{thread_id}")
+async def rename_thread(
+    thread_id: str,
+    payload: ThreadRenameRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    thread_service: Annotated[ThreadService, Depends(get_thread_service)],
+) -> dict:
+    return {"thread": thread_service.rename_thread(user, thread_id, payload.title)}
+
+
+@router.delete("/api/threads/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_thread(
+    thread_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    thread_service: Annotated[ThreadService, Depends(get_thread_service)],
+) -> Response:
+    thread_service.delete_thread(user, thread_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
