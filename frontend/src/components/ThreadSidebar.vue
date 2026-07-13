@@ -52,11 +52,21 @@ function onDelete(threadId) {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col bg-ink-surface text-white">
-    <div class="p-3">
+  <div class="flex h-full min-h-0 flex-col bg-[#111310] text-white">
+    <div class="border-b border-edge px-4 pb-4 pt-4">
+      <div class="mb-4 flex items-center justify-between gap-3 px-1">
+        <div class="flex min-w-0 items-center gap-3">
+          <img src="/app-icon.png" alt="" class="h-9 w-9 shrink-0 rounded-ui-sm shadow-soft" />
+          <div class="min-w-0">
+            <p class="truncate text-[13px] font-semibold tracking-[-0.015em]">本荘キャンパス案内</p>
+            <p class="font-display mt-0.5 truncate text-[9px] font-medium uppercase tracking-[0.17em] text-white/40">Campus guide / AI</p>
+          </div>
+        </div>
+        <span class="font-display rounded-full border border-white/10 px-2 py-1 text-[9px] font-semibold tracking-[0.14em] text-white/55">2026</span>
+      </div>
       <button
         type="button"
-        class="flex min-h-11 w-full items-center gap-2.5 rounded-xl border border-edge bg-fill-hover px-3.5 py-2.5 text-sm font-medium text-white/85 transition duration-200 ease-out hover:border-edge-strong hover:bg-fill-active hover:text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45"
+        class="flex min-h-11 w-full items-center gap-2.5 rounded-ui-sm border border-edge-strong bg-white/[0.055] px-3.5 py-2.5 text-sm font-medium text-white/85 shadow-hairline transition duration-base ease-expressive hover:-translate-y-px hover:border-white/25 hover:bg-white/[0.085] hover:text-white active:translate-y-0 active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0"
         :disabled="disabled"
         @click="emit('new-chat')"
       >
@@ -67,33 +77,33 @@ function onDelete(threadId) {
       </button>
     </div>
 
-    <nav class="flex-1 overflow-y-auto px-2 pb-3" :aria-label="navLabel">
-      <p class="px-3.5 pb-1.5 pt-1 text-[11px] font-medium tracking-wider text-white/35">会話履歴</p>
-      <p v-if="threads.length === 0" class="px-3.5 pt-1 text-xs leading-5 text-white/40">
+    <nav class="flex-1 overflow-y-auto px-2.5 pb-3 pt-4" :aria-label="navLabel">
+      <p class="font-display px-3 pb-2 text-[9px] font-semibold uppercase tracking-[0.2em] text-white/35">Recent / 会話履歴</p>
+      <p v-if="threads.length === 0" class="px-3 pt-1 text-xs leading-5 text-white/40">
         まだ会話がありません。
       </p>
       <ul v-else class="space-y-0.5">
         <li v-for="thread in threads" :key="thread.id" class="group relative">
           <button
             type="button"
-            class="relative flex min-h-11 w-full items-center rounded-xl py-2 pl-3.5 pr-10 text-left text-sm transition duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-45"
+            class="relative flex min-h-11 w-full items-center rounded-ui-sm py-2 pl-3.5 pr-12 text-left text-[13px] transition duration-fast ease-standard disabled:cursor-not-allowed disabled:opacity-45"
             :class="thread.id === currentThreadId
-              ? 'bg-fill-active text-white'
-              : 'text-white/65 hover:bg-fill-hover hover:text-white'"
+              ? 'bg-white/[0.085] text-white shadow-hairline'
+              : 'text-white/65 hover:bg-white/[0.045] hover:text-white'"
             :disabled="disabled"
             :aria-current="thread.id === currentThreadId ? 'page' : undefined"
             @click="emit('select', thread.id)"
           >
             <span
               v-if="thread.id === currentThreadId"
-              class="absolute left-1 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-gradient-to-b from-brand-coral via-brand-sun to-brand-mint"
+              class="absolute left-1.5 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-brand-signal"
               aria-hidden="true"
             ></span>
             <span class="truncate">{{ thread.title }}</span>
           </button>
           <button
             type="button"
-            class="absolute right-1 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-lg text-white/55 transition duration-150 ease-out after:absolute after:-inset-1.5 after:content-[''] hover:bg-fill-active hover:text-white disabled:cursor-not-allowed lg:opacity-0 lg:focus:opacity-100 lg:group-hover:opacity-100"
+            class="absolute right-0 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-ui-sm text-white/50 transition duration-fast ease-standard hover:bg-fill-active hover:text-white disabled:cursor-not-allowed lg:opacity-0 lg:focus:opacity-100 lg:group-hover:opacity-100"
             :class="openMenuId === thread.id ? 'bg-fill-active text-white lg:opacity-100' : ''"
             :disabled="disabled"
             :aria-label="`「${thread.title}」のメニュー`"
@@ -110,12 +120,12 @@ function onDelete(threadId) {
           <div
             v-if="openMenuId === thread.id"
             role="menu"
-            class="absolute right-1 top-full z-30 mt-1 w-44 overflow-hidden rounded-xl border border-edge-strong bg-ink-raised py-1 shadow-glass"
+            class="absolute right-1 top-full z-30 mt-1 w-44 overflow-hidden rounded-ui border border-edge-strong bg-ink-raised p-1 shadow-glass"
           >
             <button
               type="button"
               role="menuitem"
-              class="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-white/80 transition duration-150 ease-out hover:bg-fill-hover hover:text-white"
+              class="flex min-h-11 w-full items-center gap-2.5 rounded-ui-sm px-3 py-2 text-left text-sm text-white/80 transition duration-fast ease-standard hover:bg-fill-hover hover:text-white"
               @click="onRename(thread.id)"
             >
               <svg aria-hidden="true" class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
@@ -126,7 +136,7 @@ function onDelete(threadId) {
             <button
               type="button"
               role="menuitem"
-              class="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-red-300 transition duration-150 ease-out hover:bg-red-500/10"
+              class="flex min-h-11 w-full items-center gap-2.5 rounded-ui-sm px-3 py-2 text-left text-sm text-red-300 transition duration-fast ease-standard hover:bg-red-500/10"
               @click="onDelete(thread.id)"
             >
               <svg aria-hidden="true" class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
@@ -139,13 +149,14 @@ function onDelete(threadId) {
       </ul>
     </nav>
 
-    <div class="border-t border-edge p-3">
-      <div class="flex items-center gap-3 rounded-xl px-1.5 py-1.5">
+    <div class="border-t border-edge p-3 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))]">
+      <div class="flex items-center gap-3 rounded-ui-sm px-1.5 py-1.5">
         <span
-          class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand-coral via-brand-sun to-brand-mint text-sm font-bold text-[#101217]"
+          class="relative grid h-9 w-9 shrink-0 place-items-center rounded-full border border-white/10 bg-ink-high font-display text-sm font-semibold text-white/85"
           aria-hidden="true"
         >
           {{ userInitial }}
+          <span class="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-[#111310] bg-brand-signal"></span>
         </span>
         <div class="min-w-0 flex-1">
           <p class="truncate text-sm font-medium text-white/90">{{ userName }}</p>
@@ -153,7 +164,7 @@ function onDelete(threadId) {
         </div>
         <button
           type="button"
-          class="relative grid h-10 w-10 shrink-0 place-items-center rounded-lg text-white/55 transition duration-150 ease-out after:absolute after:-inset-0.5 after:content-[''] hover:bg-fill-hover hover:text-white active:scale-[0.97]"
+          class="grid h-11 w-11 shrink-0 place-items-center rounded-ui-sm text-white/50 transition duration-fast ease-standard hover:bg-fill-hover hover:text-white active:scale-[0.97]"
           title="ログアウト"
           aria-label="ログアウト"
           @click="emit('logout')"

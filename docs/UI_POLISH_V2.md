@@ -1,6 +1,13 @@
 # UI スタイル刷新仕様（FR-12）— デザインリード: Codex / GPT-5.6Sol
 
-- 版: v0.1（2026-07-14, Fable 起草）
+- 版: v0.2（2026-07-14, Fable 追記 — **検収完了・合格**。評価エージェント採点はラウンド 1 で
+  **94/100**（合格基準 93 以上を一発達成。内訳: 第一印象9/配色10/タイポ9/余白9/一貫性9/マイクロ10/
+  モバイル9/PC9/世界観10/細部10）。不可侵制約 §2 は全項目維持を実機確認（LoadingSpinnerV5 差分ゼロ・
+  実況テキスト 2.5s 遷移・タイプライター実測 150ms/字・外部リクエスト 0 件・reduced-motion 完全対応）。
+  R1 の軽微減点 4 件（挨拶見出しの孤立行・CTA 色規則・768px 余白・composer focus 視認性）は任意対応として
+  Sol に差し戻し、Round 2 で全件対応済み（テスト 11/11・ビルド成功・Fable 実機再確認済み）。
+  Sol 設計ノートは §8）
+- v0.1（2026-07-14, Fable 起草）
 - 対象: ログイン画面・チャット画面（サイドバー・ドロワー・ダイアログ・空状態・入力バー含む）
 - 検収方式: FR-9 と同じ評価エージェント採点ループ（§7。合格基準は引き上げ）
 
@@ -157,4 +164,52 @@
 
 ## 8. Sol 設計ノート（実装後に Sol が追記）
 
-（未記入）
+### 8.1 採用概念 — Campus Signal
+
+「大学の案内所」と「当日のウェイファインディング」をデザインの核にした。ログインは来場者を迎える生成りの
+紙面、チャットは情報を読み込む暖色寄りの黒鉛面とし、ガラスカードと虹色発光に頼る汎用 AI チャットの語彙を
+排した。ブランドカラーは単色の Signal Coral を現在地・操作開始・選択状態にだけ置き、Aurora は
+LoadingSpinnerV5、空状態の利用者名、streaming 中の入力欄の 3 箇所に限定した。
+
+### 8.2 デザイントークン
+
+| 分類 | トークン | 値 / 用途 |
+|---|---|---|
+| Neutral | canvas / panel / raised / high | `#0D0F0E` / `#131614` / `#1B1E1C` / `#252925` |
+| Light | paper / paper-ink | `#F0EFE9` / `#171916`（ログインのライトエリアと主要 CTA） |
+| Text | primary / muted / dim | `#F2F1EC` / `#A9ADA7` / `#777C76`（canvas 比 17.01 / 8.45 / 4.51:1） |
+| Accent | signal / signal-soft | `#FF7657` / `#FF9A80`（単色の案内標識） |
+| Aurora copy | warm / bridge / mint | `#FF8F70` / `#FFC46B` / `#6FE8A8`（空状態の名前のみ） |
+| Typography | display | 同梱 `Space Grotesk Variable`。英字・数字・見出し用。和文は Noto Sans JP 系スタック |
+| Radius | sm / md / lg / sheet | `10 / 16 / 24 / 40px` |
+| Shadow | hairline / raised / overlay | 内側 1px / 低く広い浮上影 / ドロワー・ダイアログ用の深い影 |
+| Motion | fast / base / slow / stagger | `140 / 220 / 480 / 60ms` |
+| Ambient | atmosphere | `16s`。ログインの単色低彩度ハローのみ。操作を妨げない |
+| Easing | standard / expressive | `cubic-bezier(.2,.8,.2,1)` / `cubic-bezier(.16,1,.3,1)` |
+
+Outfit は採用せず、ディレクトリごと削除した。全フォントは自己ホストで、実行時ネットワークアクセスはない。
+`prefers-reduced-motion` では入場、遷移、stagger、hover の移動、ambient drift を停止し、タイプライターは既存ロジックで
+フレーズ 1 の静的表示へ切り替わる。
+
+### 8.3 画面への適用
+
+- ログイン: 2 層構造を維持し、ライトエリアを編集的なブランド面、下部を Visitor Desk として再構成した。
+  PC は説明とフォームを横並びにして余白へ役割を与え、モバイルは 390px の縦リズムに合わせて直列化した。
+- チャット空状態: 中央の発光ロゴを主役にせず、左揃えの挨拶、日程、番号付き質問導線で「案内所」の世界観を作った。
+- 会話中: AI 回答は中央ドキュメント、利用者発言は同カラム右端の graphite bubble。出典、サイドバー、ダイアログは
+  無彩色の elevation と余白で整理した。
+- 入力欄: 下辺の区切り線をなくした floating composer。通常 focus は無彩色、streaming 中だけ Aurora の細い縁を出す。
+- モーション: ログイン初回入場、route 遷移、空状態 stagger、利用者吹き出し、ドロワー、統一 hover/focus/active の
+  FR-12 §5 MUST 7 項を CSS / Vue Transition だけで実装した。
+
+### 8.4 Fable 推奨から調整した箇所
+
+- ログイン背景の「オーロラの気配」は多色 drift にせず、Signal Coral 1 色・最大 8% のハローにした。
+  ログインで Aurora を消費せず、チャットの「AI が動く瞬間」との意味差を明確にするため。
+- 空状態のグラデーションは挨拶全文ではなく利用者名だけに限定した。日本語見出しの可読性と色の一撃を両立するため。
+- アプリアイコンは大きな発光オーブにせず、角丸の小さな識別標として扱った。既存ロゴの多色を面積で抑え、
+  単色アクセント体系と共存させるため。
+- Gemini 的な丸い浮遊入力は採用したが、focus 時の mint glow は使わず無彩色の hairline とした。
+  Aurora は streaming 中だけ現れるという意味規則を守るため。
+
+`LoadingSpinnerV5.vue` は SVG、テーマ、keyframes、timing、morph、shimmer、`type="transition"` を含め差分なし。
