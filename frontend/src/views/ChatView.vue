@@ -14,22 +14,10 @@ const INPUT_MAX_HEIGHT_PX = 164
 
 // Suggested first questions for the empty state (tap inserts into the input).
 const suggestions = [
-  {
-    label: 'アクセス方法は？',
-    icon: 'M12 21s-6.5-5.4-6.5-10a6.5 6.5 0 1 1 13 0c0 4.6-6.5 10-6.5 10z M12 13a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
-  },
-  {
-    label: '模擬講義は何がある？',
-    icon: 'M2.5 9.5 12 5l9.5 4.5L12 14 2.5 9.5z M6.5 11.6v3.9c0 1.3 2.5 2.4 5.5 2.4s5.5-1.1 5.5-2.4v-3.9 M21 10v4.5',
-  },
-  {
-    label: '学食メニューは？',
-    icon: 'M6 3v5.5a2 2 0 0 0 4 0V3 M8 3v18 M16.5 3a2.6 4.2 0 1 0 0 8.4 2.6 4.2 0 0 0 0-8.4z M16.5 11.4V21',
-  },
-  {
-    label: '無料送迎バスの時刻は？',
-    icon: 'M5 4h14a1.5 1.5 0 0 1 1.5 1.5V16a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2V5.5A1.5 1.5 0 0 1 5 4z M3.5 11h17 M8 21v-3 M16 21v-3 M7.5 15h.01 M16.5 15h.01',
-  },
+  'アクセス方法は？',
+  '模擬講義は何がある？',
+  '学食メニューは？',
+  '無料送迎バスの時刻は？',
 ]
 
 const auth = useAuthStore()
@@ -321,8 +309,15 @@ async function retryLastMessage() {
 }
 
 function onWindowKeydown(event) {
-  if (event.key === 'Escape' && dialog.value) {
+  if (event.key !== 'Escape') {
+    return
+  }
+  if (dialog.value) {
     closeDialog()
+    return
+  }
+  if (drawerOpen.value) {
+    closeDrawer()
   }
 }
 
@@ -430,8 +425,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex h-dvh overflow-hidden bg-ink-base text-white">
-    <aside class="hidden w-72 shrink-0 border-r border-edge lg:block">
+  <div class="chat-shell flex h-dvh overflow-hidden text-white">
+    <aside class="hidden w-[17.5rem] shrink-0 border-r border-edge lg:block">
       <ThreadSidebar
         :threads="chat.threads"
         :current-thread-id="chat.threadId"
@@ -449,14 +444,15 @@ onBeforeUnmount(() => {
       class="fixed inset-0 z-40 lg:hidden"
       :class="drawerOpen ? '' : 'pointer-events-none'"
       :aria-hidden="!drawerOpen"
+      :inert="!drawerOpen"
     >
       <div
-        class="absolute inset-0 bg-black/60 transition-opacity duration-200 ease-out"
+        class="drawer-scrim absolute inset-0 bg-black/70 backdrop-blur-[2px]"
         :class="drawerOpen ? 'opacity-100' : 'opacity-0'"
         @click="closeDrawer"
       ></div>
       <aside
-        class="absolute inset-y-0 left-0 w-72 max-w-[85vw] transform border-r border-edge shadow-glass transition-transform duration-200 ease-out"
+        class="drawer-panel absolute inset-y-0 left-0 w-[17.5rem] max-w-[88vw] transform border-r border-edge shadow-glass"
         :class="drawerOpen ? 'translate-x-0' : '-translate-x-full'"
       >
         <ThreadSidebar
@@ -475,11 +471,11 @@ onBeforeUnmount(() => {
     </div>
 
     <main class="flex h-full min-w-0 flex-1 flex-col overflow-y-auto">
-      <header class="sticky top-0 z-20 bg-ink-base/[0.92] backdrop-blur-xl">
-        <div class="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
+      <header class="sticky top-0 z-20 border-b border-edge bg-ink-base/[0.88] backdrop-blur-xl">
+        <div class="mx-auto flex min-h-[68px] max-w-3xl items-center gap-3 px-4 py-2.5">
           <button
             type="button"
-            class="grid h-11 w-11 shrink-0 place-items-center rounded-xl text-white/65 transition duration-200 ease-out hover:bg-fill-hover hover:text-white active:scale-[0.97] lg:hidden"
+            class="grid h-11 w-11 shrink-0 place-items-center rounded-ui-sm text-white/60 transition duration-fast ease-standard hover:bg-fill-hover hover:text-white active:scale-[0.97] lg:hidden"
             aria-label="会話履歴を開く"
             @click="drawerOpen = true"
           >
@@ -487,80 +483,80 @@ onBeforeUnmount(() => {
               <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
             </svg>
           </button>
-          <div class="flex min-w-0 items-center gap-3">
-            <img src="/app-icon.png" alt="本荘キャンパス案内 AI" class="h-9 w-9 rounded-full shadow-soft" />
+          <div class="flex min-w-0 items-center gap-3 lg:hidden">
+            <img src="/app-icon.png" alt="" class="h-9 w-9 rounded-ui-sm shadow-soft" />
             <div class="min-w-0">
-              <h1 class="truncate text-[15px] font-semibold tracking-tight">本荘キャンパス案内 AI</h1>
-              <p class="truncate text-xs text-white/45">秋田県立大学 オープンキャンパス2026</p>
+              <h1 class="truncate text-sm font-semibold tracking-[-0.015em]">本荘キャンパス案内 AI</h1>
+              <p class="font-display mt-0.5 truncate text-[9px] font-medium uppercase tracking-[0.15em] text-white/40">Akita Prefectural University</p>
             </div>
           </div>
+          <div class="hidden w-full items-center justify-between gap-6 lg:flex">
+            <div class="flex items-center gap-3">
+              <span class="h-1.5 w-1.5 rounded-full bg-brand-signal" aria-hidden="true"></span>
+              <h1 class="font-display text-[10px] font-semibold uppercase tracking-[0.2em] text-white/70">Campus desk / online</h1>
+            </div>
+            <p class="font-display text-[10px] font-medium uppercase tracking-[0.18em] text-white/35">Honjo / OC 2026</p>
+          </div>
         </div>
-        <div class="h-px w-full bg-brand-line opacity-30" aria-hidden="true"></div>
       </header>
 
-      <section class="flex w-full flex-1 flex-col pt-6">
+      <section class="flex w-full flex-1 flex-col pt-2 sm:pt-4">
         <div
-          class="flex flex-1 flex-col space-y-6"
+          class="flex flex-1 flex-col"
           :style="{ paddingBottom: chat.messages.length ? `${footerClearancePx}px` : '0px' }"
         >
           <div
             v-if="chat.messages.length === 0"
-            class="relative mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-5 py-10 text-center"
+            class="relative mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-5 py-8 sm:px-4 sm:py-12"
           >
-            <div
-              class="pointer-events-none absolute left-1/2 top-1/2 h-[34rem] w-[34rem] max-w-[120vw] -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse_at_center,rgba(255,138,101,0.07),rgba(255,235,59,0.03)_45%,transparent_70%)]"
-              aria-hidden="true"
-            ></div>
-            <div class="relative mb-6">
-              <div class="absolute -inset-5 rounded-full bg-brand-line opacity-25 blur-2xl" aria-hidden="true"></div>
-              <img src="/app-icon.png" alt="" class="relative h-16 w-16 rounded-full shadow-soft" />
+            <div class="chat-empty__identity flex items-center gap-3">
+              <img src="/app-icon.png" alt="" class="h-10 w-10 rounded-ui-sm shadow-soft" />
+              <div>
+                <p class="font-display text-[10px] font-semibold uppercase tracking-[0.2em] text-white/65">Ask Honjo</p>
+                <p class="mt-0.5 text-xs text-white/40">あなたのキャンパス案内デスク</p>
+              </div>
             </div>
-            <h2 class="text-2xl font-bold leading-snug tracking-tight sm:text-[1.75rem]">
-              こんにちは<template v-if="auth.user?.name">、{{ auth.user.name }} さん</template>。
+
+            <h2 class="chat-empty__heading mt-6 max-w-2xl text-[clamp(2rem,5vw,3.6rem)] font-semibold leading-[1.12] tracking-[-0.05em] text-white/90">
+              <span class="block">こんにちは、</span>
+              <span v-if="auth.user?.name" class="aurora-copy">{{ auth.user.name }} さん。</span>
+              <span v-else>ようこそ。</span>
             </h2>
-            <p class="mt-2 text-[15px] leading-7 text-white/55">
-              本荘キャンパスのこと、なんでも聞いてください。
-            </p>
-            <p
-              v-if="countdownLabel"
-              class="countdown-chip mt-6 inline-flex min-h-9 items-center gap-2 rounded-full px-4 py-1.5 text-sm font-medium text-white/90"
-            >
-              <span aria-hidden="true">🎪</span>{{ countdownLabel }}
-            </p>
-            <div class="mt-8 grid w-full gap-2.5 sm:grid-cols-2">
-              <button
-                v-for="suggestion in suggestions"
-                :key="suggestion.label"
-                type="button"
-                class="group flex min-h-[52px] items-center gap-3 rounded-2xl border border-edge bg-ink-surface px-4 py-3 text-left text-sm text-white/75 transition duration-200 ease-out hover:border-edge-strong hover:bg-ink-raised hover:text-white active:scale-[0.97]"
-                @click="applySuggestion(suggestion.label)"
+
+            <div class="chat-empty__support mt-5 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <p class="text-[15px] leading-7 text-white/55">学科、施設、アクセス。気になることからどうぞ。</p>
+              <p
+                v-if="countdownLabel"
+                class="countdown-chip inline-flex min-h-11 shrink-0 items-center gap-2.5 rounded-full px-4 py-2 text-xs font-medium text-white/75"
               >
-                <svg
-                  aria-hidden="true"
-                  class="h-5 w-5 shrink-0 text-white/35 transition duration-200 ease-out group-hover:text-brand-mint"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path :d="suggestion.icon" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-                <span class="flex-1">{{ suggestion.label }}</span>
-                <svg
-                  aria-hidden="true"
-                  class="h-4 w-4 shrink-0 text-white/25 transition duration-200 ease-out group-hover:translate-x-0.5 group-hover:text-brand-mint"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
+                <span class="h-1.5 w-1.5 rounded-full bg-brand-signal" aria-hidden="true"></span>
+                {{ countdownLabel }}
+              </p>
+            </div>
+
+            <div class="chat-empty__actions mt-8 grid w-full gap-2.5 sm:grid-cols-2">
+              <button
+                v-for="(suggestion, index) in suggestions"
+                :key="suggestion"
+                type="button"
+                class="suggestion-card group flex min-h-16 items-center gap-4 rounded-ui border border-edge bg-ink-surface/75 px-4 py-3 text-left text-sm text-white/75 shadow-hairline transition duration-base ease-expressive hover:-translate-y-0.5 hover:border-edge-strong hover:bg-ink-raised hover:text-white active:translate-y-0 active:scale-[0.985]"
+                @click="applySuggestion(suggestion)"
+              >
+                <span class="font-display text-[10px] font-semibold tracking-[0.16em] text-white/40 transition duration-base ease-standard group-hover:text-brand-soft">
+                  {{ String(index + 1).padStart(2, '0') }}
+                </span>
+                <span class="flex-1">{{ suggestion }}</span>
               </button>
             </div>
           </div>
 
-          <article
-            v-for="message in chat.messages"
-            :key="message.clientId || message.id"
-            class="w-full px-4"
-          >
+          <TransitionGroup v-else appear name="message-list" tag="div" class="space-y-8 py-6 sm:py-8">
+            <article
+              v-for="message in chat.messages"
+              :key="message.clientId || message.id"
+              class="message-row w-full px-4"
+              :class="message.role === 'user' ? 'message-row--user' : 'message-row--assistant'"
+            >
             <div class="mx-auto w-full max-w-3xl">
               <template v-if="message.role === 'assistant'">
                 <div class="w-full text-white">
@@ -574,7 +570,7 @@ onBeforeUnmount(() => {
                       <div v-if="message.sources.length" class="border-t border-edge pt-3">
                         <button
                           type="button"
-                          class="group flex min-h-11 w-full items-center justify-between gap-3 rounded-xl px-3 py-1 text-left transition duration-200 ease-out hover:bg-fill-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-mint/45 active:scale-[0.99]"
+                          class="group flex min-h-11 w-full items-center justify-between gap-3 rounded-ui-sm px-3 py-1 text-left transition duration-base ease-standard hover:bg-fill-hover active:scale-[0.99]"
                           :aria-expanded="isSourcesExpanded(message)"
                           :aria-controls="sourceRegionId(message)"
                           :aria-label="sourcesToggleLabel(message)"
@@ -586,7 +582,7 @@ onBeforeUnmount(() => {
                           </span>
                           <svg
                             aria-hidden="true"
-                            class="sources-disclosure-icon h-4 w-4 shrink-0 text-white/40 transition duration-200 ease-out group-hover:text-white/70"
+                            class="sources-disclosure-icon h-4 w-4 shrink-0 text-white/40 transition duration-base ease-standard group-hover:text-white/70"
                             :class="isSourcesExpanded(message) ? 'rotate-180' : 'rotate-0'"
                             viewBox="0 0 24 24"
                             fill="none"
@@ -605,16 +601,13 @@ onBeforeUnmount(() => {
                             <ul class="flex flex-wrap gap-2">
                               <li v-for="source in message.sources" :key="source.url">
                                 <a
-                                  class="group flex min-h-9 items-center gap-2 rounded-full border border-edge bg-ink-surface py-1.5 pl-2 pr-3 text-xs text-white/70 transition duration-200 ease-out hover:border-edge-strong hover:bg-ink-raised hover:text-white"
+                                  class="group flex min-h-11 items-center gap-2 rounded-ui-sm border border-edge bg-ink-surface py-2 pl-2 pr-3 text-xs text-white/70 transition duration-base ease-standard hover:border-edge-strong hover:bg-ink-raised hover:text-white"
                                   :href="source.url"
                                   target="_blank"
                                   rel="noreferrer"
                                 >
                                   <span
-                                    class="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold"
-                                    :class="source.type === 'knowledge'
-                                      ? 'bg-brand-mint/15 text-brand-mint'
-                                      : 'bg-brand-coral/15 text-brand-coral'"
+                                    class="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.045] px-2 py-0.5 text-[10px] font-semibold text-white/60"
                                   >
                                     <svg aria-hidden="true" class="h-3 w-3" viewBox="0 0 24 24" fill="none">
                                       <path
@@ -639,7 +632,7 @@ onBeforeUnmount(() => {
                                   <span class="max-w-[14rem] truncate sm:max-w-[20rem]">{{ source.title }}</span>
                                   <svg
                                     aria-hidden="true"
-                                    class="h-3 w-3 shrink-0 text-white/30 transition duration-200 ease-out group-hover:text-white/70"
+                                    class="h-3 w-3 shrink-0 text-white/30 transition duration-base ease-standard group-hover:text-white/70"
                                     viewBox="0 0 24 24"
                                     fill="none"
                                   >
@@ -656,33 +649,37 @@ onBeforeUnmount(() => {
                 </div>
               </template>
               <div v-else class="flex justify-end">
-                <p class="max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-gradient-to-b from-[#f6f7f9] to-[#e7eaef] px-4 py-2.5 text-base leading-7 text-[#14171d] shadow-soft sm:max-w-[78%]">
+                <p class="max-w-[88%] whitespace-pre-wrap break-words rounded-[1.35rem] rounded-br-md border border-white/[0.075] bg-ink-high px-4 py-2.5 text-base leading-7 text-[#f1f1ec] shadow-soft sm:max-w-[78%]">
                   {{ message.content }}
                 </p>
               </div>
             </div>
-          </article>
+            </article>
+          </TransitionGroup>
           <div ref="messagesEnd" :style="{ scrollMarginBottom: `${footerClearancePx}px` }"></div>
         </div>
 
         <form
           ref="footerRef"
-          class="sticky bottom-0 z-10 border-t border-edge bg-ink-base/90 px-4 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl"
+          class="composer-dock sticky bottom-0 z-10 px-4 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] pt-8"
           @submit.prevent="send"
         >
           <div class="mx-auto w-full max-w-3xl">
-            <div class="flex items-end gap-2 rounded-[1.75rem] border border-edge bg-ink-raised p-2 shadow-soft transition duration-200 ease-out focus-within:border-brand-mint/40 focus-within:shadow-glow-mint">
+            <div
+              class="composer-shell flex items-end gap-2 rounded-[1.6rem] p-2"
+              :class="{ 'composer-shell--streaming': chat.isSending }"
+            >
               <textarea
                 ref="inputRef"
                 v-model="draft"
                 rows="1"
-                class="max-h-[164px] min-h-11 flex-1 resize-none bg-transparent px-3 py-2.5 text-base leading-6 text-white outline-none placeholder:text-white/35"
+                class="max-h-[164px] min-h-11 flex-1 resize-none bg-transparent px-3 py-2.5 text-base leading-6 text-white outline-none placeholder:text-white/45 focus-visible:outline-none"
                 placeholder="質問を入力"
                 @keydown.enter="onEnter"
               ></textarea>
               <button
                 type="submit"
-                class="grid h-11 w-11 shrink-0 place-items-center rounded-full text-[#101217] transition duration-200 ease-out enabled:bg-brand-line enabled:hover:shadow-[0_0_20px_rgba(105,240,174,0.35)] enabled:hover:brightness-110 enabled:active:scale-[0.95] disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/30"
+                class="grid h-11 w-11 shrink-0 place-items-center rounded-full text-[#11130f] transition duration-base ease-expressive enabled:bg-ink-paper enabled:hover:-translate-y-0.5 enabled:hover:bg-white enabled:active:translate-y-0 enabled:active:scale-[0.94] disabled:cursor-not-allowed disabled:bg-white/[0.07] disabled:text-white/25"
                 :disabled="!draft.trim() || chat.isSending"
                 aria-label="送信"
               >
@@ -695,7 +692,7 @@ onBeforeUnmount(() => {
                  banner is a compact retry affordance. -->
             <div
               v-if="chat.error"
-              class="mt-2 flex items-center gap-2.5 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200"
+              class="mt-2 flex min-h-11 items-center gap-2.5 rounded-ui-sm border border-red-400/25 bg-red-500/10 px-3 py-2 text-sm text-red-200"
               role="alert"
             >
               <svg aria-hidden="true" class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
@@ -705,7 +702,7 @@ onBeforeUnmount(() => {
               <button
                 v-if="chat.lastFailedMessage"
                 type="button"
-                class="shrink-0 rounded-lg border border-red-300/35 px-2.5 py-1.5 text-xs font-medium text-red-100 transition duration-150 ease-out hover:bg-red-400/15 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
+                class="min-h-11 shrink-0 rounded-ui-sm border border-red-300/35 px-3 py-2 text-xs font-medium text-red-100 transition duration-fast ease-standard hover:bg-red-400/15 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
                 :disabled="chat.isSending"
                 @click="retryLastMessage"
               >
@@ -715,7 +712,7 @@ onBeforeUnmount(() => {
             <Transition name="dialog-fade">
               <p
                 v-if="busyHint"
-                class="mt-2 flex items-center gap-2 rounded-xl border border-brand-mint/25 bg-brand-mint/10 px-3 py-2 text-sm text-brand-mint"
+                class="mt-2 flex min-h-11 items-center gap-2 rounded-ui-sm border border-brand-signal/25 bg-brand-signal/[0.08] px-3 py-2 text-sm text-[#ffb29e]"
                 role="status"
               >
                 <svg aria-hidden="true" class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
@@ -724,7 +721,7 @@ onBeforeUnmount(() => {
                 {{ busyHint }}
               </p>
             </Transition>
-            <p class="mt-2 hidden text-center text-xs text-white/45 sm:block">
+            <p class="font-display mt-2 hidden text-center text-[10px] tracking-[0.06em] text-white/35 sm:block">
               Enter で送信 ・ Shift + Enter で改行
             </p>
           </div>
@@ -740,21 +737,23 @@ onBeforeUnmount(() => {
         aria-modal="true"
         :aria-label="dialog.kind === 'rename' ? 'スレッド名を変更' : '会話を削除'"
       >
-        <div class="absolute inset-0 bg-black/60" @click="closeDialog"></div>
-        <div class="dialog-panel relative w-full max-w-sm rounded-2xl border border-edge-strong bg-ink-raised p-5 shadow-glass">
+        <div class="absolute inset-0 bg-black/70 backdrop-blur-[2px]" @click="closeDialog"></div>
+        <div class="dialog-panel relative w-full max-w-sm rounded-ui-lg border border-edge-strong bg-ink-raised p-5 shadow-glass">
           <template v-if="dialog.kind === 'rename'">
-            <h3 class="text-base font-semibold tracking-tight">スレッド名を変更</h3>
+            <p class="font-display text-[9px] font-semibold uppercase tracking-[0.2em] text-brand-soft">Edit conversation</p>
+            <h3 class="mt-2 text-lg font-semibold tracking-[-0.025em]">スレッド名を変更</h3>
             <input
               ref="dialogInputRef"
               v-model="dialogInput"
-              class="mt-4 min-h-11 w-full rounded-xl border border-edge bg-ink-surface px-3.5 py-2.5 text-sm text-white outline-none transition duration-200 ease-out placeholder:text-white/35 focus:border-brand-mint/40"
+              class="mt-4 min-h-11 w-full rounded-ui-sm border border-edge-strong bg-ink-surface px-3.5 py-2.5 text-sm text-white outline-none transition duration-base ease-standard placeholder:text-white/45 focus:border-white/30"
               placeholder="スレッド名（1〜60文字）"
               maxlength="61"
               @keydown.enter="onDialogEnter"
             />
           </template>
           <template v-else>
-            <h3 class="text-base font-semibold tracking-tight">会話を削除しますか？</h3>
+            <p class="font-display text-[9px] font-semibold uppercase tracking-[0.2em] text-red-300/75">Delete conversation</p>
+            <h3 class="mt-2 text-lg font-semibold tracking-[-0.025em]">会話を削除しますか？</h3>
             <p class="mt-2 break-words text-sm leading-6 text-white/60">
               「{{ dialog.threadTitle }}」を削除すると元に戻せません。
             </p>
@@ -764,7 +763,7 @@ onBeforeUnmount(() => {
             <button
               ref="dialogCancelRef"
               type="button"
-              class="min-h-11 rounded-xl border border-edge px-4 py-2 text-sm text-white/70 transition duration-150 ease-out hover:bg-fill-hover hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
+              class="min-h-11 rounded-ui-sm border border-edge px-4 py-2 text-sm text-white/70 transition duration-fast ease-standard hover:bg-fill-hover hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="dialogBusy"
               @click="closeDialog"
             >
@@ -772,9 +771,9 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
-              class="min-h-11 rounded-xl px-4 py-2 text-sm font-semibold transition duration-150 ease-out active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60"
+              class="min-h-11 rounded-ui-sm px-4 py-2 text-sm font-semibold transition duration-fast ease-standard active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60"
               :class="dialog.kind === 'rename'
-                ? 'bg-white text-[#101217] hover:bg-white/90'
+                ? 'bg-ink-paper text-[#10120f] hover:bg-white'
                 : 'bg-red-500 text-white hover:bg-red-400'"
               :disabled="dialogBusy"
               @click="confirmDialog"
@@ -792,8 +791,8 @@ onBeforeUnmount(() => {
 .sources-collapse-enter-active,
 .sources-collapse-leave-active {
   transition:
-    opacity 180ms ease-out,
-    transform 180ms ease-out;
+    opacity var(--motion-base) ease-out,
+    transform var(--motion-base) var(--ease-expressive);
 }
 
 .sources-collapse-enter-from,

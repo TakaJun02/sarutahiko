@@ -2,18 +2,47 @@
 @tailwind components;
 @tailwind utilities;
 
-/*
- * Design tokens are declared in tailwind.config.js (colors.ink / edge / fill / brand).
- * The CSS variables below mirror them for the plain-CSS rules in this file.
- */
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("./assets/fonts/space-grotesk/space-grotesk-latin-var.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 300 700;
+}
+
 :root {
   color-scheme: dark;
-  --bg-base: #0b0d12;
-  --bg-surface: #12151c;
-  --bg-raised: #1a1e28;
-  --brand-gradient: linear-gradient(90deg, #ff8a65, #ffeb3b, #69f0ae);
+  --color-canvas: #0d0f0e;
+  --color-panel: #131614;
+  --color-raised: #1b1e1c;
+  --color-high: #252925;
+  --color-paper: #f0efe9;
+  --color-paper-ink: #171916;
+  --color-text: #f2f1ec;
+  --color-text-muted: #a9ada7;
+  --color-text-dim: #777c76;
+  --color-edge: rgba(244, 243, 237, 0.09);
+  --color-edge-strong: rgba(244, 243, 237, 0.17);
+  --color-signal: #ff7657;
+  --color-signal-soft: #ff9a80;
+  --aurora-copy: linear-gradient(105deg, #ff8f70 5%, #ffc46b 48%, #6fe8a8 96%);
+  --aurora-edge: linear-gradient(100deg, rgba(255, 143, 112, 0.72), rgba(255, 196, 107, 0.58), rgba(111, 232, 168, 0.68));
+  --radius-sm: 0.625rem;
+  --radius-md: 1rem;
+  --radius-lg: 1.5rem;
+  --radius-sheet: 2.5rem;
+  --shadow-hairline: inset 0 0 0 1px rgba(244, 243, 237, 0.045);
+  --shadow-raised: 0 16px 40px -22px rgba(0, 0, 0, 0.88), 0 1px 0 rgba(255, 255, 255, 0.025) inset;
+  --shadow-overlay: 0 32px 100px -34px rgba(0, 0, 0, 0.94);
+  --motion-fast: 140ms;
+  --motion-base: 220ms;
+  --motion-slow: 480ms;
+  --motion-stagger: 60ms;
+  --motion-ambient: 16s;
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-expressive: cubic-bezier(0.16, 1, 0.3, 1);
+  background: var(--color-canvas);
   font-family: "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", system-ui, sans-serif;
-  background: var(--bg-base);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -22,10 +51,17 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
 body {
   min-width: 320px;
   margin: 0;
-  background: var(--bg-base);
+  background: var(--color-canvas);
+  color: var(--color-text);
 }
 
 button,
@@ -34,19 +70,24 @@ textarea {
   font: inherit;
 }
 
-/* Text selection follows the brand accent. */
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
 ::selection {
-  background: rgba(105, 240, 174, 0.32);
+  background: rgba(255, 118, 87, 0.34);
+  color: #fff;
 }
 
 .login-page ::selection {
-  background: rgba(105, 240, 174, 0.45);
+  background: rgba(255, 118, 87, 0.28);
+  color: #11130f;
 }
 
-/* Themed thin scrollbars. */
 * {
+  scrollbar-color: rgba(244, 243, 237, 0.16) transparent;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -59,12 +100,12 @@ textarea {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
   border-radius: 9999px;
+  background: rgba(244, 243, 237, 0.14);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba(244, 243, 237, 0.26);
 }
 
 .login-page * {
@@ -75,10 +116,9 @@ textarea {
   background: rgba(0, 0, 0, 0.18);
 }
 
-/* Shared keyboard focus ring (text fields keep their own ring styles). */
-:where(a, button, [role="menuitem"], summary):focus-visible {
-  outline: 2px solid rgba(105, 240, 174, 0.65);
-  outline-offset: 2px;
+:where(a, button, input, textarea, [role="menuitem"], summary):focus-visible {
+  outline: 2px solid var(--color-signal-soft);
+  outline-offset: 3px;
 }
 
 /* コンテナを一定速度で回転させるキーフレーム */
@@ -103,22 +143,101 @@ textarea {
 .animate-gemini-spinner-arc       { animation: gemini_spinner_arc_dash 1.5s ease-in-out infinite; }
 .animate-icon-rotate              { animation: icon_kurun_rotate 4s ease-in-out infinite; }
 
-.login-page {
-  color-scheme: light;
+/* View-to-view transition. The leaving view exits without holding navigation. */
+.route-shift-enter-active {
+  transition:
+    opacity var(--motion-slow) var(--ease-expressive),
+    transform var(--motion-slow) var(--ease-expressive),
+    filter var(--motion-base) ease-out;
 }
 
-.bg-noise {
-  background-color: #ffffff;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 800 800' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.03'/%3E%3C/svg%3E");
+.route-shift-leave-active {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  width: 100%;
+  transition:
+    opacity var(--motion-base) ease-out,
+    transform var(--motion-base) var(--ease-standard);
+}
+
+.route-shift-enter-from {
+  opacity: 0;
+  filter: blur(4px);
+  transform: translate3d(0, 10px, 0);
+}
+
+.route-shift-leave-to {
+  opacity: 0;
+  transform: scale(0.992);
+}
+
+/* ------------------------------------------------------------------ */
+/* Login: editorial campus pass over a two-layer light/dark structure. */
+/* ------------------------------------------------------------------ */
+
+.login-page {
+  color-scheme: light;
+  background: var(--color-paper);
+  isolation: isolate;
+}
+
+.login-hero {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--color-paper);
+  background-image:
+    linear-gradient(rgba(23, 25, 22, 0.042) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(23, 25, 22, 0.042) 1px, transparent 1px),
+    url("data:image/svg+xml,%3Csvg viewBox='0 0 800 800' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.025'/%3E%3C/svg%3E");
+  background-position: center;
+  background-size: 4rem 4rem, 4rem 4rem, auto;
+}
+
+.login-hero::before {
+  position: absolute;
+  top: -14rem;
+  right: -10rem;
+  width: min(50rem, 90vw);
+  height: min(50rem, 90vw);
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(255, 118, 87, 0.08), rgba(255, 118, 87, 0.018) 42%, transparent 70%);
+  content: "";
+  pointer-events: none;
+  animation: login_atmosphere_drift var(--motion-ambient) ease-in-out infinite alternate;
+}
+
+.login-hero::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: clamp(1.5rem, 6vw, 5.5rem);
+  width: 1px;
+  background: rgba(23, 25, 22, 0.1);
+  content: "";
+  pointer-events: none;
+}
+
+.login-brand {
+  animation: login_item_enter var(--motion-slow) var(--ease-expressive) var(--motion-stagger) both;
+}
+
+.login-hero-copy {
+  animation: login_item_enter var(--motion-slow) var(--ease-expressive) calc(var(--motion-stagger) * 2) both;
+}
+
+.login-hero-meta {
+  animation: login_item_enter var(--motion-slow) var(--ease-expressive) calc(var(--motion-stagger) * 3) both;
 }
 
 .login-type-cursor {
   display: inline-block;
   width: 4px;
-  height: 2.5rem;
-  margin-left: 0.25rem;
-  vertical-align: -0.4rem;
-  background: linear-gradient(180deg, #FF8A65, #FFEB3B, #69F0AE);
+  height: 0.92em;
+  min-height: 2.5rem;
+  margin-left: 0.2em;
+  vertical-align: -0.08em;
+  background: var(--color-signal);
   animation: login_cursor_blink 1s step-end infinite;
 }
 
@@ -127,8 +246,11 @@ textarea {
 }
 
 .login-sheet {
-  animation: login_sheet_enter 0.4s ease-out both;
+  position: relative;
+  z-index: 2;
   padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
+  box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.05), 0 -28px 80px -56px rgba(0, 0, 0, 0.9);
+  animation: login_sheet_enter var(--motion-slow) var(--ease-expressive) var(--motion-stagger) both;
 }
 
 @media (min-width: 640px) {
@@ -149,9 +271,165 @@ textarea {
 
 @keyframes login_sheet_enter {
   from {
-    transform: translate3d(0, 100%, 0);
+    opacity: 0;
+    transform: translate3d(0, 2.25rem, 0);
   }
   to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes login_item_enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 0.875rem, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes login_atmosphere_drift {
+  from {
+    opacity: 0.65;
+    transform: translate3d(-2%, 1%, 0) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(3%, -2%, 0) scale(1.04);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Chat shell, empty-state choreography, composer and message arrival. */
+/* ------------------------------------------------------------------ */
+
+.chat-shell {
+  background:
+    radial-gradient(circle at 76% 18%, rgba(255, 118, 87, 0.035), transparent 27rem),
+    var(--color-canvas);
+}
+
+.chat-empty__identity,
+.chat-empty__heading,
+.chat-empty__support,
+.chat-empty__actions {
+  animation: empty_item_enter var(--motion-slow) var(--ease-expressive) both;
+}
+
+.chat-empty__identity {
+  animation-delay: var(--motion-stagger);
+}
+
+.chat-empty__heading {
+  animation-delay: calc(var(--motion-stagger) * 2);
+}
+
+.chat-empty__support {
+  animation-delay: calc(var(--motion-stagger) * 3);
+}
+
+.chat-empty__actions {
+  animation-delay: calc(var(--motion-stagger) * 4);
+}
+
+.aurora-copy {
+  display: inline-block;
+  background: var(--aurora-copy);
+  background-clip: text;
+  color: transparent;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.suggestion-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.suggestion-card::before {
+  position: absolute;
+  top: 0;
+  right: 1rem;
+  left: 1rem;
+  height: 1px;
+  background: var(--color-signal);
+  content: "";
+  opacity: 0;
+  transform: scaleX(0.25);
+  transform-origin: left;
+  transition:
+    opacity var(--motion-base) ease-out,
+    transform var(--motion-base) var(--ease-expressive);
+}
+
+.suggestion-card:hover::before,
+.suggestion-card:focus-visible::before {
+  opacity: 0.75;
+  transform: scaleX(1);
+}
+
+.composer-dock {
+  background: linear-gradient(to bottom, transparent, rgba(13, 15, 14, 0.92) 34%, var(--color-canvas) 68%);
+}
+
+.composer-shell {
+  border: 1px solid var(--color-edge-strong);
+  background: var(--color-raised);
+  box-shadow: var(--shadow-raised);
+  transition:
+    border-color var(--motion-base) ease-out,
+    background-color var(--motion-base) ease-out,
+    box-shadow var(--motion-base) ease-out,
+    transform var(--motion-base) var(--ease-expressive);
+}
+
+.composer-shell:focus-within {
+  border-color: rgba(244, 243, 237, 0.32);
+  background: #1e211f;
+  box-shadow: 0 18px 48px -24px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(244, 243, 237, 0.035);
+}
+
+.composer-shell--streaming {
+  border-color: transparent;
+  background:
+    linear-gradient(var(--color-raised), var(--color-raised)) padding-box,
+    var(--aurora-edge) border-box;
+  box-shadow: 0 18px 54px -26px rgba(0, 0, 0, 0.96), 0 0 28px rgba(255, 143, 112, 0.055);
+}
+
+.message-list-enter-active {
+  transition:
+    opacity var(--motion-slow) var(--ease-expressive),
+    transform var(--motion-slow) var(--ease-expressive);
+}
+
+.message-list-enter-from {
+  opacity: 0;
+  transform: translate3d(0, 0.75rem, 0);
+}
+
+.message-list-enter-from.message-row--user {
+  transform: translate3d(0.75rem, 0.625rem, 0) scale(0.98);
+}
+
+.drawer-scrim {
+  transition: opacity var(--motion-base) ease-out;
+}
+
+.drawer-panel {
+  transition: transform var(--motion-base) var(--ease-expressive);
+}
+
+@keyframes empty_item_enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 0.875rem, 0);
+  }
+  to {
+    opacity: 1;
     transform: translate3d(0, 0, 0);
   }
 }
@@ -159,12 +437,14 @@ textarea {
 /* In-app dialog (thread rename / delete). */
 .dialog-fade-enter-active,
 .dialog-fade-leave-active {
-  transition: opacity 160ms ease-out;
+  transition: opacity var(--motion-base) ease-out;
 }
 
 .dialog-fade-enter-active .dialog-panel,
 .dialog-fade-leave-active .dialog-panel {
-  transition: transform 160ms ease-out;
+  transition:
+    opacity var(--motion-base) ease-out,
+    transform var(--motion-base) var(--ease-expressive);
 }
 
 .dialog-fade-enter-from,
@@ -174,25 +454,25 @@ textarea {
 
 .dialog-fade-enter-from .dialog-panel,
 .dialog-fade-leave-to .dialog-panel {
-  transform: scale(0.97);
+  opacity: 0;
+  transform: translate3d(0, 0.75rem, 0) scale(0.985);
 }
 
-/* Pill with a 1px brand-gradient border (open campus countdown). */
 .countdown-chip {
-  border: 1px solid transparent;
-  background:
-    linear-gradient(var(--bg-raised), var(--bg-raised)) padding-box,
-    var(--brand-gradient) border-box;
+  border: 1px solid var(--color-edge-strong);
+  background: rgba(244, 243, 237, 0.025);
+  box-shadow: var(--shadow-hairline);
 }
 
 /* ------------------------------------------------------------------ */
-/* Markdown prose for assistant answers                                 */
+/* Markdown prose for assistant answers.                               */
 /* ------------------------------------------------------------------ */
 
 .markdown-body {
-  color: rgb(233 236 240);
+  color: #dedfd9;
   font-size: 1rem;
-  line-height: 1.75;
+  line-height: 1.78;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -201,16 +481,17 @@ textarea {
 }
 
 .markdown-body > * + * {
-  margin-top: 0.9rem;
+  margin-top: 1rem;
 }
 
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3,
 .markdown-body h4 {
-  color: #fff;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  color: var(--color-text);
+  font-family: "Space Grotesk", "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", system-ui, sans-serif;
+  font-weight: 650;
+  letter-spacing: -0.022em;
   line-height: 1.45;
 }
 
@@ -219,9 +500,9 @@ textarea {
 }
 
 .markdown-body h2 {
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-edge);
   font-size: 1.1875rem;
-  padding-bottom: 0.4rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .markdown-body h3 {
@@ -236,11 +517,11 @@ textarea {
 .markdown-body > * + h2,
 .markdown-body > * + h3,
 .markdown-body > * + h4 {
-  margin-top: 1.6rem;
+  margin-top: 1.75rem;
 }
 
 .markdown-body strong {
-  color: #fff;
+  color: var(--color-text);
   font-weight: 700;
 }
 
@@ -258,24 +539,24 @@ textarea {
 }
 
 .markdown-body li + li {
-  margin-top: 0.3rem;
+  margin-top: 0.35rem;
 }
 
 .markdown-body li::marker {
-  color: rgba(255, 255, 255, 0.42);
+  color: rgba(255, 154, 128, 0.72);
 }
 
 .markdown-body li > ul,
 .markdown-body li > ol {
-  margin-top: 0.3rem;
+  margin-top: 0.35rem;
 }
 
 .markdown-body a {
-  color: #69f0ae;
+  color: var(--color-signal-soft);
   text-decoration: underline;
-  text-decoration-color: rgba(105, 240, 174, 0.4);
+  text-decoration-color: rgba(255, 154, 128, 0.38);
   text-underline-offset: 4px;
-  transition: text-decoration-color 200ms ease-out;
+  transition: text-decoration-color var(--motion-base) ease-out;
 }
 
 .markdown-body a:hover {
@@ -284,19 +565,19 @@ textarea {
 
 .markdown-body code {
   padding: 0.125rem 0.375rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--color-edge);
   border-radius: 0.375rem;
-  background: rgba(255, 255, 255, 0.09);
+  background: rgba(244, 243, 237, 0.075);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.875em;
 }
 
 .markdown-body pre {
   padding: 0.875rem 1rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 0.75rem;
-  background: #090b0f;
   overflow-x: auto;
+  border: 1px solid var(--color-edge);
+  border-radius: var(--radius-sm);
+  background: #090b0a;
 }
 
 .markdown-body pre code {
@@ -310,8 +591,8 @@ textarea {
 .markdown-body blockquote {
   margin: 0;
   padding: 0.125rem 0 0.125rem 1rem;
-  border-left: 3px solid rgba(105, 240, 174, 0.45);
-  color: rgba(255, 255, 255, 0.7);
+  border-left: 2px solid rgba(255, 118, 87, 0.68);
+  color: var(--color-text-muted);
 }
 
 .markdown-body table {
@@ -321,39 +602,58 @@ textarea {
   overflow-x: auto;
   border-collapse: collapse;
   font-size: 0.9375rem;
-  /* Tables scroll horizontally, so cell contents (times such as "10:00",
-     numbers, station names) must never be broken mid-token. */
-  word-break: normal;
   overflow-wrap: normal;
+  word-break: normal;
 }
 
 .markdown-body th,
 .markdown-body td {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--color-edge-strong);
   text-align: left;
   vertical-align: top;
 }
 
 .markdown-body th {
-  background: rgba(255, 255, 255, 0.06);
-  color: #fff;
+  background: rgba(244, 243, 237, 0.055);
+  color: var(--color-text);
+  font-family: "Space Grotesk", "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", system-ui, sans-serif;
   font-weight: 600;
   white-space: nowrap;
 }
 
 .markdown-body tbody tr:nth-child(2n) td {
-  background: rgba(255, 255, 255, 0.025);
+  background: rgba(244, 243, 237, 0.022);
 }
 
 .markdown-body hr {
   border: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid var(--color-edge);
 }
 
 .markdown-body img {
   max-width: 100%;
-  border-radius: 0.75rem;
+  border-radius: var(--radius-sm);
+}
+
+@media (max-width: 639px) {
+  :root {
+    --radius-sheet: 2rem;
+  }
+
+  .login-hero::after {
+    left: 1.5rem;
+  }
+
+  .markdown-body {
+    line-height: 1.72;
+  }
+}
+
+@media (max-height: 720px) {
+  .login-hero::before {
+    top: -22rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
