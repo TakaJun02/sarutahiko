@@ -115,7 +115,12 @@ const isPending = computed(() => props.mode === 'pending')
     </div>
 
     <div class="aurora-ring-v5__body">
-      <Transition name="aurora-ring-v5-status" mode="out-in">
+      <!--
+        type="transition": the status text carries an infinite shimmer animation,
+        so Vue must watch transitionend (not animationend) to finish leave phases.
+        Without this the leave never resolves and the text stays at opacity 0.
+      -->
+      <Transition name="aurora-ring-v5-status" mode="out-in" type="transition">
         <p v-if="isPending" :key="displayText" class="aurora-ring-v5__status" aria-live="polite">
           {{ displayText }}
         </p>

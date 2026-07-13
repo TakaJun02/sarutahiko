@@ -156,6 +156,27 @@ textarea {
   }
 }
 
+/* In-app dialog (thread rename / delete). */
+.dialog-fade-enter-active,
+.dialog-fade-leave-active {
+  transition: opacity 160ms ease-out;
+}
+
+.dialog-fade-enter-active .dialog-panel,
+.dialog-fade-leave-active .dialog-panel {
+  transition: transform 160ms ease-out;
+}
+
+.dialog-fade-enter-from,
+.dialog-fade-leave-to {
+  opacity: 0;
+}
+
+.dialog-fade-enter-from .dialog-panel,
+.dialog-fade-leave-to .dialog-panel {
+  transform: scale(0.97);
+}
+
 /* Pill with a 1px brand-gradient border (open campus countdown). */
 .countdown-chip {
   border: 1px solid transparent;
@@ -346,6 +367,10 @@ textarea {
   }
 
   .login-type-cursor {
+    animation: none !important;
+  }
+
+  .login-sheet {
     animation: none !important;
   }
 

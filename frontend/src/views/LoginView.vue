@@ -185,7 +185,7 @@ onBeforeUnmount(() => {
 <template>
   <main class="login-page flex min-h-dvh flex-col overflow-hidden bg-white text-zinc-900">
     <section class="bg-noise flex flex-1 items-center justify-center px-6 py-10 text-center">
-      <h1 class="max-w-4xl text-4xl font-bold leading-tight tracking-tight text-zinc-900 sm:text-5xl">
+      <h1 class="max-w-4xl text-balance text-4xl font-bold leading-tight tracking-tight text-zinc-900 sm:text-5xl">
         <span>{{ displayedPhrase }}</span>
         <span
           class="login-type-cursor"

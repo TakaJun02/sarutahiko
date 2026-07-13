@@ -6,10 +6,11 @@ import LoadingSpinnerV5 from '../components/LoadingSpinnerV5.vue'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import ThreadSidebar from '../components/ThreadSidebar.vue'
 import { useAuthStore } from '../stores/auth'
-import { useChatStore } from '../stores/chat'
+import { toFriendlyErrorMessage, useChatStore } from '../stores/chat'
 
 const OPEN_CAMPUS_DATE = '2026-07-19'
-const INPUT_MAX_HEIGHT_PX = 160
+// Line-grid aligned: 20px vertical padding + 24px line-height x 6 lines.
+const INPUT_MAX_HEIGHT_PX = 164
 
 // Suggested first questions for the empty state (tap inserts into the input).
 const suggestions = [
@@ -42,6 +43,14 @@ const messagesEnd = ref(null)
 const inputRef = ref(null)
 const footerRef = ref(null)
 const footerClearancePx = ref(224)
+
+// Thread rename / delete confirmation dialog (replaces window.prompt/confirm).
+const dialog = ref(null) // { kind: 'rename' | 'delete', threadId, threadTitle }
+const dialogInput = ref('')
+const dialogError = ref('')
+const dialogBusy = ref(false)
+const dialogInputRef = ref(null)
+const dialogPrimaryRef = ref(null)
 
 let footerResizeObserver = null
 let pendingScrollBehavior = null
@@ -138,44 +147,108 @@ function startNewChat() {
   }
 }
 
-async function renameThread(threadId) {
+function openDialog(kind, threadId) {
   const thread = chat.threads.find((item) => item.id === threadId)
-  const input = window.prompt('スレッド名（1〜60文字）', thread?.title || '')
-  if (input === null) {
+  dialog.value = { kind, threadId, threadTitle: thread?.title || '' }
+  dialogInput.value = kind === 'rename' ? thread?.title || '' : ''
+  dialogError.value = ''
+  nextTick(() => {
+    if (kind === 'rename') {
+      dialogInputRef.value?.focus()
+      dialogInputRef.value?.select()
+    } else {
+      dialogPrimaryRef.value?.focus()
+    }
+  })
+}
+
+function renameThread(threadId) {
+  openDialog('rename', threadId)
+}
+
+function removeThread(threadId) {
+  openDialog('delete', threadId)
+}
+
+function closeDialog() {
+  if (dialogBusy.value) {
     return
   }
-  const title = input.trim()
-  if (!title || title.length > 60) {
-    window.alert('スレッド名は1〜60文字で入力してください。')
+  dialog.value = null
+}
+
+function onDialogEnter(event) {
+  if (event.isComposing) {
     return
   }
+  event.preventDefault()
+  confirmDialog()
+}
+
+async function confirmDialog() {
+  if (!dialog.value || dialogBusy.value) {
+    return
+  }
+  const { kind, threadId } = dialog.value
+
+  if (kind === 'rename') {
+    const title = dialogInput.value.trim()
+    if (!title || title.length > 60) {
+      dialogError.value = 'スレッド名は1〜60文字で入力してください。'
+      return
+    }
+    dialogBusy.value = true
+    try {
+      await chat.renameThread(threadId, title)
+      dialog.value = null
+    } catch (error) {
+      if (handleAuthError(error)) {
+        return
+      }
+      dialogError.value = error.message && toFriendlyErrorMessage(error.message) === error.message
+        ? error.message
+        : 'スレッド名を変更できませんでした。少し待ってからもう一度お試しください。'
+    } finally {
+      dialogBusy.value = false
+    }
+    return
+  }
+
+  const wasCurrent = threadId === chat.threadId || threadId === route.params.threadId
+  dialogBusy.value = true
   try {
-    await chat.renameThread(threadId, title)
+    await chat.deleteThread(threadId)
+    dialog.value = null
+    closeDrawer()
+    if (wasCurrent) {
+      router.replace('/chat')
+    }
   } catch (error) {
     if (handleAuthError(error)) {
       return
     }
-    window.alert(error.message || 'スレッド名を変更できませんでした。')
+    dialogError.value = error.message && toFriendlyErrorMessage(error.message) === error.message
+      ? error.message
+      : '会話を削除できませんでした。少し待ってからもう一度お試しください。'
+  } finally {
+    dialogBusy.value = false
   }
 }
 
-async function removeThread(threadId) {
-  if (!window.confirm('この会話を削除しますか？この操作は取り消せません。')) {
-    return
-  }
-  const wasCurrent = threadId === chat.threadId || threadId === route.params.threadId
+async function retryLastMessage() {
   try {
-    await chat.deleteThread(threadId)
+    await chat.retryLast()
   } catch (error) {
-    if (handleAuthError(error)) {
-      return
-    }
-    window.alert(error.message || '会話を削除できませんでした。')
-    return
+    handleAuthError(error)
+  } finally {
+    await nextTick()
+    inputRef.value?.focus()
   }
-  closeDrawer()
-  if (wasCurrent) {
-    router.replace('/chat')
+}
+
+function onWindowKeydown(event) {
+  if (event.key === 'Escape' && dialog.value) {
+    closeDialog()
   }
 }
 
@@ -246,6 +319,7 @@ watch(
 )
 
 onMounted(() => {
+  window.addEventListener('keydown', onWindowKeydown)
   inputRef.value?.focus()
   autoResizeInput()
   updateFooterClearance()
@@ -260,6 +334,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onWindowKeydown)
   footerResizeObserver?.disconnect()
 })
 </script>
@@ -309,7 +384,7 @@ onBeforeUnmount(() => {
     </div>
 
     <main class="flex h-full min-w-0 flex-1 flex-col overflow-y-auto">
-      <header class="sticky top-0 z-20 bg-ink-base/85 backdrop-blur-xl">
+      <header class="sticky top-0 z-20 bg-ink-base/[0.92] backdrop-blur-xl">
         <div class="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
           <button
             type="button"
@@ -472,7 +547,7 @@ onBeforeUnmount(() => {
                 ref="inputRef"
                 v-model="draft"
                 rows="1"
-                class="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-3 py-2.5 text-base leading-6 text-white outline-none placeholder:text-white/35"
+                class="max-h-[164px] min-h-11 flex-1 resize-none bg-transparent px-3 py-2.5 text-base leading-6 text-white outline-none placeholder:text-white/35"
                 placeholder="質問を入力"
                 @keydown.enter="onEnter"
               ></textarea>
@@ -487,22 +562,85 @@ onBeforeUnmount(() => {
                 </svg>
               </button>
             </div>
-            <p
+            <div
               v-if="chat.error"
-              class="mt-2 flex items-center gap-2 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200"
+              class="mt-2 flex items-center gap-2.5 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200"
               role="alert"
             >
               <svg aria-hidden="true" class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
                 <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 8v5 M12 16.5h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
-              {{ chat.error }}
-            </p>
-            <p class="mt-2 hidden text-center text-xs text-white/30 sm:block">
+              <span class="min-w-0 flex-1">{{ chat.error }}</span>
+              <button
+                v-if="chat.lastFailedMessage"
+                type="button"
+                class="shrink-0 rounded-lg border border-red-300/35 px-2.5 py-1.5 text-xs font-medium text-red-100 transition duration-150 ease-out hover:bg-red-400/15 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="chat.isSending"
+                @click="retryLastMessage"
+              >
+                再試行
+              </button>
+            </div>
+            <p class="mt-2 hidden text-center text-xs text-white/45 sm:block">
               Enter で送信 ・ Shift + Enter で改行
             </p>
           </div>
         </form>
       </section>
     </main>
+
+    <Transition name="dialog-fade">
+      <div
+        v-if="dialog"
+        class="fixed inset-0 z-50 flex items-end justify-center p-4 pb-[calc(1rem_+_env(safe-area-inset-bottom))] sm:items-center sm:pb-4"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="dialog.kind === 'rename' ? 'スレッド名を変更' : '会話を削除'"
+      >
+        <div class="absolute inset-0 bg-black/60" @click="closeDialog"></div>
+        <div class="dialog-panel relative w-full max-w-sm rounded-2xl border border-edge-strong bg-ink-raised p-5 shadow-glass">
+          <template v-if="dialog.kind === 'rename'">
+            <h3 class="text-base font-semibold tracking-tight">スレッド名を変更</h3>
+            <input
+              ref="dialogInputRef"
+              v-model="dialogInput"
+              class="mt-4 min-h-11 w-full rounded-xl border border-edge bg-ink-surface px-3.5 py-2.5 text-sm text-white outline-none transition duration-200 ease-out placeholder:text-white/35 focus:border-brand-mint/40"
+              placeholder="スレッド名（1〜60文字）"
+              maxlength="61"
+              @keydown.enter="onDialogEnter"
+            />
+          </template>
+          <template v-else>
+            <h3 class="text-base font-semibold tracking-tight">会話を削除しますか？</h3>
+            <p class="mt-2 break-words text-sm leading-6 text-white/60">
+              「{{ dialog.threadTitle }}」を削除すると元に戻せません。
+            </p>
+          </template>
+          <p v-if="dialogError" class="mt-3 text-sm text-red-300" role="alert">{{ dialogError }}</p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              class="min-h-11 rounded-xl border border-edge px-4 py-2 text-sm text-white/70 transition duration-150 ease-out hover:bg-fill-hover hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="dialogBusy"
+              @click="closeDialog"
+            >
+              キャンセル
+            </button>
+            <button
+              ref="dialogPrimaryRef"
+              type="button"
+              class="min-h-11 rounded-xl px-4 py-2 text-sm font-semibold transition duration-150 ease-out active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60"
+              :class="dialog.kind === 'rename'
+                ? 'bg-white text-[#101217] hover:bg-white/90'
+                : 'bg-red-500 text-white hover:bg-red-400'"
+              :disabled="dialogBusy"
+              @click="confirmDialog"
+            >
+              {{ dialogBusy ? '処理中…' : dialog.kind === 'rename' ? '変更する' : '削除する' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
