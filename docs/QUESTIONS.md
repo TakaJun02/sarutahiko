@@ -100,3 +100,12 @@
   3. タイトルバリデーション（1〜60 文字・strip → 422）を ThreadService 側に配置 → 承認。
   4. 回答完了ごとにスレッド一覧を再取得（unshift でなく GET）→ 承認。updated_at 順の反映を優先。
   5. ログアウトをヘッダーからサイドバー最下部へ移設 → 承認（UI_CHAT.md §4.2-4 の許容範囲）。
+
+## Q-013: LoadingSpinnerV5 の実況テキスト不可視バグ（UI 評価エージェント起票・Fable 裁定）
+- 日付: 2026-07-13
+- 起票: UI 評価エージェント（FR-9 採点 1 巡目、75/100）
+- 状況: pending 中のステータス実況テキスト（FR-2 の確定仕様）が、`LoadingSpinnerV5.vue` の `.aurora-ring-v5__status` に付いた無限 shimmer アニメーション（2.2s infinite）を Vue `<Transition mode="out-in">` が終了検知に誤採用するため、leave 状態のまま `opacity: 0` でほぼ常時不可視。ステータス更新間隔（2.5s）より leave が長く永久に leave 中となる。d76bad2（FR-9）では同ファイル無変更のため Phase 5（208ce91）由来の潜在バグ。reduced-motion 環境でのみ正常表示。
+- 裁定 (Fable): **修正を承認**（2026-07-13）。UI_LOADING_ANIMATION.md の不可侵対象は演出の意匠・タイミングであり、実況テキストの可視性は FR-2 の確定仕様そのもの。よってこれは仕様回復のバグ修正である。修正方法は最小のものに限る:
+  1. 第一候補: `<Transition name="aurora-ring-v5-status" mode="out-in">` に `type="transition"` を付与（Vue の終了検知を transition イベントに限定）。
+  2. 1 で解決しない場合のみ: shimmer の `animation` を内側 `<span>` へ移す（見た目・タイミング不変）。
+  3. morph・Aurora Ring・タイミング値・テキスト内容の変更は引き続き禁止。修正後、mock（MOCK_STATUS_DELAY_SECONDS=2.5）で実況テキストの表示・切替を Playwright で実証すること。
