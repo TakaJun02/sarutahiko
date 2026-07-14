@@ -54,15 +54,14 @@ function onDelete(threadId) {
 <template>
   <div class="flex h-full min-h-0 flex-col bg-[#111310] text-white">
     <div class="border-b border-edge px-4 pb-4 pt-4">
-      <div class="mb-4 flex items-center justify-between gap-3 px-1">
+      <div class="mb-4 flex items-center gap-3 px-1">
         <div class="flex min-w-0 items-center gap-3">
-          <img src="/app-icon.png" alt="" class="h-9 w-9 shrink-0 rounded-ui-sm shadow-soft" />
+          <img src="/app-icon.png" alt="" class="h-11 w-11 shrink-0 rounded-ui shadow-soft" />
           <div class="min-w-0">
-            <p class="truncate text-[13px] font-semibold tracking-[-0.015em]">本荘キャンパス案内</p>
-            <p class="font-display mt-0.5 truncate text-[9px] font-medium uppercase tracking-[0.17em] text-white/40">Campus guide / AI</p>
+            <p class="font-display truncate text-base font-semibold tracking-[-0.025em]">APU-Navi</p>
+            <p class="mt-0.5 truncate text-[11px] text-white/45">本荘キャンパス案内</p>
           </div>
         </div>
-        <span class="font-display rounded-full border border-white/10 px-2 py-1 text-[9px] font-semibold tracking-[0.14em] text-white/55">2026</span>
       </div>
       <button
         type="button"
@@ -78,7 +77,7 @@ function onDelete(threadId) {
     </div>
 
     <nav class="flex-1 overflow-y-auto px-2.5 pb-3 pt-4" :aria-label="navLabel">
-      <p class="font-display px-3 pb-2 text-[9px] font-semibold uppercase tracking-[0.2em] text-white/35">Recent / 会話履歴</p>
+      <p class="px-3 pb-2 text-xs font-medium text-white/45">会話履歴</p>
       <p v-if="threads.length === 0" class="px-3 pt-1 text-xs leading-5 text-white/40">
         まだ会話がありません。
       </p>

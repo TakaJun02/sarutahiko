@@ -7,17 +7,36 @@ import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import ThreadSidebar from '../components/ThreadSidebar.vue'
 import { useAuthStore } from '../stores/auth'
 import { toFriendlyErrorMessage, useChatStore } from '../stores/chat'
+import {
+  buildGreetingLines,
+  EMPTY_GREETING_VARIANTS,
+  selectGreetingVariant,
+  splitGreetingName,
+} from '../utils/emptyGreeting'
 
 const OPEN_CAMPUS_DATE = '2026-07-19'
+const LAST_GREETING_STORAGE_KEY = 'apu-navi:last-empty-greeting'
 // Line-grid aligned: 20px vertical padding + 24px line-height x 6 lines.
 const INPUT_MAX_HEIGHT_PX = 164
 
 // Suggested first questions for the empty state (tap inserts into the input).
 const suggestions = [
-  'アクセス方法は？',
-  '模擬講義は何がある？',
-  '学食メニューは？',
-  '無料送迎バスの時刻は？',
+  {
+    label: '無料送迎バスの時刻は？',
+    icon: 'M5 4h14a1.5 1.5 0 0 1 1.5 1.5V16a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2V5.5A1.5 1.5 0 0 1 5 4z M3.5 11h17 M8 21v-3 M16 21v-3 M7.5 15h.01 M16.5 15h.01',
+  },
+  {
+    label: '模擬講義は何がある？',
+    icon: 'M2.5 9.5 12 5l9.5 4.5L12 14 2.5 9.5z M6.5 11.6v3.9c0 1.3 2.5 2.4 5.5 2.4s5.5-1.1 5.5-2.4v-3.9 M21 10v4.5',
+  },
+  {
+    label: '食堂から D404 への行き方は？',
+    icon: 'M4 18h4a4 4 0 0 0 4-4v-4a4 4 0 0 1 4-4h8 M16 3l4 3-4 3',
+  },
+  {
+    label: '個別進学相談はどこでやってる？',
+    icon: 'M12 21s-6.5-5.4-6.5-10a6.5 6.5 0 1 1 13 0c0 4.6-6.5 10-6.5 10z M12 13a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
+  },
 ]
 
 const auth = useAuthStore()
@@ -32,15 +51,10 @@ const inputRef = ref(null)
 const footerRef = ref(null)
 const footerClearancePx = ref(224)
 const expandedSourceKeys = ref(new Set())
+const activeGreeting = ref(EMPTY_GREETING_VARIANTS[0])
 
-const greetingNameParts = computed(() => {
-  const characters = Array.from(auth.user?.name || '')
-  const tailStart = Math.max(characters.length - 2, 0)
-  return {
-    head: characters.slice(0, tailStart).join(''),
-    tail: characters.slice(tailStart).join(''),
-  }
-})
+const greetingNameParts = computed(() => splitGreetingName(auth.user?.name || ''))
+const greetingLines = computed(() => buildGreetingLines(activeGreeting.value, auth.user?.name || ''))
 
 // Thread rename / delete confirmation dialog (replaces window.prompt/confirm).
 const dialog = ref(null) // { kind: 'rename' | 'delete', threadId, threadTitle }
@@ -55,6 +69,7 @@ const busyHint = ref('')
 
 let dialogReturnFocus = null
 let busyHintTimer = null
+let previousGreetingId = ''
 
 let footerResizeObserver = null
 let pendingScrollBehavior = null
@@ -71,6 +86,26 @@ const countdownLabel = computed(() => {
   }
   return ''
 })
+
+function chooseEmptyGreeting() {
+  let previousId = previousGreetingId
+  try {
+    previousId = window.sessionStorage.getItem(LAST_GREETING_STORAGE_KEY) || previousId
+  } catch {
+    // Storage can be unavailable in restrictive browser modes; randomness still works.
+  }
+
+  const nextGreeting = selectGreetingVariant(previousId)
+  activeGreeting.value = nextGreeting
+  previousGreetingId = nextGreeting.id
+  try {
+    window.sessionStorage.setItem(LAST_GREETING_STORAGE_KEY, nextGreeting.id)
+  } catch {
+    // Keep the selected greeting even when persistence is unavailable.
+  }
+}
+
+chooseEmptyGreeting()
 
 function showBusyHint() {
   busyHint.value = '回答をまとめている途中です。少しだけ待っていてくださいね。'
@@ -196,6 +231,9 @@ function selectThread(threadId) {
 
 function startNewChat() {
   closeDrawer()
+  if (chat.messages.length === 0) {
+    chooseEmptyGreeting()
+  }
   if (route.params.threadId) {
     router.push('/chat')
   } else {
@@ -373,6 +411,15 @@ watch(draft, () => {
 })
 
 watch(
+  () => chat.messages.length,
+  (messageCount, previousMessageCount) => {
+    if (messageCount === 0 && previousMessageCount > 0) {
+      chooseEmptyGreeting()
+    }
+  },
+)
+
+watch(
   () => chat.messages.map((message) => messageSourceKey(message)),
   (keys) => {
     const currentKeys = new Set(keys)
@@ -435,7 +482,13 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="chat-shell flex h-dvh overflow-hidden text-white">
-    <aside class="hidden w-[17.5rem] shrink-0 border-r border-edge lg:block">
+    <div class="ambient-clouds" aria-hidden="true">
+      <span class="ambient-cloud ambient-cloud--clay"></span>
+      <span class="ambient-cloud ambient-cloud--slate"></span>
+      <span class="ambient-cloud ambient-cloud--moss"></span>
+    </div>
+
+    <aside class="relative z-10 hidden w-[17.5rem] shrink-0 border-r border-edge lg:block">
       <ThreadSidebar
         :threads="chat.threads"
         :current-thread-id="chat.threadId"
@@ -479,7 +532,7 @@ onBeforeUnmount(() => {
       </aside>
     </div>
 
-    <main class="flex h-full min-w-0 flex-1 flex-col overflow-y-auto">
+    <main class="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-y-auto">
       <header class="sticky top-0 z-20 border-b border-edge bg-ink-base/[0.88] backdrop-blur-xl">
         <div class="mx-auto flex min-h-[68px] max-w-3xl items-center gap-3 px-4 py-2.5">
           <button
@@ -493,18 +546,18 @@ onBeforeUnmount(() => {
             </svg>
           </button>
           <div class="flex min-w-0 items-center gap-3 lg:hidden">
-            <img src="/app-icon.png" alt="" class="h-9 w-9 rounded-ui-sm shadow-soft" />
+            <img src="/app-icon.png" alt="" class="h-10 w-10 rounded-ui-sm shadow-soft" />
             <div class="min-w-0">
-              <h1 class="truncate text-sm font-semibold tracking-[-0.015em]">本荘キャンパス案内 AI</h1>
-              <p class="font-display mt-0.5 truncate text-[9px] font-medium uppercase tracking-[0.15em] text-white/40">Akita Prefectural University</p>
+              <h1 class="font-display truncate text-base font-semibold tracking-[-0.025em]">APU-Navi</h1>
+              <p class="mt-0.5 truncate text-[11px] text-white/45">本荘キャンパス案内</p>
             </div>
           </div>
           <div class="hidden w-full items-center justify-between gap-6 lg:flex">
             <div class="flex items-center gap-3">
-              <span class="h-1.5 w-1.5 rounded-full bg-brand-signal" aria-hidden="true"></span>
-              <h1 class="font-display text-[10px] font-semibold uppercase tracking-[0.2em] text-white/70">Campus desk / online</h1>
+              <img src="/app-icon.png" alt="" class="h-8 w-8 rounded-ui-sm shadow-soft" />
+              <h1 class="font-display text-sm font-semibold tracking-[-0.02em] text-white/90">APU-Navi</h1>
             </div>
-            <p class="font-display text-[10px] font-medium uppercase tracking-[0.18em] text-white/35">Honjo / OC 2026</p>
+            <p class="font-display text-[10px] font-medium uppercase tracking-[0.18em] text-white/40">Honjo / OC 2026</p>
           </div>
         </div>
       </header>
@@ -518,43 +571,41 @@ onBeforeUnmount(() => {
             v-if="chat.messages.length === 0"
             class="relative mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-5 py-8 sm:px-4 sm:py-12 md:max-lg:justify-end md:max-lg:pb-16"
           >
-            <div class="chat-empty__identity flex items-center gap-3">
-              <img src="/app-icon.png" alt="" class="h-10 w-10 rounded-ui-sm shadow-soft" />
-              <div>
-                <p class="font-display text-[10px] font-semibold uppercase tracking-[0.2em] text-white/65">Ask Honjo</p>
-                <p class="mt-0.5 text-xs text-white/40">あなたのキャンパス案内デスク</p>
-              </div>
+            <div class="chat-empty__identity">
+              <img src="/app-icon.png" alt="APU-Navi" class="h-14 w-14 rounded-ui shadow-soft" />
             </div>
 
             <h2 class="chat-empty__heading mt-6 max-w-2xl text-[clamp(2rem,5vw,3.6rem)] font-semibold leading-[1.12] tracking-[-0.05em] text-white/90">
-              <span class="block">こんにちは、</span>
-              <span v-if="auth.user?.name" class="aurora-copy chat-empty__name"><span>{{ greetingNameParts.head }}</span><span class="chat-empty__name-tail">{{ greetingNameParts.tail }} さん。</span></span>
-              <span v-else>ようこそ。</span>
+              <span
+                v-for="(line, index) in greetingLines"
+                :key="`${line.type}-${index}`"
+                class="chat-empty__greeting-line"
+              >
+                <span v-if="line.type === 'name'" class="aurora-copy chat-empty__name"><span>{{ greetingNameParts.head }}</span><span class="chat-empty__name-tail">{{ greetingNameParts.tail }}{{ activeGreeting.nameSuffix }}</span></span>
+                <template v-else>{{ line.text }}</template>
+              </span>
             </h2>
 
-            <div class="chat-empty__support mt-5 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <p class="text-[15px] leading-7 text-white/55">学科、施設、アクセス。気になることからどうぞ。</p>
-              <p
-                v-if="countdownLabel"
-                class="countdown-chip inline-flex min-h-11 shrink-0 items-center gap-2.5 rounded-full px-4 py-2 text-xs font-medium text-white/75"
-              >
-                <span class="h-1.5 w-1.5 rounded-full bg-brand-signal" aria-hidden="true"></span>
-                {{ countdownLabel }}
-              </p>
-            </div>
+            <p
+              v-if="countdownLabel"
+              class="chat-empty__support countdown-chip mt-5 inline-flex min-h-11 w-fit shrink-0 items-center gap-2.5 rounded-full px-4 py-2 text-xs font-medium text-white/75"
+            >
+              <span class="h-1.5 w-1.5 rounded-full bg-brand-signal" aria-hidden="true"></span>
+              {{ countdownLabel }}
+            </p>
 
             <div class="chat-empty__actions mt-8 grid w-full gap-2.5 sm:grid-cols-2">
               <button
-                v-for="(suggestion, index) in suggestions"
-                :key="suggestion"
+                v-for="suggestion in suggestions"
+                :key="suggestion.label"
                 type="button"
                 class="suggestion-card group flex min-h-16 items-center gap-4 rounded-ui border border-edge bg-ink-surface/75 px-4 py-3 text-left text-sm text-white/75 shadow-hairline transition duration-base ease-expressive hover:-translate-y-0.5 hover:border-edge-strong hover:bg-ink-raised hover:text-white active:translate-y-0 active:scale-[0.985]"
-                @click="applySuggestion(suggestion)"
+                @click="applySuggestion(suggestion.label)"
               >
-                <span class="font-display text-[10px] font-semibold tracking-[0.16em] text-white/40 transition duration-base ease-standard group-hover:text-brand-soft">
-                  {{ String(index + 1).padStart(2, '0') }}
-                </span>
-                <span class="flex-1">{{ suggestion }}</span>
+                <svg aria-hidden="true" class="h-5 w-5 shrink-0 text-white/45 transition duration-base ease-standard group-hover:text-brand-soft" viewBox="0 0 24 24" fill="none">
+                  <path :d="suggestion.icon" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span class="flex-1">{{ suggestion.label }}</span>
               </button>
             </div>
           </div>
@@ -730,9 +781,6 @@ onBeforeUnmount(() => {
                 {{ busyHint }}
               </p>
             </Transition>
-            <p class="font-display mt-2 hidden text-center text-[10px] tracking-[0.06em] text-white/35 sm:block">
-              Enter で送信 ・ Shift + Enter で改行
-            </p>
           </div>
         </form>
       </section>
@@ -749,8 +797,7 @@ onBeforeUnmount(() => {
         <div class="absolute inset-0 bg-black/70 backdrop-blur-[2px]" @click="closeDialog"></div>
         <div class="dialog-panel relative w-full max-w-sm rounded-ui-lg border border-edge-strong bg-ink-raised p-5 shadow-glass">
           <template v-if="dialog.kind === 'rename'">
-            <p class="font-display text-[9px] font-semibold uppercase tracking-[0.2em] text-brand-soft">Edit conversation</p>
-            <h3 class="mt-2 text-lg font-semibold tracking-[-0.025em]">スレッド名を変更</h3>
+            <h3 class="text-lg font-semibold tracking-[-0.025em]">スレッド名を変更</h3>
             <input
               ref="dialogInputRef"
               v-model="dialogInput"
@@ -761,8 +808,7 @@ onBeforeUnmount(() => {
             />
           </template>
           <template v-else>
-            <p class="font-display text-[9px] font-semibold uppercase tracking-[0.2em] text-red-300/75">Delete conversation</p>
-            <h3 class="mt-2 text-lg font-semibold tracking-[-0.025em]">会話を削除しますか？</h3>
+            <h3 class="text-lg font-semibold tracking-[-0.025em]">会話を削除しますか？</h3>
             <p class="mt-2 break-words text-sm leading-6 text-white/60">
               「{{ dialog.threadTitle }}」を削除すると元に戻せません。
             </p>

@@ -189,10 +189,8 @@ onBeforeUnmount(() => {
               class="h-10 w-10 shrink-0 rounded-ui-sm shadow-[0_8px_24px_-14px_rgba(23,25,22,0.55)]"
             />
             <div class="min-w-0">
-              <p class="truncate text-[13px] font-semibold tracking-[-0.01em] sm:text-sm">本荘キャンパス案内 AI</p>
-              <p class="font-display mt-0.5 truncate text-[10px] font-medium uppercase tracking-[0.16em] text-black/55">
-                Akita Prefectural University
-              </p>
+              <p class="font-display truncate text-base font-semibold tracking-[-0.025em]">APU-Navi</p>
+              <p class="mt-0.5 truncate text-[10px] font-medium text-black/55">秋田県立大学 本荘キャンパス案内</p>
             </div>
           </div>
           <div class="hidden shrink-0 items-center gap-3 sm:flex">
