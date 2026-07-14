@@ -610,3 +610,151 @@ top を以下に適用する（すべて Tailwind 任意値の `env()` 直書き
 - [ ] デスクトップ（safe-area 0・visualViewport = ウィンドウ高）で見た目の回帰なし
       （ヘッダー高さ・ログインの構図・ダイアログ挙動が従来どおり）。
 - [ ] `npm run test` / `npm run build` green。新規 composable テストを含む。
+
+## 13. FR-24 キーボード表示時のレイアウト最適化と「最新へ戻る」ボタン（2026-07-15 追加・利用者指示 3 点）
+
+利用者指示（スマホ実機・チャット画面）:
+
+1. キーボード（入力フォーム）を開いたとき、**フォームがやや上がりすぎる**。
+2. **会話開始前（空状態）**でキーボードを開いたら**例文チップは非表示**にし、ロゴとあいさつメッセージが
+   **フォームと画面上端の間にちょうどよく収まるよう自動リサイズ**する挙動にする。
+3. **会話履歴がある状態**でキーボードを開いたとき: 履歴の最下部にいる場合は**履歴を上に押し上げて
+   最下部固定を維持**、途中にいる場合は**表示位置を保ったまま**開く。あわせて履歴の途中にいるときは
+   ChatGPT / Gemini のように**「いちばん下へすぐ戻れる」ボタンを composer 直上に半透明ガラス調**で置く。
+
+（利用者文面の「過去動画」は前後の文脈「会話履歴を上に押し上げる」から「過去の会話（履歴）」と解釈 — Fable 裁定）
+
+### 13-0 原因分析（Fable 調査済み・実装前に再確認不要）
+
+- 「フォームが上がりすぎ」: composer の下余白は `pb-[calc(0.75rem_+_env(safe-area-inset-bottom))]`。
+  キーボード表示中はシェル下端（= visualViewport 下端）がキーボード上端に一致するが、
+  `env(safe-area-inset-bottom)`（ホームインジケータ、standalone で約 34px）は**キーボード表示中も
+  変わらない**ため、composer がキーボード上端から約 46px（0.75rem + 34px）浮く。
+- 空状態: 空状態コンテンツ（ロゴ 56px＋見出し `clamp(2rem,5vw,3.6rem)`＋例文チップ群）は
+  キーボード表示時の可視高（iPhone 14 縦: visualViewport 約 500px − ヘッダー約 115px −
+  composer 約 105px ≒ 280px）に収まらず内部スクロールが発生し、「ちょうどよく」表示されない。
+- 履歴あり: シェル縮小時、ブラウザは scrollTop を保持するため**最下部にいた場合は下端が隠れる**
+  （最下部固定は自前で再スクロールしないと実現できない）。途中閲覧時の位置保持は既定挙動で満たされる。
+- 自動追従の副作用: 現状はストリーミング更新のたびに**無条件で**最下部へ scrollIntoView しており、
+  履歴を遡って読んでいる最中でも下へ引き戻される。「最新へ戻る」ボタンを意味あるものにするには
+  **最下部にいるときだけ自動追従**するよう条件化が必要（13-4 規則 2。ChatGPT / Gemini と同じ規範）。
+
+### 13-1 キーボード検知と viewport 共有状態（`useAppViewport.js` 拡張）
+
+- 共有リアクティブ状態をモジュールスコープに新設し、`useViewportState()` としてエクスポートする:
+  `appHeight`（number | null。`--app-height` に書いた px 値）と `keyboardOpen`（boolean）。
+  ChatView はこれを watch してスクロール制御（13-4 規則 1）に使う。
+- キーボード検知（`syncAppHeight` 内。`scale > 1` 中は従来どおり一切更新しない）:
+  - 基準高 `maxViewportHeight` を保持する。`visualViewport.width` が変わったら（回転・分割等）
+    現在高でリセットし、それ以外は `max(現在値, visualViewport.height)` で更新する。
+  - `keyboardOpen = (pointer: coarse) && (maxViewportHeight - visualViewport.height >= 150)`。
+    定数 `KEYBOARD_MIN_DELTA_PX = 150`（ソフトキーボードは 260px 以上、Safari ツールバー伸縮・
+    Android URL バーの高さ変動は 110px 以下のため誤検知しない）。
+    `window.matchMedia('(pointer: coarse)')` でデスクトップのウィンドウ縦リサイズを除外する。
+  - 判定を `document.documentElement` の `data-keyboard="open"` 属性へ反映（閉時は属性を削除）。
+    CSS 側は `html[data-keyboard='open']` で分岐する（13-2 / 13-3）。
+  - この方式は `window.innerHeight` に依存しないため、iOS（キーボードが visualViewport のみ
+    縮める）と Android（`interactive-widget=resizes-content` で layout viewport ごと縮む —
+    どちらでも visualViewport.height は縮む）の両方で同一コードで機能する。
+- アンマウント時はリスナー解除に加え、`data-keyboard` 属性を削除し共有状態を初期値へ戻す。
+
+### 13-2 composer 底部余白の是正（指示 1）
+
+- `frontend/src/style.css` に追加:
+  `html[data-keyboard='open'] .composer-dock { padding-bottom: 0.75rem; }`
+  （キーボードがホームインジケータ領域を覆うため、表示中は safe-area 加算を外して
+  キーボード直上に密着させる）。
+- キーボード閉時は現状の `calc(0.75rem + env(safe-area-inset-bottom))` のまま変更しない。
+- footer 高さの変化は既存の ResizeObserver（`updateFooterClearance`）が拾うため追加対応不要。
+
+### 13-3 空状態のキーボード時コンパクト化（指示 2）
+
+`html[data-keyboard='open']` 配下でのみ適用する（style.css。既存の `.chat-empty__*` フックを使う）:
+
+- `.chat-empty__actions`（例文チップ群）: `display: none`。
+  キーボードを閉じた際に entrance アニメーション（`empty_item_enter`）が再生されるのは許容
+  （初期表示と同じ振り付けのため違和感がない。目障りと判断したら Sol 裁量で opacity ベースの
+  抑制に変えてよい）。
+- `.chat-empty__identity img`（ロゴ）: 3.5rem 四方 → **2.5rem 四方**。
+- `.chat-empty__heading`: font-size **`clamp(1.5rem, 5vw, 1.875rem)`**・margin-top **1rem**（通常 1.5rem）。
+- 上記の寸法変化には `transition`（`var(--motion-base)` ease-out、対象: width / height /
+  font-size / margin）を付けて開閉を滑らかにする。`prefers-reduced-motion: reduce` では transition なし。
+- **受け入れ基準**: iPhone 14 縦相当（visualViewport ≒ 390×500）で、ロゴ＋あいさつ（最長バリアント・
+  長めのニックネーム）が**内部スクロールなしで全可視**、かつ既存の flex `justify-center` により
+  **ヘッダー下端と composer 上端の間で上下センタリング**されること。
+  上記数値は Sol が ±20% の範囲で微調整してよい（基準を満たすこと）。
+
+### 13-4 履歴のスクロール保持・最下部ピン留め・自動追従の条件化（指示 3 前半）
+
+ChatView に「最下部にいるか」の追跡を導入し、スクロール挙動を次の規則に統一する:
+
+- **状態**: `isAtBottom`（ref、初期値 true）。`<main>`（ref 付与）の `@scroll.passive` で
+  `scrollHeight - scrollTop - clientHeight <= 72`（定数 `AT_BOTTOM_THRESHOLD_PX = 72`）を評価して更新。
+  ただし直近の smooth スクロール開始から **600ms**（定数 `SMOOTH_SCROLL_SUPPRESS_MS`）は計測を
+  スキップする（プログラム起因の smooth アニメーション途中経過を「ユーザーが上へ離脱した」と
+  誤認しないため。instant（'auto'）スクロールは同期完了するため抑制不要）。
+- **`scrollToBottom(fallbackBehavior = 'smooth')`**: behavior は
+  `pendingScrollBehavior || fallbackBehavior`（pending の消費・null 戻しは現行どおり）。
+  実行後に `isAtBottom = true` を設定し、smooth のときのみ上記の計測抑制ウィンドウを張る。
+- **規則 1（キーボード開閉・シェル高変化）**: `useViewportState().appHeight` を watch し、
+  メッセージ 1 件以上かつ `isAtBottom` なら `scrollToBottom('auto')`（instant で最下部を維持 =
+  履歴が押し上がる）。`isAtBottom` でなければ何もしない（ブラウザ既定の scrollTop 保持に任せる =
+  表示位置そのまま）。キーボード閉時も同watchで整合する（閉で最下部なら自動的に最下部のまま）。
+- **規則 2（ストリーミング自動追従の条件化）**: 既存のメッセージ内容シグネチャ watch は
+  `pendingScrollBehavior || isAtBottom` のときだけ `scrollToBottom('auto')` を呼ぶ
+  （従来の無条件 smooth 追従を廃止。上に遡って読んでいる間は引き戻さない。
+  チャンク間隔が短いため追従は instant でよい — ChatGPT 同等の体感）。
+- **規則 3（明示アクションは常に最下部へ）**: `send()` / `retryLastMessage()` は実行時に
+  `pendingScrollBehavior = 'smooth'` を設定する（履歴途中から送信しても smooth で最下部へ。
+  従来の送信時の見た目を保つ）。スレッド復元は従来どおり `'auto'`。
+- メッセージが 0 件になったとき（newChat 等）は `isAtBottom = true` に戻す
+  （既存の greeting 再抽選 watch に追記でよい）。
+
+### 13-5 「最新へ戻る」ボタン（指示 3 後半）
+
+- 表示条件: `chat.messages.length > 0 && !isAtBottom`（空状態・最下部では出ない）。
+  `<Transition>`（opacity ＋ 4px 上昇 ＋ scale 0.96→1、`var(--motion-base)`。
+  reduced-motion では transition なし）で出入りする。
+- 配置: composer フォーム内の `.mx-auto.w-full.max-w-3xl` ラッパーを `relative` 化し、その中に
+  `absolute -top-14 left-1/2 -translate-x-1/2` で配置（composer シェル上端から約 12px 上・水平中央。
+  composer-dock の上部グラデーション帯に浮かぶ。sticky フォーム基準なのでスクロールに影響されない）。
+- 見た目（半透明ガラス。既存トークンで構成）: 円形 `h-11 w-11`（44px タッチターゲット）、
+  `rounded-full border border-edge-strong bg-ink-raised/70 shadow-glass backdrop-blur-md`、
+  中に下向き矢印 SVG（現行アイコンと同じ stroke 系。`text-white/80`、hover で `text-white`・
+  背景不透明度アップ）。hover / active は送信ボタンの作法（`active:scale-[0.94]` 等）に合わせる。
+  細部の質感は Sol 裁量（「半透明のガラス」の印象を満たすこと）。
+- 挙動: click で `scrollToBottom('smooth')`（`isAtBottom` が true になり自身は即フェードアウト）。
+  **`@mousedown.prevent` を付けて composer の textarea からフォーカスを奪わない**
+  （タップしてもキーボードが閉じない — ChatGPT / Gemini 同等）。
+- a11y: `aria-label="最新のメッセージへ移動"`。
+- z 順: フォーム（z-10）内のため履歴の上・ヘッダー（z-20）ダイアログ（z-50）の下で問題なし。
+
+### 13-6 テスト
+
+- `useAppViewport.spec.js` に追加（visualViewport モック＋ `matchMedia` モック）:
+  (a) 高さが基準から 150px 以上縮むと `data-keyboard="open"` が付き `keyboardOpen` ref が true になる
+  (b) 高さ復帰で属性が外れ ref が false に戻る
+  (c) `pointer: coarse` でない環境では縮んでも open にならない
+  (d) width 変化（回転相当）で基準がリセットされ、リセット直後の縮小高では open にならない
+  (e) `scale > 1` ではキーボード判定も更新されない
+  (f) アンマウントで `data-keyboard` が除去され共有状態が初期化される
+- `ChatView.spec.js`（既存のソース文字列方式）に追加:
+  (a) 「最新へ戻る」ボタンが `aria-label`・`@mousedown.prevent`・ガラス系クラス群を持つ
+  (b) メッセージシグネチャ watch が `isAtBottom` でゲートされている（無条件追従の再発防止）
+  (c) `send()` が `pendingScrollBehavior = 'smooth'` を設定する
+- 既存テスト（25 件）に回帰を出さない。`npm run test` / `npm run build` green。
+
+### 13-7 検収チェックリスト（FR-24 分）
+
+- [ ] キーボード表示中、composer とキーボード上端の隙間が 0.75rem 相当まで詰まる（実機は利用者）。
+- [ ] 空状態＋キーボード表示で例文チップが消え、ロゴ＋あいさつが縮小して内部スクロールなしで
+      ヘッダーと composer の間に中央表示される。キーボードを閉じると元の寸法・例文表示に戻る。
+- [ ] 履歴最下部でキーボードを開くと、最下部固定のまま履歴が押し上がる。
+- [ ] 履歴途中でキーボードを開くと、表示位置が変わらない。
+- [ ] 履歴途中で「最新へ戻る」ボタンが composer 直上・水平中央にガラス調で表示され、
+      タップで最下部へ smooth スクロールして消える。タップしてもキーボードは閉じない（実機）。
+- [ ] ストリーミング中に上へスクロールすると自動追従が止まり、ボタンで復帰すると追従が再開する。
+- [ ] 最下部・空状態ではボタンが出ない。
+- [ ] デスクトップ（fine pointer）: ウィンドウ縦リサイズでキーボード判定が誤発火せず、
+      スクロール挙動・composer 余白に回帰がない。
+- [ ] `npm run test` / `npm run build` green。
