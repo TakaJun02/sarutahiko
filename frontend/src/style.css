@@ -40,6 +40,7 @@
   --motion-stagger: 60ms;
   --motion-ambient-login: 72s;
   --motion-ambient-chat: 84s;
+  --composer-focus-ring-width: 1px;
   --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-expressive: cubic-bezier(0.16, 1, 0.3, 1);
   background: var(--color-canvas);
@@ -386,6 +387,47 @@ a {
   transform: translate3d(0, 12%, 0) scale(0.985);
 }
 
+.chat-shell--active.chat-shell--thinking .ambient-glow {
+  opacity: 0.72;
+  transform: translate3d(0, 10%, 0) scale(0.995);
+}
+
+/* The wrapper fades while its paused child holds the current pulse phase. */
+.ambient-thinking-glow {
+  position: absolute;
+  inset: 0;
+  display: block;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 520ms ease-out;
+}
+
+.ambient-thinking-glow::before {
+  position: absolute;
+  inset: -3% -6%;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 55%,
+    rgba(40, 56, 148, 0.03) 64%,
+    rgba(40, 56, 148, 0.12) 78%,
+    rgba(40, 56, 148, 0.32) 100%
+  );
+  content: "";
+  transform-origin: 50% 72%;
+  animation: ambient_glow_thinking 6.8s ease-in-out infinite;
+  animation-play-state: paused;
+}
+
+.chat-shell--thinking .ambient-thinking-glow {
+  opacity: 0.28;
+}
+
+.chat-shell--thinking .ambient-thinking-glow::before {
+  will-change: opacity, transform;
+  animation-play-state: running;
+}
+
 @keyframes ambient_glow_breathe {
   from {
     opacity: 0.8;
@@ -394,6 +436,26 @@ a {
   to {
     opacity: 1;
     transform: translate3d(1%, -1%, 0) scale(1.02);
+  }
+}
+
+@keyframes ambient_glow_thinking {
+  0%,
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  22% {
+    opacity: 0.42;
+    transform: translate3d(-0.6%, 0.35%, 0) scale(1.01);
+  }
+  48% {
+    opacity: 1;
+    transform: translate3d(0.7%, -0.45%, 0) scale(1.024);
+  }
+  72% {
+    opacity: 0.62;
+    transform: translate3d(0.25%, 0.55%, 0) scale(1.008);
   }
 }
 
@@ -488,8 +550,9 @@ a {
 }
 
 .composer-shell:has(textarea:focus-visible) {
-  outline: 2px solid var(--color-signal-soft);
+  outline: var(--composer-focus-ring-width) solid #ff8f70;
   outline-offset: 3px;
+  animation: composer_focus_aurora 9s ease-in-out infinite;
 }
 
 .composer-shell--streaming {
@@ -498,6 +561,24 @@ a {
     linear-gradient(var(--color-raised), var(--color-raised)) padding-box,
     var(--aurora-edge) border-box;
   box-shadow: 0 18px 54px -26px rgba(0, 0, 0, 0.96), 0 0 28px rgba(255, 143, 112, 0.055);
+}
+
+.composer-shell--streaming:has(textarea:focus-visible) {
+  outline-color: #ff8f70;
+  animation: none;
+}
+
+@keyframes composer_focus_aurora {
+  0%,
+  100% {
+    outline-color: #ff8f70;
+  }
+  33.333% {
+    outline-color: #ffc46b;
+  }
+  66.666% {
+    outline-color: #6fe8a8;
+  }
 }
 
 .message-list-enter-active {
@@ -757,7 +838,8 @@ a {
 }
 
 @media (min-width: 1024px) {
-  .ambient-glow {
+  .ambient-glow,
+  .ambient-thinking-glow {
     left: 17.5rem;
   }
 
@@ -783,6 +865,18 @@ a {
         transparent 94%
       );
     transform-origin: 50% 58%;
+  }
+
+  .ambient-thinking-glow::before {
+    inset: -3%;
+    background: radial-gradient(
+      ellipse 50% 38% at 50% 70%,
+      rgba(26, 36, 88, 0.38) 0%,
+      rgba(26, 36, 88, 0.3) 34%,
+      rgba(26, 36, 88, 0.14) 58%,
+      rgba(26, 36, 88, 0.035) 76%,
+      transparent 96%
+    );
   }
 
   .composer-dock {
@@ -828,9 +922,20 @@ a {
 
   .ambient-glow,
   .ambient-glow::before,
+  .ambient-thinking-glow,
+  .ambient-thinking-glow::before,
   .login-hero::before {
     animation: none !important;
     transform: none !important;
+  }
+
+  .ambient-thinking-glow {
+    opacity: 0 !important;
+  }
+
+  .composer-shell:has(textarea:focus-visible) {
+    outline-color: #ff8f70;
+    animation: none !important;
   }
 
   .aurora-ring-v5-status-enter-active,
