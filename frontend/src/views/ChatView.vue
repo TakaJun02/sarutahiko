@@ -528,10 +528,52 @@ onBeforeUnmount(() => {
               <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
             </svg>
           </button>
-          <h1 class="min-w-0 truncate font-display text-base font-semibold tracking-[-0.025em] lg:hidden">APU-Navi</h1>
+          <h1 class="flex min-w-0 items-baseline gap-1.5 font-display lg:hidden">
+            <span class="min-w-0 truncate text-base font-semibold tracking-[-0.025em]">APU-Navi</span>
+            <span class="flex shrink-0 items-baseline gap-1 whitespace-nowrap">
+              <span class="text-[10px] font-medium uppercase tracking-[0.18em] text-white/35">Powered by</span>
+              <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-soft">Gemma4</span>
+            </span>
+          </h1>
+          <a
+            href="https://www.cps.akita-pu.ac.jp/"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="ml-auto grid h-9 w-9 shrink-0 place-items-center text-white/25 transition duration-fast ease-standard hover:text-white/70 focus-visible:text-white/70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-6px] focus-visible:outline-white/35 lg:hidden"
+            aria-label="CPS 研究室サイト"
+          >
+            <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="none">
+              <path d="M5 6.5h3l4 5 4-5h3M12 11.5V18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="5" cy="6.5" r="1.25" stroke="currentColor" stroke-width="1.6" />
+              <circle cx="19" cy="6.5" r="1.25" stroke="currentColor" stroke-width="1.6" />
+              <circle cx="12" cy="19.25" r="1.25" stroke="currentColor" stroke-width="1.6" />
+            </svg>
+          </a>
           <div class="hidden w-full items-center justify-between gap-6 lg:flex">
-            <h1 class="font-display text-sm font-semibold tracking-[-0.02em] text-white/90">APU-Navi</h1>
-            <p class="font-display text-[10px] font-medium uppercase tracking-[0.18em] text-white/40">Honjo / OC 2026</p>
+            <h1 class="flex min-w-0 items-baseline gap-2 font-display">
+              <span class="min-w-0 truncate text-sm font-semibold tracking-[-0.02em] text-white/90">APU-Navi</span>
+              <span class="flex shrink-0 items-baseline gap-1 whitespace-nowrap">
+                <span class="text-[10px] font-medium uppercase tracking-[0.18em] text-white/35">Powered by</span>
+                <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-soft">Gemma4</span>
+              </span>
+            </h1>
+            <div class="ml-auto flex items-center gap-2">
+              <p class="font-display text-[10px] font-medium uppercase tracking-[0.18em] text-white/40">Honjo / OC 2026</p>
+              <a
+                href="https://www.cps.akita-pu.ac.jp/"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="grid h-9 w-9 shrink-0 place-items-center text-white/25 transition duration-fast ease-standard hover:text-white/70 focus-visible:text-white/70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-6px] focus-visible:outline-white/35"
+                aria-label="CPS 研究室サイト"
+              >
+                <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="none">
+                  <path d="M5 6.5h3l4 5 4-5h3M12 11.5V18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                  <circle cx="5" cy="6.5" r="1.25" stroke="currentColor" stroke-width="1.6" />
+                  <circle cx="19" cy="6.5" r="1.25" stroke="currentColor" stroke-width="1.6" />
+                  <circle cx="12" cy="19.25" r="1.25" stroke="currentColor" stroke-width="1.6" />
+                </svg>
+              </a>
+            </div>
           </div>
         </div>
       </header>

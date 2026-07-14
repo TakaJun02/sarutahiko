@@ -11,6 +11,7 @@ from openai import BadRequestError
 
 from app.agent.graph import (
     GENERATE_SYSTEM_PROMPT,
+    MAX_HISTORY_MESSAGES,
     MIN_GENERATION_CONTEXT_TOKENS,
     PROMPT_MARGIN_TOKENS,
     RealCampusAgent,
@@ -243,6 +244,10 @@ def _long_history(prefix: str = "HISTORY") -> list[dict[str, str]]:
         {"role": "assistant", "content": f"{prefix}_ASSISTANT_1 " + ("い" * 600)},
         {"role": "user", "content": f"{prefix}_USER_2 " + ("う" * 600)},
         {"role": "assistant", "content": f"{prefix}_ASSISTANT_2 " + ("え" * 600)},
+        {"role": "user", "content": f"{prefix}_USER_3 " + ("お" * 600)},
+        {"role": "assistant", "content": f"{prefix}_ASSISTANT_3 " + ("か" * 600)},
+        {"role": "user", "content": f"{prefix}_USER_4 " + ("き" * 600)},
+        {"role": "assistant", "content": f"{prefix}_ASSISTANT_4 " + ("く" * 600)},
     ]
 
 
@@ -728,6 +733,43 @@ async def test_web_search_uses_include_domains_only_on_first_round() -> None:
     assert [call["include_domains"] for call in search.calls] == [["akita-pu.ac.jp"], None]
 
 
+async def test_unavailable_search_provider_skips_web_status_and_completes() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries": ["最新情報"], "keywords": ["最新情報"], "intent": "event"}',
+            '{"sufficient": false, "missing": "Web確認", "grep_keywords": [], "retrieval_queries": [], "web_queries": ["最新情報"]}',
+        ],
+        tokens=["回答"],
+    )
+    search = FakeSearchProvider([])
+    search.available = False
+    agent = _agent(llm=llm, search=search, lexical=FakeLexicalSearch())
+
+    events = await _collect(agent, "最新情報を教えて")
+    status_steps = [data["step"] for event, data in events if event == "status"]
+
+    assert "web_search" not in status_steps
+    assert search.calls == []
+    assert events[-1][0] == "done"
+
+
+async def test_graph_history_slice_keeps_latest_eight_messages_in_order() -> None:
+    history = [
+        {
+            "role": "user" if index % 2 == 0 else "assistant",
+            "content": f"message-{index}",
+        }
+        for index in range(10)
+    ]
+
+    formatted = RealCampusAgent._format_history(history)
+
+    assert MAX_HISTORY_MESSAGES == 8
+    assert [message["content"] for message in formatted] == [
+        f"message-{index}" for index in range(2, 10)
+    ]
+
+
 async def test_stream_emits_search_status_step() -> None:
     llm = FakeLLMClient(
         completions=[
@@ -909,7 +951,7 @@ async def test_generation_budget_preserves_history_and_trims_context() -> None:
 
 
 async def test_generation_budget_shrinks_history_to_250_to_preserve_minimum_context() -> None:
-    agent = _agent(llm_context_window=2900, llm_answer_max_tokens=640)
+    agent = _agent(llm_context_window=3800, llm_answer_max_tokens=640)
     state = {
         "question": "施設について教えて",
         "history": _long_history("MIN_CONTEXT"),
@@ -920,15 +962,15 @@ async def test_generation_budget_shrinks_history_to_250_to_preserve_minimum_cont
     messages, context = agent._build_generation_messages_with_sources(state)
     history_messages = messages[1:-1]
 
-    assert _message_tokens(messages) <= 2900 - 640 - PROMPT_MARGIN_TOKENS
-    assert len(history_messages) == 4
-    assert [len(message["content"]) for message in history_messages] == [250, 250, 250, 250]
+    assert _message_tokens(messages) <= 3800 - 640 - PROMPT_MARGIN_TOKENS
+    assert len(history_messages) == 8
+    assert [len(message["content"]) for message in history_messages] == [250] * 8
     assert estimate_tokens(context.text) >= MIN_GENERATION_CONTEXT_TOKENS
     assert "CTX_START" in context.text
 
 
 async def test_generation_budget_uses_120_floor_and_accepts_sub_minimum_context() -> None:
-    agent = _agent(llm_context_window=2200, llm_answer_max_tokens=640)
+    agent = _agent(llm_context_window=2600, llm_answer_max_tokens=640)
     state = {
         "question": "施設について教えて",
         "history": _long_history("LOW_CONTEXT"),
@@ -939,9 +981,9 @@ async def test_generation_budget_uses_120_floor_and_accepts_sub_minimum_context(
     messages, context = agent._build_generation_messages_with_sources(state)
     history_messages = messages[1:-1]
 
-    assert _message_tokens(messages) <= 2200 - 640 - PROMPT_MARGIN_TOKENS
-    assert len(history_messages) == 4
-    assert [len(message["content"]) for message in history_messages] == [120, 120, 120, 120]
+    assert _message_tokens(messages) <= 2600 - 640 - PROMPT_MARGIN_TOKENS
+    assert len(history_messages) == 8
+    assert [len(message["content"]) for message in history_messages] == [120] * 8
     assert 0 < estimate_tokens(context.text) < MIN_GENERATION_CONTEXT_TOKENS
     assert "CTX_START" in context.text
 

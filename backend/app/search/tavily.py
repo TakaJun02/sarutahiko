@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -10,6 +11,8 @@ from app.search.models import WebSearchResult
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 TAVILY_TIMEOUT_SECONDS = 8.0
+TAVILY_COOLDOWN_SECONDS = 600
+TAVILY_UNAVAILABLE_STATUSES = frozenset({401, 403, 429, 432, 433})
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,11 @@ class TavilySearchProvider:
     ) -> None:
         self.api_key = api_key.strip()
         self.client_factory = client_factory or self._default_client
+        self.unavailable_until = 0.0
+
+    @property
+    def available(self) -> bool:
+        return bool(self.api_key) and time.monotonic() >= self.unavailable_until
 
     async def search(
         self,
@@ -30,8 +38,9 @@ class TavilySearchProvider:
         max_results: int = 3,
         include_domains: Sequence[str] | None = None,
     ) -> list[WebSearchResult]:
-        if not self.api_key:
-            logger.warning("Tavily search skipped because TAVILY_API_KEY is not configured")
+        if not self.available:
+            if not self.api_key:
+                logger.warning("Tavily search skipped because TAVILY_API_KEY is not configured")
             return []
 
         payload: dict[str, Any] = {
@@ -57,7 +66,16 @@ class TavilySearchProvider:
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPStatusError as exc:
-            logger.warning("Tavily search returned HTTP %s", exc.response.status_code)
+            status_code = exc.response.status_code
+            if status_code in TAVILY_UNAVAILABLE_STATUSES:
+                self.unavailable_until = time.monotonic() + TAVILY_COOLDOWN_SECONDS
+                logger.warning(
+                    "Tavily search returned HTTP %s; pausing requests for %s seconds",
+                    status_code,
+                    TAVILY_COOLDOWN_SECONDS,
+                )
+            else:
+                logger.warning("Tavily search returned HTTP %s", status_code)
             return []
         except httpx.TimeoutException:
             logger.warning("Tavily search timed out")

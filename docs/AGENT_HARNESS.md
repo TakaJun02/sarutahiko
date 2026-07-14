@@ -88,6 +88,7 @@
 | evaluate 各根拠の要約長 | 400 字 | **600 字** |
 | `LLM_ANSWER_MAX_TOKENS` | 640 | **1024** |
 | `MAX_HISTORY_CHARS` | 500 | 500（据え置き） |
+| `MAX_HISTORY_MESSAGES` | 4 | 4 → **8**（2026-07-14 FR-18-5・履歴 4 ターン化。`docs/RELEASE_PREP.md` §5） |
 
 - 予算管理ロジック（§5 ルール6・強制予算パス）は変更しない。定数のみ環境変数/定数更新。
 - `LLM_CONTEXT_WINDOW` が 2816 のままでも動作が壊れないこと（定数はあくまで上限であり、

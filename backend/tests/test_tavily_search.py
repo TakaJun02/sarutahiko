@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import httpx
 import pytest
@@ -68,19 +69,87 @@ async def test_tavily_maps_response_results_and_raw_content() -> None:
     assert results[0].text == "本文全体"
 
 
-async def test_tavily_returns_empty_list_for_api_errors_timeouts_and_missing_key() -> None:
-    missing_key_provider = TavilySearchProvider(api_key="")
-    assert await missing_key_provider.search("query") == []
+async def test_tavily_opens_circuit_after_432_and_skips_requests_during_cooldown(caplog) -> None:
+    factory_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(432, json={"detail": "quota exceeded"}, request=request)
+
+    def client_factory() -> httpx.AsyncClient:
+        nonlocal factory_calls
+        factory_calls += 1
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=8.0)
+
+    provider = TavilySearchProvider(api_key="test-key", client_factory=client_factory)
+
+    assert await provider.search("first query") == []
+    assert provider.available is False
+    assert await provider.search("second query") == []
+    assert factory_calls == 1
+    assert any("HTTP 432" in record.message and "600" in record.message for record in caplog.records)
+
+
+async def test_tavily_reprobes_after_cooldown_expires() -> None:
+    factory_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if factory_calls == 1:
+            return httpx.Response(432, json={"detail": "quota exceeded"}, request=request)
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "Recovered",
+                        "url": "https://example.test/recovered",
+                        "content": "available again",
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    def client_factory() -> httpx.AsyncClient:
+        nonlocal factory_calls
+        factory_calls += 1
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=8.0)
+
+    provider = TavilySearchProvider(api_key="test-key", client_factory=client_factory)
+
+    assert await provider.search("first query") == []
+    provider.unavailable_until = time.monotonic() - 1
+    results = await provider.search("retry query")
+
+    assert factory_calls == 2
+    assert provider.available is True
+    assert [result.title for result in results] == ["Recovered"]
+
+
+async def test_tavily_transient_errors_do_not_open_circuit() -> None:
 
     async def error_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"detail": "error"}, request=request)
 
-    assert await _provider(error_handler).search("query") == []
+    server_error_provider = _provider(error_handler)
+    assert await server_error_provider.search("query") == []
+    assert server_error_provider.available is True
 
     async def timeout_handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timeout", request=request)
 
-    assert await _provider(timeout_handler).search("query") == []
+    timeout_provider = _provider(timeout_handler)
+    assert await timeout_provider.search("query") == []
+    assert timeout_provider.available is True
+
+
+async def test_tavily_missing_key_is_unavailable() -> None:
+    missing_key_provider = TavilySearchProvider(api_key="")
+
+    assert missing_key_provider.available is False
+    assert await missing_key_provider.search("query") == []
+
+
+async def test_tavily_returns_empty_list_for_invalid_json() -> None:
 
     async def invalid_json_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="not json", request=request)

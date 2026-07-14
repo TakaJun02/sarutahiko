@@ -25,7 +25,7 @@ async def chat(
     thread_id = payload.thread_id
 
     ensured_thread_id = thread_service.ensure_thread(user, thread_id, question)
-    history = thread_service.get_recent_messages(ensured_thread_id, limit=6)
+    history = thread_service.get_recent_messages(ensured_thread_id, limit=8)
     thread_service.add_message(ensured_thread_id, "user", question)
     assistant_message_id = str(uuid.uuid4())
 
