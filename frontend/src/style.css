@@ -39,6 +39,9 @@
   --motion-slow: 480ms;
   --motion-stagger: 60ms;
   --motion-ambient: 16s;
+  --motion-cloud-clay: 68s;
+  --motion-cloud-slate: 76s;
+  --motion-cloud-moss: 84s;
   --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-expressive: cubic-bezier(0.16, 1, 0.3, 1);
   background: var(--color-canvas);
@@ -307,9 +310,89 @@ a {
 /* ------------------------------------------------------------------ */
 
 .chat-shell {
-  background:
-    radial-gradient(circle at 76% 18%, rgba(255, 118, 87, 0.035), transparent 27rem),
-    var(--color-canvas);
+  position: relative;
+  isolation: isolate;
+  background: var(--color-canvas);
+}
+
+.ambient-clouds {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ambient-cloud {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  pointer-events: none;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+}
+
+.ambient-cloud--clay {
+  top: -17rem;
+  right: -13rem;
+  width: 54rem;
+  height: 42rem;
+  opacity: 0.16;
+  background: radial-gradient(ellipse at center, rgba(143, 102, 91, 0.48), rgba(143, 102, 91, 0.18) 38%, transparent 72%);
+  animation: ambient_cloud_drift_clay var(--motion-cloud-clay) ease-in-out infinite alternate;
+}
+
+.ambient-cloud--slate {
+  bottom: -22rem;
+  left: -9rem;
+  width: 49rem;
+  height: 42rem;
+  opacity: 0.14;
+  background: radial-gradient(ellipse at center, rgba(86, 96, 120, 0.44), rgba(86, 96, 120, 0.16) 40%, transparent 73%);
+  animation: ambient_cloud_drift_slate var(--motion-cloud-slate) ease-in-out infinite alternate;
+}
+
+.ambient-cloud--moss {
+  top: 34%;
+  right: -21rem;
+  width: 44rem;
+  height: 36rem;
+  opacity: 0.13;
+  background: radial-gradient(ellipse at center, rgba(96, 112, 102, 0.42), rgba(96, 112, 102, 0.14) 42%, transparent 74%);
+  animation: ambient_cloud_drift_moss var(--motion-cloud-moss) ease-in-out infinite alternate;
+}
+
+@keyframes ambient_cloud_drift_clay {
+  0% {
+    opacity: 0.13;
+    transform: translate3d(-2%, -1%, 0) scale(0.96);
+  }
+  100% {
+    opacity: 0.18;
+    transform: translate3d(5%, 7%, 0) scale(1.05);
+  }
+}
+
+@keyframes ambient_cloud_drift_slate {
+  0% {
+    opacity: 0.11;
+    transform: translate3d(-4%, 3%, 0) scale(1.03);
+  }
+  100% {
+    opacity: 0.16;
+    transform: translate3d(6%, -5%, 0) scale(0.95);
+  }
+}
+
+@keyframes ambient_cloud_drift_moss {
+  0% {
+    opacity: 0.1;
+    transform: translate3d(2%, -5%, 0) scale(0.94);
+  }
+  100% {
+    opacity: 0.15;
+    transform: translate3d(-6%, 6%, 0) scale(1.04);
+  }
 }
 
 .chat-empty__identity,
@@ -326,6 +409,11 @@ a {
 .chat-empty__heading {
   animation-delay: calc(var(--motion-stagger) * 2);
   text-wrap: balance;
+}
+
+.chat-empty__greeting-line {
+  display: block;
+  max-width: 100%;
 }
 
 .chat-empty__name {
@@ -664,6 +752,27 @@ a {
   .markdown-body {
     line-height: 1.72;
   }
+
+  .ambient-cloud--clay {
+    top: -13rem;
+    right: -21rem;
+    width: 39rem;
+    height: 34rem;
+  }
+
+  .ambient-cloud--slate {
+    bottom: -17rem;
+    left: -19rem;
+    width: 38rem;
+    height: 34rem;
+  }
+
+  .ambient-cloud--moss {
+    top: 40%;
+    right: -19rem;
+    width: 34rem;
+    height: 30rem;
+  }
 }
 
 @media (max-height: 720px) {
@@ -692,6 +801,11 @@ a {
 
   .login-sheet {
     animation: none !important;
+  }
+
+  .ambient-cloud {
+    animation: none !important;
+    transform: none !important;
   }
 
   .aurora-ring-v5-status-enter-active,
