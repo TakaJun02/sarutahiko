@@ -40,6 +40,7 @@
   --motion-stagger: 60ms;
   --motion-ambient-login: 72s;
   --motion-ambient-chat: 84s;
+  --motion-composer-focus: 3.6s;
   --composer-focus-ring-width: 1px;
   --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-expressive: cubic-bezier(0.16, 1, 0.3, 1);
@@ -392,39 +393,109 @@ a {
   transform: translate3d(0, 10%, 0) scale(0.995);
 }
 
-/* The wrapper fades while its paused child holds the current pulse phase. */
+/* The wrapper fades while its paused children hold their current drift phases. */
 .ambient-thinking-glow {
   position: absolute;
   inset: 0;
   display: block;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 520ms ease-out;
+  transition: opacity 640ms ease-out;
+  will-change: opacity;
 }
 
-.ambient-thinking-glow::before {
+.ambient-thinking-cloud {
   position: absolute;
-  inset: -3% -6%;
-  background: linear-gradient(
-    to bottom,
-    transparent 0%,
-    transparent 55%,
-    rgba(40, 56, 148, 0.03) 64%,
-    rgba(40, 56, 148, 0.12) 78%,
-    rgba(40, 56, 148, 0.32) 100%
-  );
-  content: "";
-  transform-origin: 50% 72%;
-  animation: ambient_glow_thinking 6.8s ease-in-out infinite;
+  display: block;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
   animation-play-state: paused;
 }
 
-.chat-shell--thinking .ambient-thinking-glow {
-  opacity: 0.28;
+.ambient-thinking-cloud--near {
+  /* 136% layer width and 10% travel produce 43px/3s at 1440px, after the desktop sidebar. */
+  inset: 54% -18% -20%;
+  background:
+    radial-gradient(
+      ellipse 28% 52% at 22% 42%,
+      rgba(52, 72, 172, 0.46) 0%,
+      rgba(42, 59, 145, 0.29) 34%,
+      rgba(34, 48, 116, 0.1) 62%,
+      transparent 79%
+    ),
+    radial-gradient(
+      ellipse 34% 58% at 68% 54%,
+      rgba(40, 57, 148, 0.42) 0%,
+      rgba(35, 49, 125, 0.25) 38%,
+      rgba(29, 41, 104, 0.08) 66%,
+      transparent 82%
+    ),
+    radial-gradient(
+      ellipse 22% 44% at 94% 36%,
+      rgba(57, 77, 178, 0.3) 0%,
+      rgba(38, 53, 132, 0.12) 54%,
+      transparent 82%
+    );
+  animation-name: ambient_cloud_drift_near;
+  animation-duration: 11s;
+  animation-delay: -2.75s;
 }
 
-.chat-shell--thinking .ambient-thinking-glow::before {
-  will-change: opacity, transform;
+.ambient-thinking-cloud--middle {
+  inset: 60% -24% -22%;
+  background:
+    radial-gradient(
+      ellipse 31% 50% at 18% 34%,
+      rgba(31, 50, 130, 0.34) 0%,
+      rgba(27, 43, 111, 0.19) 42%,
+      transparent 78%
+    ),
+    radial-gradient(
+      ellipse 38% 62% at 61% 47%,
+      rgba(44, 65, 157, 0.38) 0%,
+      rgba(35, 51, 128, 0.2) 42%,
+      rgba(27, 40, 100, 0.06) 68%,
+      transparent 84%
+    ),
+    radial-gradient(
+      ellipse 24% 46% at 92% 58%,
+      rgba(32, 52, 136, 0.28) 0%,
+      rgba(28, 44, 112, 0.1) 56%,
+      transparent 82%
+    );
+  animation-name: ambient_cloud_drift_middle;
+  animation-duration: 16s;
+  animation-delay: -9s;
+  animation-direction: alternate-reverse;
+}
+
+.ambient-thinking-cloud--far {
+  inset: 65% -14% -24%;
+  background:
+    radial-gradient(
+      ellipse 42% 68% at 27% 38%,
+      rgba(30, 45, 119, 0.28) 0%,
+      rgba(25, 38, 98, 0.14) 46%,
+      transparent 80%
+    ),
+    radial-gradient(
+      ellipse 46% 72% at 78% 46%,
+      rgba(38, 57, 139, 0.3) 0%,
+      rgba(28, 43, 106, 0.14) 48%,
+      transparent 82%
+    );
+  animation-name: ambient_cloud_drift_far;
+  animation-duration: 23s;
+  animation-delay: -15s;
+}
+
+.chat-shell--thinking .ambient-thinking-glow {
+  opacity: 0.52;
+}
+
+.chat-shell--thinking .ambient-thinking-cloud {
+  will-change: transform;
   animation-play-state: running;
 }
 
@@ -439,23 +510,30 @@ a {
   }
 }
 
-@keyframes ambient_glow_thinking {
-  0%,
-  100% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
+@keyframes ambient_cloud_drift_near {
+  from {
+    transform: translate3d(-5%, 0.4%, 0);
   }
-  22% {
-    opacity: 0.42;
-    transform: translate3d(-0.6%, 0.35%, 0) scale(1.01);
+  to {
+    transform: translate3d(5%, -0.4%, 0);
   }
-  48% {
-    opacity: 1;
-    transform: translate3d(0.7%, -0.45%, 0) scale(1.024);
+}
+
+@keyframes ambient_cloud_drift_middle {
+  from {
+    transform: translate3d(-4%, -0.25%, 0);
   }
-  72% {
-    opacity: 0.62;
-    transform: translate3d(0.25%, 0.55%, 0) scale(1.008);
+  to {
+    transform: translate3d(4%, 0.25%, 0);
+  }
+}
+
+@keyframes ambient_cloud_drift_far {
+  from {
+    transform: translate3d(-3%, 0.2%, 0);
+  }
+  to {
+    transform: translate3d(3%, -0.2%, 0);
   }
 }
 
@@ -552,7 +630,7 @@ a {
 .composer-shell:has(textarea:focus-visible) {
   outline: var(--composer-focus-ring-width) solid #ff8f70;
   outline-offset: 3px;
-  animation: composer_focus_aurora 9s ease-in-out infinite;
+  animation: composer_focus_aurora var(--motion-composer-focus) linear infinite;
 }
 
 .composer-shell--streaming {
@@ -867,18 +945,6 @@ a {
     transform-origin: 50% 58%;
   }
 
-  .ambient-thinking-glow::before {
-    inset: -3%;
-    background: radial-gradient(
-      ellipse 50% 38% at 50% 70%,
-      rgba(26, 36, 88, 0.38) 0%,
-      rgba(26, 36, 88, 0.3) 34%,
-      rgba(26, 36, 88, 0.14) 58%,
-      rgba(26, 36, 88, 0.035) 76%,
-      transparent 96%
-    );
-  }
-
   .composer-dock {
     background: linear-gradient(to bottom, transparent, rgba(13, 15, 14, 0.92) 34%, var(--color-canvas) 68%);
   }
@@ -923,7 +989,7 @@ a {
   .ambient-glow,
   .ambient-glow::before,
   .ambient-thinking-glow,
-  .ambient-thinking-glow::before,
+  .ambient-thinking-cloud,
   .login-hero::before {
     animation: none !important;
     transform: none !important;
