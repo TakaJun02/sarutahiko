@@ -10,10 +10,9 @@ describe('ChatView about dialog', () => {
     const orderedContent = [
       'APU-Navi は、秋田県立大学 サイバーフィジカルシステム研究室【CPS Lab】によって開発されました！',
       'お手元のスマートフォンでも使えます',
-      'この QR コードを読み取ると、APU-Navi（このアプリ本体）が開きます。ぜひお手元のスマートフォンでお試しください。',
+      'この QR コードを読み取ると、APU-Navi（このアプリ本体）が開きます。',
       'ibera.cps.akita-pu.ac.jp',
-      '※ サイバーフィジカルシステム研究室のホームページの QR コードではありません。研究室サイトは、すぐ下のリンクからご覧いただけます。',
-      'サイバーフィジカルシステム研究室のサイトへ',
+      'サイバーフィジカルシステム研究室のHPはこちらをクリック！',
     ]
 
     const positions = orderedContent.map((content) => normalizedSource.indexOf(content))

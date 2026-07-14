@@ -846,7 +846,7 @@ onBeforeUnmount(() => {
                 お手元のスマートフォンでも使えます
               </h4>
               <p class="mt-2 text-center text-[13px] leading-5 text-white/60">
-                この QR コードを読み取ると、APU-Navi（このアプリ本体）が開きます。ぜひお手元のスマートフォンでお試しください。
+                この QR コードを読み取ると、APU-Navi（このアプリ本体）が開きます。
               </p>
               <img
                 src="/qrcode_ibera.cps.akita-pu.ac.jp.png"
@@ -856,9 +856,6 @@ onBeforeUnmount(() => {
               <p class="mt-2 text-center font-mono text-[11px] tracking-[0.04em] text-white/50">
                 ibera.cps.akita-pu.ac.jp
               </p>
-              <p class="mt-4 text-xs leading-5 text-white/45">
-                ※ サイバーフィジカルシステム研究室のホームページの QR コードではありません。研究室サイトは、すぐ下のリンクからご覧いただけます。
-              </p>
             </section>
             <a
               href="https://www.cps.akita-pu.ac.jp/"
@@ -866,7 +863,7 @@ onBeforeUnmount(() => {
               rel="noopener noreferrer"
               class="group mt-5 flex min-h-11 w-full items-center justify-between gap-3 rounded-ui-sm border border-edge bg-ink-surface px-3.5 py-2.5 text-sm text-white/75 transition duration-fast ease-standard hover:border-edge-strong hover:bg-fill-hover hover:text-white"
             >
-              <span class="text-[13px] leading-5">サイバーフィジカルシステム研究室のサイトへ</span>
+              <span class="text-[13px] leading-5">サイバーフィジカルシステム研究室のHPはこちらをクリック！</span>
               <span aria-hidden="true" class="shrink-0 font-display text-base text-brand-soft transition duration-fast ease-expressive group-hover:-translate-y-0.5 group-hover:translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">↗</span>
             </a>
           </template>
