@@ -178,9 +178,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="login-page flex min-h-dvh flex-col overflow-x-hidden text-[#171916]">
-    <section class="login-hero flex min-h-[31rem] flex-1">
-      <div class="relative z-[1] mx-auto flex w-full max-w-[82rem] flex-col px-6 pb-8 pt-6 sm:px-10 sm:pb-10 sm:pt-8 lg:px-16 lg:pb-12">
+  <main class="app-viewport login-page flex flex-col overflow-x-hidden overflow-y-auto overscroll-contain text-[#171916]">
+    <section class="login-hero flex flex-1 sm:min-h-[31rem]">
+      <div class="relative z-[1] mx-auto flex w-full max-w-[82rem] flex-col px-6 pb-8 pt-[calc(1.5rem_+_env(safe-area-inset-top))] sm:px-10 sm:pb-10 sm:pt-[calc(2rem_+_env(safe-area-inset-top))] lg:px-16 lg:pb-12">
         <header class="login-brand flex items-center justify-between gap-6 pl-4 sm:pl-5">
           <div class="flex min-w-0 items-center gap-3">
             <img
@@ -222,7 +222,7 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <footer class="login-sheet rounded-t-sheet bg-[#111310] px-6 pt-6 text-white sm:px-10 sm:pt-8 lg:flex lg:min-h-72 lg:items-center lg:px-16">
+    <footer class="login-sheet shrink-0 rounded-t-sheet bg-[#111310] px-6 pt-6 text-white sm:px-10 sm:pt-8 lg:flex lg:min-h-72 lg:items-center lg:px-16">
       <div class="mx-auto grid w-full max-w-[74rem] gap-6 lg:grid-cols-[0.72fr_1.28fr] lg:items-center lg:gap-16">
         <div class="hidden lg:block">
           <div class="flex items-center gap-3">

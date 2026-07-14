@@ -563,6 +563,16 @@ top を以下に適用する（すべて Tailwind 任意値の `env()` 直書き
 - ダイアログ overlay（`fixed inset-0` の flex コンテナ）: `pt-[calc(1rem_+_env(safe-area-inset-top))]`
   を追加し、パネルの `max-h-[calc(100dvh-2rem)]` は **`max-h-full` に変更**
   （overlay の padding が safe-area を含むため、パネルは常に可視領域内に収まる）。
+- **R2（2026-07-15 Fable 検収指摘）**: ダイアログ overlay は `fixed inset-0` → **`absolute inset-0`
+  に変更**する。fixed は layout viewport 基準のため、キーボード表示で `.app-viewport` が縮んでも
+  overlay は縮まず、items-end のパネル（rename 入力欄）がキーボード裏に隠れる。しかも §12-2 の
+  window パン打ち消しにより iOS のオートスクロール救済も働かない（R1 実測: `--app-height` 500px
+  シミュレーションで入力欄 bottom 743 > 可視域 500）。ChatView ルート `.chat-shell` は
+  `position: relative`・inset 0 全画面のため、absolute 化しても通常時の見た目・z 順
+  （z-50 > ドロワー z-40、同一 stacking context 内）は不変で、キーボード表示中のみ
+  縮んだシェルに追従してパネルがキーボード直上に来る。
+  なおドロワー（`fixed inset-0 z-40`）は入力欄を持たず、開閉時にフォーカスが外れて
+  キーボードは閉じるため fixed のままでよい。
 - 横向き（left / right inset)は **P2・今回スコープ外**（会場運用は縦持ち前提。ただし対応する場合は
   ヘッダー・composer dock の横 padding に加算する方式とする）。
 - 注記（P2・今回対象外）: standalone のステータスバー文字は black-translucent により白固定のため、

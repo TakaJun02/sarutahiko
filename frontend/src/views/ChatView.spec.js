@@ -32,8 +32,11 @@ describe('ChatView about dialog', () => {
   })
 
   it('guards every dialog panel against viewport overflow', () => {
-    expect(chatViewSource).toContain('max-h-[calc(100dvh-2rem)]')
-    expect(chatViewSource).toContain('overflow-y-auto')
+    expect(chatViewSource).toContain('class="absolute inset-0 z-50 flex')
+    expect(chatViewSource).not.toContain('class="fixed inset-0 z-50 flex')
+    expect(chatViewSource).toContain('pt-[calc(1rem_+_env(safe-area-inset-top))]')
+    expect(chatViewSource).toContain('max-h-full')
+    expect(chatViewSource).toContain('overflow-y-auto overscroll-contain')
   })
 
   it('prevents initial dialog focus from scrolling the panel', () => {

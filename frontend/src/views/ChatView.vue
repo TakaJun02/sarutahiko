@@ -469,7 +469,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div
-    class="chat-shell flex h-dvh overflow-hidden text-white"
+    class="app-viewport chat-shell flex overflow-hidden text-white"
     :class="{
       'chat-shell--active': chat.messages.length > 0,
       'chat-shell--thinking': chat.isSending,
@@ -528,8 +528,8 @@ onBeforeUnmount(() => {
       </aside>
     </div>
 
-    <main class="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-y-auto">
-      <header class="sticky top-0 z-20 border-b border-edge bg-ink-base/[0.88] backdrop-blur-xl">
+    <main class="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain">
+      <header class="sticky top-0 z-20 border-b border-edge bg-ink-base/[0.88] pt-[env(safe-area-inset-top)] backdrop-blur-xl">
         <div class="mx-auto flex min-h-[68px] max-w-3xl items-center gap-3 px-4 py-2.5">
           <button
             type="button"
@@ -811,19 +811,19 @@ onBeforeUnmount(() => {
     <Transition name="dialog-fade">
       <div
         v-if="dialog"
-        class="fixed inset-0 z-50 flex items-end justify-center p-4 pb-[calc(1rem_+_env(safe-area-inset-bottom))] sm:items-center sm:pb-4"
+        class="absolute inset-0 z-50 flex items-end justify-center p-4 pb-[calc(1rem_+_env(safe-area-inset-bottom))] pt-[calc(1rem_+_env(safe-area-inset-top))] sm:items-center sm:pb-4"
         role="dialog"
         aria-modal="true"
         :aria-label="getDialogAriaLabel(dialog.kind)"
       >
         <div class="absolute inset-0 bg-black/70 backdrop-blur-[2px]" @click="closeDialog"></div>
-        <div class="dialog-panel relative max-h-[calc(100dvh-2rem)] w-full max-w-sm overflow-y-auto rounded-ui-lg border border-edge-strong bg-ink-raised p-5 shadow-glass">
+        <div class="dialog-panel relative max-h-full w-full max-w-sm overflow-y-auto overscroll-contain rounded-ui-lg border border-edge-strong bg-ink-raised p-5 shadow-glass">
           <template v-if="dialog.kind === 'rename'">
             <h3 class="text-lg font-semibold tracking-[-0.025em]">スレッド名を変更</h3>
             <input
               ref="dialogInputRef"
               v-model="dialogInput"
-              class="mt-4 min-h-11 w-full rounded-ui-sm border border-edge-strong bg-ink-surface px-3.5 py-2.5 text-sm text-white outline-none transition duration-base ease-standard placeholder:text-white/45 focus:border-white/30"
+              class="mt-4 min-h-11 w-full rounded-ui-sm border border-edge-strong bg-ink-surface px-3.5 py-2.5 text-base text-white outline-none transition duration-base ease-standard placeholder:text-white/45 focus:border-white/30"
               placeholder="スレッド名（1〜60文字）"
               maxlength="61"
               @keydown.enter="onDialogEnter"
