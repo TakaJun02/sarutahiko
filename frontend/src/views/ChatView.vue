@@ -216,6 +216,10 @@ function startNewChat() {
   }
 }
 
+function focusDialogElement(element) {
+  element?.focus({ preventScroll: true })
+}
+
 function openDialog(kind, threadId = null) {
   // The immediate trigger is a menu item that unmounts with its menu, so
   // prefer the thread row's persistent kebab button for focus restoration.
@@ -227,12 +231,12 @@ function openDialog(kind, threadId = null) {
   dialogError.value = ''
   nextTick(() => {
     if (getDialogInitialFocus(kind) === 'input') {
-      dialogInputRef.value?.focus()
+      focusDialogElement(dialogInputRef.value)
       dialogInputRef.value?.select()
     } else {
       // Destructive confirm: land on the safe choice so a stray Enter
       // never deletes a conversation.
-      dialogCancelRef.value?.focus()
+      focusDialogElement(dialogCancelRef.value)
     }
   })
 }
@@ -813,7 +817,7 @@ onBeforeUnmount(() => {
         :aria-label="getDialogAriaLabel(dialog.kind)"
       >
         <div class="absolute inset-0 bg-black/70 backdrop-blur-[2px]" @click="closeDialog"></div>
-        <div class="dialog-panel relative w-full max-w-sm rounded-ui-lg border border-edge-strong bg-ink-raised p-5 shadow-glass">
+        <div class="dialog-panel relative max-h-[calc(100dvh-2rem)] w-full max-w-sm overflow-y-auto rounded-ui-lg border border-edge-strong bg-ink-raised p-5 shadow-glass">
           <template v-if="dialog.kind === 'rename'">
             <h3 class="text-lg font-semibold tracking-[-0.025em]">スレッド名を変更</h3>
             <input
@@ -837,6 +841,25 @@ onBeforeUnmount(() => {
             <div class="mt-3 space-y-3 text-sm leading-6 text-white/65">
               <p>APU-Navi は、秋田県立大学 サイバーフィジカルシステム研究室【CPS Lab】によって開発されました！</p>
             </div>
+            <section class="mt-5 border-t border-edge pt-5" aria-labelledby="about-qr-heading">
+              <h4 id="about-qr-heading" class="text-center font-display text-sm font-semibold tracking-[-0.015em] text-white/90">
+                お手元のスマートフォンでも使えます
+              </h4>
+              <p class="mt-2 text-center text-[13px] leading-5 text-white/60">
+                この QR コードを読み取ると、APU-Navi（このアプリ本体）が開きます。ぜひお手元のスマートフォンでお試しください。
+              </p>
+              <img
+                src="/qrcode_ibera.cps.akita-pu.ac.jp.png"
+                alt="APU-Navi アクセス用 QR コード"
+                class="mx-auto mt-4 block h-40 w-40 rounded-ui-sm"
+              />
+              <p class="mt-2 text-center font-mono text-[11px] tracking-[0.04em] text-white/50">
+                ibera.cps.akita-pu.ac.jp
+              </p>
+              <p class="mt-4 text-xs leading-5 text-white/45">
+                ※ サイバーフィジカルシステム研究室のホームページの QR コードではありません。研究室サイトは、すぐ下のリンクからご覧いただけます。
+              </p>
+            </section>
             <a
               href="https://www.cps.akita-pu.ac.jp/"
               target="_blank"
