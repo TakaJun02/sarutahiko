@@ -1,6 +1,10 @@
 # campus-guide-agent システム仕様書
 
-- 版: v0.14（2026-07-15, Fable 改訂 — 利用者指示: **About モーダルに APU-Navi アクセス用 QR コードを追加**
+- 版: v0.15（2026-07-15, Fable 改訂 — 利用者指示: **ビューポート固定シェル化とセーフエリア対応**
+  （FR-23、詳細: `docs/RELEASE_PREP.md` §12）。①両画面とも document スクロールを禁止し内部スクロールへ
+  一本化（iOS のラバーバンド・キーボードパンも visualViewport 同期で抑止） ②iPhone ノッチ対応として
+  `env(safe-area-inset-top)` をヘッダー・サイドバー・ログイン上部・ダイアログに適用）
+- v0.14（2026-07-15, Fable 改訂 — 利用者指示: **About モーダルに APU-Navi アクセス用 QR コードを追加**
   （FR-22、詳細: `docs/RELEASE_PREP.md` §11）。利用者支給 QR（本番 URL https://ibera.cps.akita-pu.ac.jp）を
   本文と研究室リンクの間に表示し、研究室 HP と誤解されないよう確定文言の案内文・注記を付す）
 - v0.13（2026-07-14, Fable 改訂 — 利用者指示: **Gemma ブランディング改訂 R2**（FR-21、詳細: `docs/RELEASE_PREP.md` §10）。
@@ -247,6 +251,17 @@
   ありません」注記。全文は RELEASE_PREP §11-2）。
 - **22-3**: スキャナビリティ制約 — 白地のまま 140〜180px 表示・フィルタ/反転/静穏域欠け禁止。
   縦伸び対策としてパネルに max-height＋内部スクロールのガードを付与。
+
+### FR-23 ビューポート固定シェル化とセーフエリア対応（2026-07-15 追加・利用者指示 2 点、詳細: `docs/RELEASE_PREP.md` §12）
+- **23-1**: **document スクロールの全面禁止**。html/body/#app を高さ 100% 固定＋overflow hidden とし、
+  スクロールはビュー内部コンテナのみ（全内部スクローラに overscroll-behavior: contain）。
+  LoginView は `min-h-dvh` のページスクロール構造を廃し、ビュー内スクロールへ変更。
+- **23-2**: **iOS キーボード対応** — visualViewport.height を CSS 変数 `--app-height` に同期する
+  composable を新設し、シェル高さをキーボード表示に追従させる。iOS の window パンは
+  `scrollTo(0,0)` で打ち消す。ピンチズーム中（scale>1）は非更新。
+- **23-3**: **セーフエリア上部対応** — `env(safe-area-inset-top)` を ChatView ヘッダー・
+  ThreadSidebar 上部・LoginView hero 上部・ダイアログ overlay に適用（iPhone 14 ノッチ被り解消）。
+- **23-4**: リネームダイアログ input を 16px 以上に（iOS 自動ズーム防止）。全入力欄で 16px 未満禁止。
 
 ## 4. 非機能要件
 

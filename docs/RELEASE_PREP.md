@@ -487,3 +487,116 @@ QR セクション内の並び順もこの通りとする:
 - [ ] 360×667 で開いた直後にパネル先頭（アイコン・「APU-Navi について」見出し）が見えている
       （下端スクロール状態で開かない）。
 - [ ] rename / delete ダイアログに回帰なし。`npm run test` / `npm run build` green。
+
+## 12. FR-23 ビューポート固定シェル化とセーフエリア対応（2026-07-15 追加・利用者指示 2 点）
+
+利用者報告（iPhone 14 実機）:
+
+1. ログイン画面もチャット画面も**画面ごと動いてしまい使いにくい**。固定してほしい。
+2. スマホ利用時に**画面上部がカメラ（ノッチ）と被る**。iPhone 14 は内カメラが画面上に凸のため、
+   上部コンテンツが隠れる。
+
+### 12-0 原因分析（Fable 調査済み・実装前に再確認不要）
+
+- `html / body / #app` は `min-height: 100%` のみで、document スクロールを禁止していない。
+- LoginView はルートが `min-h-dvh` の document スクロール構造。コンテンツ（hero `min-h-[31rem]`
+  ＋シート約 320px）が iPhone 縦の可視高を超え、ページ全体がスクロールする。
+  iOS ではラバーバンド・Safari ツールバー伸縮も加わり「画面ごと動く」。
+- ChatView はルート `h-dvh overflow-hidden`＋`<main>` 内部スクロールで構造は正しいが、
+  (a) 内部スクローラに `overscroll-behavior` がなく端到達時に document へバウンスが連鎖、
+  (b) iOS はキーボード表示時に window 自体をパンするため画面ごとずれる、
+  (c) リネームダイアログの input が `text-sm`（14px）のため iOS が自動ズームし画面ごと拡大される。
+- セーフエリア: `viewport-fit=cover`＋manifest `display: standalone`＋
+  `apple-mobile-web-app-status-bar-style: black-translucent` により、ホーム画面追加時は
+  コンテンツがステータスバー／ノッチ裏まで広がるが、**`env(safe-area-inset-top)` が全 UI で未適用**
+  （bottom は適用済み）。ChatView ヘッダー・LoginView ブランド・サイドバー上部がノッチに被る。
+
+### 12-1 ドキュメント固定（アプリシェル化）
+
+- `frontend/src/style.css`: `html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }`
+  `#app { height: 100%; }` に変更（現行の `min-height: 100%` 3 連指定を置換）。
+  スクロールは各ビューの内部コンテナのみで行う。
+- 共通クラス `.app-viewport { height: var(--app-height, 100%); }` を style.css に定義し、
+  **両ビューのルート要素**に適用する（`--app-height` は §12-2 の composable が供給。
+  JS 不動作・非対応環境では 100% にフォールバックし、従来の全画面表示と等価になること）。
+- ChatView ルート: `h-dvh` → `.app-viewport`（`overflow-hidden` は維持）。
+- LoginView ルート: `min-h-dvh` → `.app-viewport`＋`overflow-y-auto`（`overflow-x-hidden` は維持）。
+  コンテンツが収まる画面ではスクロールが発生せず固定表示になること。
+  - hero の `min-h-[31rem]` は **`sm:min-h-[31rem]` に変更**（640px 未満では固定 min-h を外し
+    flex に任せる）。シート（`<footer class="login-sheet">`）には `shrink-0` を付与し、
+    フォームが flex 圧縮で潰れないようにする。
+    ねらい: iPhone 14 縦（390×844, Safari）で初期表示時にニックネーム入力欄まで見える。
+    収まらない極小画面ではビュー内スクロールにフォールバックする（document は動かさない）。
+- 内部スクローラすべてに `overscroll-contain`（Tailwind ユーティリティ）を付与:
+  ChatView `<main>`・LoginView ルート・ThreadSidebar のスレッドリスト・ダイアログパネル
+  （`overflow-y-auto` を持つ要素が対象）。
+
+### 12-2 iOS キーボード対応（visualViewport 同期）
+
+- 新規 composable `frontend/src/composables/useAppViewport.js` を作成し、`App.vue` でマウントする。
+  仕様:
+  - `window.visualViewport` があれば、その `height` を px 値で
+    `document.documentElement.style.setProperty('--app-height', ...)` に反映する。
+    初回即時＋`visualViewport` の `resize` イベントで更新。
+  - **`visualViewport.scale > 1`（ピンチズーム中）は更新しない**（ズームで高さが縮む誤動作防止）。
+  - iOS はキーボード表示時に window をパンするため、`visualViewport` の `resize` および
+    window の `scroll` イベントで `window.scrollY > 0` なら `window.scrollTo(0, 0)` で打ち消す。
+    （document 固定（§12-1）＋シェル高さの visualViewport 同期により、composer は
+    キーボード直上に位置するため、パンを打ち消しても入力欄は隠れない。）
+  - `visualViewport` 非対応環境では何もしない（`--app-height` 未設定 → 100% フォールバック）。
+  - アンマウント時にリスナーを全解除する。
+- `frontend/index.html` の viewport meta に `interactive-widget=resizes-content` を追加
+  （Android Chrome 108+ はこれでレイアウトビューポート自体が縮む。iOS は無視するため
+  composable と併存して矛盾しない）。
+
+### 12-3 セーフエリア上部対応（`env(safe-area-inset-top)`）
+
+既存の bottom 系（composer・サイドバー下部・ダイアログ下部・ログインシート）は変更しない。
+top を以下に適用する（すべて Tailwind 任意値の `env()` 直書きで既存記法に合わせる）:
+
+- ChatView の sticky ヘッダー: `<header>` 自体に `pt-[env(safe-area-inset-top)]` を付与
+  （背景・blur・下ボーダーはヘッダー全体が伸びるため、ノッチ裏まで自然につながる）。
+- ThreadSidebar 上部ブロック: `pt-4` → `pt-[calc(1rem_+_env(safe-area-inset-top))]`
+  （デスクトップレール・モバイルドロワーの両インスタンスに効く。inset 0 の環境では不変）。
+- LoginView hero 内コンテナ: `pt-6` → `pt-[calc(1.5rem_+_env(safe-area-inset-top))]`、
+  `sm:pt-8` → `sm:pt-[calc(2rem_+_env(safe-area-inset-top))]`。
+- ダイアログ overlay（`fixed inset-0` の flex コンテナ）: `pt-[calc(1rem_+_env(safe-area-inset-top))]`
+  を追加し、パネルの `max-h-[calc(100dvh-2rem)]` は **`max-h-full` に変更**
+  （overlay の padding が safe-area を含むため、パネルは常に可視領域内に収まる）。
+- 横向き（left / right inset)は **P2・今回スコープ外**（会場運用は縦持ち前提。ただし対応する場合は
+  ヘッダー・composer dock の横 padding に加算する方式とする）。
+- 注記（P2・今回対象外）: standalone のステータスバー文字は black-translucent により白固定のため、
+  明色のログイン画面上部では時計等が見えにくい。実害が確認されたら別 FR で扱う。
+
+### 12-4 iOS 自動ズーム防止
+
+- リネームダイアログの input `text-sm` → `text-base` に変更（iOS は font-size 16px 未満の
+  入力欄フォーカスで画面ごと自動ズームするため）。周辺の余白調整は Sol 裁量、
+  ただし**すべての input / textarea の computed font-size は 16px 以上を維持**すること
+  （composer textarea・ログイン入力欄は現状 text-base で適合済み。回帰させない）。
+
+### 12-5 テスト
+
+- `useAppViewport` のユニットテストを追加（jsdom に `visualViewport` モックを差して検証）:
+  (a) マウントで `--app-height` が visualViewport.height に設定される
+  (b) `resize` 発火で追従する
+  (c) `scale > 1` では更新されない
+  (d) アンマウントでリスナーが解除される
+  (e) `visualViewport` 未定義なら `--app-height` を設定しない
+- 既存テスト（29 件）に回帰を出さない。
+
+### 12-6 検収チェックリスト（FR-23 分）
+
+- [ ] PC・スマホとも、ログイン / チャットの両画面で document がスクロールしない
+      （`document.scrollingElement` の scrollHeight == clientHeight、window.scrollY 常時 0）。
+- [ ] 内部スクローラ（メッセージ一覧・スレッド一覧・ダイアログ・ログイン）の端到達で
+      ページ全体がバウンスしない（実機分は利用者）。
+- [ ] iPhone 14 縦: ログイン初期表示でニックネーム入力欄が見える（実機分は利用者）。
+- [ ] チャットの textarea フォーカス→キーボード表示中も composer が可視（キーボード直上）・
+      ヘッダーが画面内に残る。キーボードを閉じるとレイアウトが完全復帰し、ずれが残らない（実機）。
+- [ ] ホーム画面追加（standalone）でヘッダー内容・ログインブランド・サイドバー上部が
+      ノッチ / ステータスバーに被らない（実機）。
+- [ ] リネームダイアログの input フォーカスで iOS が自動ズームしない（実機）。
+- [ ] デスクトップ（safe-area 0・visualViewport = ウィンドウ高）で見た目の回帰なし
+      （ヘッダー高さ・ログインの構図・ダイアログ挙動が従来どおり）。
+- [ ] `npm run test` / `npm run build` green。新規 composable テストを含む。
