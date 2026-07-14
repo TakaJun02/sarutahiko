@@ -539,48 +539,48 @@ onBeforeUnmount(() => {
           </button>
           <h1 class="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-hidden font-display lg:hidden">
             <span class="min-w-0 truncate text-base font-semibold tracking-[-0.025em]">APU-Navi</span>
-            <span aria-hidden="true" class="h-3 w-px shrink-0 bg-edge-strong"></span>
             <span class="flex shrink-0 items-baseline gap-1 whitespace-nowrap">
               <span class="text-[9px] font-medium uppercase tracking-[0.16em] text-white/35">Powered by</span>
-              <span class="bg-gradient-to-r from-brand-signal to-brand-soft bg-clip-text text-[10px] font-bold uppercase tracking-[0.16em] text-transparent">Gemma4</span>
+              <span class="bg-gradient-to-r from-gemma-start to-gemma-end bg-clip-text text-[10px] font-bold uppercase tracking-[0.16em] text-transparent">Gemma4</span>
+              <img src="/icon-gemma4.png" alt="" class="h-4 w-4 shrink-0 self-center" />
             </span>
           </h1>
           <button
             type="button"
-            class="group ml-auto grid h-10 w-10 shrink-0 place-items-center rounded-ui-sm lg:hidden"
+            class="group ml-auto grid h-10 w-10 shrink-0 place-items-center rounded-ui-sm text-white/30 transition duration-fast ease-standard hover:bg-fill-hover hover:text-white/70 active:scale-[0.97] motion-reduce:transform-none motion-reduce:transition-none lg:hidden"
             aria-haspopup="dialog"
             aria-label="このアプリについて"
             @click="openAboutDialog"
           >
-            <img
-              src="/app-icon.png"
-              alt=""
-              class="h-7 w-7 rounded-ui-sm object-cover opacity-90 ring-1 ring-edge-strong shadow-soft transition duration-fast ease-expressive group-hover:-translate-y-0.5 group-hover:scale-[1.04] group-hover:opacity-100 group-active:translate-y-0 group-active:scale-[0.98] motion-reduce:transform-none motion-reduce:transition-none"
-            />
+            <svg aria-hidden="true" class="h-[17px] w-[17px] transition duration-fast ease-standard group-hover:scale-[1.03] motion-reduce:transform-none motion-reduce:transition-none" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="8.25" stroke="currentColor" stroke-width="1.4" />
+              <circle cx="12" cy="8.5" r="0.8" fill="currentColor" />
+              <path d="M12 11.75v4.75" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+            </svg>
           </button>
           <div class="hidden w-full items-center justify-between gap-6 lg:flex">
             <h1 class="flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden font-display">
               <span class="min-w-0 truncate text-sm font-semibold tracking-[-0.02em] text-white/90">APU-Navi</span>
-              <span aria-hidden="true" class="h-3 w-px shrink-0 bg-edge-strong"></span>
               <span class="flex shrink-0 items-baseline gap-1 whitespace-nowrap">
                 <span class="text-[9px] font-medium uppercase tracking-[0.16em] text-white/35">Powered by</span>
-                <span class="bg-gradient-to-r from-brand-signal to-brand-soft bg-clip-text text-[10px] font-bold uppercase tracking-[0.16em] text-transparent">Gemma4</span>
+                <span class="bg-gradient-to-r from-gemma-start to-gemma-end bg-clip-text text-[10px] font-bold uppercase tracking-[0.16em] text-transparent">Gemma4</span>
+                <img src="/icon-gemma4.png" alt="" class="h-4 w-4 shrink-0 self-center" />
               </span>
             </h1>
             <div class="ml-auto flex items-center gap-2">
               <p class="font-display text-[10px] font-medium uppercase tracking-[0.18em] text-white/40">Honjo / OC 2026</p>
               <button
                 type="button"
-                class="group grid h-10 w-10 shrink-0 place-items-center rounded-ui-sm"
+                class="group grid h-10 w-10 shrink-0 place-items-center rounded-ui-sm text-white/30 transition duration-fast ease-standard hover:bg-fill-hover hover:text-white/70 active:scale-[0.97] motion-reduce:transform-none motion-reduce:transition-none"
                 aria-haspopup="dialog"
                 aria-label="このアプリについて"
                 @click="openAboutDialog"
               >
-                <img
-                  src="/app-icon.png"
-                  alt=""
-                  class="h-7 w-7 rounded-ui-sm object-cover opacity-90 ring-1 ring-edge-strong shadow-soft transition duration-fast ease-expressive group-hover:-translate-y-0.5 group-hover:scale-[1.04] group-hover:opacity-100 group-active:translate-y-0 group-active:scale-[0.98] motion-reduce:transform-none motion-reduce:transition-none"
-                />
+                <svg aria-hidden="true" class="h-[17px] w-[17px] transition duration-fast ease-standard group-hover:scale-[1.03] motion-reduce:transform-none motion-reduce:transition-none" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="8.25" stroke="currentColor" stroke-width="1.4" />
+                  <circle cx="12" cy="8.5" r="0.8" fill="currentColor" />
+                  <path d="M12 11.75v4.75" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+                </svg>
               </button>
             </div>
           </div>
@@ -835,8 +835,7 @@ onBeforeUnmount(() => {
             <img src="/app-icon.png" alt="" class="h-12 w-12 rounded-ui shadow-soft" />
             <h3 class="mt-4 font-display text-xl font-semibold tracking-[-0.03em]">APU-Navi について</h3>
             <div class="mt-3 space-y-3 text-sm leading-6 text-white/65">
-              <p>APU-Navi は、オープンキャンパス 2026 の出展として、サイバーフィジカルシステム研究室（CPS Lab）の高橋 潤大が開発した本荘キャンパス案内 AI エージェントです。</p>
-              <p>回答はローカル GPU 上の Gemma4 と Agentic RAG で生成しています。</p>
+              <p>APU-Navi は、秋田県立大学 サイバーフィジカルシステム研究室【CPS Lab】によって開発されました！</p>
             </div>
             <a
               href="https://www.cps.akita-pu.ac.jp/"
