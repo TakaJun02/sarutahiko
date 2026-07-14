@@ -46,3 +46,56 @@ describe('ChatView about dialog', () => {
     expect(chatViewSource).toContain('focusDialogElement(dialogCancelRef.value)')
   })
 })
+
+describe('ChatView FR-24 scrolling', () => {
+  it('renders the latest-message button with focus-preserving glass styling', () => {
+    const button = chatViewSource.match(
+      /<button\s+v-if="chat\.messages\.length > 0 && !isAtBottom"[\s\S]*?aria-label="最新のメッセージへ移動"[\s\S]*?<\/button>/,
+    )?.[0]
+
+    expect(button).toBeDefined()
+    expect(button).toContain('@mousedown.prevent')
+    expect(button).toContain('h-11 w-11')
+    expect(button).toContain('rounded-full')
+    expect(button).toContain('border-edge-strong')
+    expect(button).toContain('bg-ink-raised/70')
+    expect(button).toContain('shadow-glass')
+    expect(button).toContain('backdrop-blur-md')
+  })
+
+  it('gates message-signature auto-following on the bottom state', () => {
+    expect(normalizedSource).toContain(
+      "if (pendingScrollBehavior || isAtBottom.value) { scrollToBottom('auto') }",
+    )
+  })
+
+  it('measures the visual bottom after subtracting the sticky footer height', () => {
+    expect(normalizedSource).toContain(
+      'const effectiveGap = scrollContainer.scrollHeight - currentScrollTop - scrollContainer.clientHeight - (footerRef.value?.offsetHeight || 0)',
+    )
+    expect(normalizedSource).toContain(
+      'if (effectiveGap <= AT_BOTTOM_THRESHOLD_PX) { isAtBottom.value = true',
+    )
+  })
+
+  it('only leaves the bottom state during an upward scroll beyond the threshold', () => {
+    expect(normalizedSource).toContain(
+      'effectiveGap > AT_BOTTOM_THRESHOLD_PX && currentScrollTop < lastScrollTop',
+    )
+    expect(normalizedSource).toContain('isAtBottom.value = false')
+    expect(normalizedSource).toContain('lastScrollTop = currentScrollTop')
+  })
+
+  it('does not use a time-based smooth-scroll suppression window', () => {
+    expect(chatViewSource).not.toContain('SMOOTH_SCROLL_SUPPRESS_MS')
+    expect(chatViewSource).not.toContain('smoothScrollSuppressUntil')
+  })
+
+  it('requests smooth scrolling when send starts', () => {
+    const sendSource = chatViewSource.match(
+      /async function send\(\) \{[\s\S]*?\n\}\n\nfunction onEnter/,
+    )?.[0]
+
+    expect(sendSource).toContain("pendingScrollBehavior = 'smooth'")
+  })
+})

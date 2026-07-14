@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import LoadingSpinnerV5 from '../components/LoadingSpinnerV5.vue'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import ThreadSidebar from '../components/ThreadSidebar.vue'
+import { useViewportState } from '../composables/useAppViewport'
 import { useAuthStore } from '../stores/auth'
 import { toFriendlyErrorMessage, useChatStore } from '../stores/chat'
 import { getDialogAriaLabel, getDialogInitialFocus } from '../utils/dialog'
@@ -18,6 +19,7 @@ import {
 const LAST_GREETING_STORAGE_KEY = 'apu-navi:last-empty-greeting'
 // Line-grid aligned: 20px vertical padding + 24px line-height x 6 lines.
 const INPUT_MAX_HEIGHT_PX = 164
+const AT_BOTTOM_THRESHOLD_PX = 72
 
 // Suggested first questions for the empty state (tap inserts into the input).
 const suggestions = [
@@ -31,15 +33,18 @@ const auth = useAuthStore()
 const chat = useChatStore()
 const router = useRouter()
 const route = useRoute()
+const { appHeight } = useViewportState()
 
 const draft = ref('')
 const drawerOpen = ref(false)
+const scrollContainerRef = ref(null)
 const messagesEnd = ref(null)
 const inputRef = ref(null)
 const footerRef = ref(null)
 const footerClearancePx = ref(224)
 const expandedSourceKeys = ref(new Set())
 const activeGreeting = ref(EMPTY_GREETING_VARIANTS[0])
+const isAtBottom = ref(true)
 
 const greetingNameParts = computed(() => splitGreetingName(auth.user?.name || ''))
 const greetingLines = computed(() => buildGreetingLines(activeGreeting.value, auth.user?.name || ''))
@@ -61,6 +66,7 @@ let previousGreetingId = ''
 
 let footerResizeObserver = null
 let pendingScrollBehavior = null
+let lastScrollTop = 0
 
 function chooseEmptyGreeting() {
   let previousId = previousGreetingId
@@ -102,6 +108,7 @@ async function send() {
     showBusyHint()
     return
   }
+  pendingScrollBehavior = 'smooth'
   draft.value = ''
   try {
     await chat.sendMessage(text)
@@ -332,6 +339,7 @@ async function confirmDialog() {
 }
 
 async function retryLastMessage() {
+  pendingScrollBehavior = 'smooth'
   try {
     await chat.retryLast()
   } catch (error) {
@@ -378,12 +386,37 @@ async function syncThreadFromRoute(threadId) {
   }
 }
 
-async function scrollToBottom() {
+function onMessageScroll(event) {
+  const scrollContainer = event.currentTarget || scrollContainerRef.value
+  if (!scrollContainer) {
+    return
+  }
+
+  const currentScrollTop = scrollContainer.scrollTop
+  const effectiveGap = scrollContainer.scrollHeight
+    - currentScrollTop
+    - scrollContainer.clientHeight
+    - (footerRef.value?.offsetHeight || 0)
+
+  if (effectiveGap <= AT_BOTTOM_THRESHOLD_PX) {
+    isAtBottom.value = true
+  } else if (
+    effectiveGap > AT_BOTTOM_THRESHOLD_PX
+    && currentScrollTop < lastScrollTop
+  ) {
+    isAtBottom.value = false
+  }
+
+  lastScrollTop = currentScrollTop
+}
+
+async function scrollToBottom(fallbackBehavior = 'smooth') {
   await nextTick()
   updateFooterClearance()
-  const behavior = pendingScrollBehavior || 'smooth'
+  const behavior = pendingScrollBehavior || fallbackBehavior
   pendingScrollBehavior = null
   messagesEnd.value?.scrollIntoView({ behavior, block: 'end' })
+  isAtBottom.value = true
 }
 
 function updateFooterClearance() {
@@ -402,6 +435,7 @@ watch(
   (messageCount, previousMessageCount) => {
     if (messageCount === 0 && previousMessageCount > 0) {
       chooseEmptyGreeting()
+      isAtBottom.value = true
     }
   },
 )
@@ -424,8 +458,18 @@ watch(
     const sourceKey = message.sources.map((source) => source.url).join(',')
     return `${message.clientId || message.id}:${message.content.length}:${message.statusText}:${message.statusStep}:${sourceKey}`
   }).join('|'),
-  scrollToBottom,
+  () => {
+    if (pendingScrollBehavior || isAtBottom.value) {
+      scrollToBottom('auto')
+    }
+  },
 )
+
+watch(appHeight, () => {
+  if (chat.messages.length > 0 && isAtBottom.value) {
+    scrollToBottom('auto')
+  }
+})
 
 watch(
   () => route.params.threadId,
@@ -528,7 +572,11 @@ onBeforeUnmount(() => {
       </aside>
     </div>
 
-    <main class="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain">
+    <main
+      ref="scrollContainerRef"
+      class="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain"
+      @scroll.passive="onMessageScroll"
+    >
       <header class="sticky top-0 z-20 border-b border-edge bg-ink-base/[0.88] pt-[env(safe-area-inset-top)] backdrop-blur-xl">
         <div class="mx-auto flex min-h-[68px] max-w-3xl items-center gap-3 px-4 py-2.5">
           <button
@@ -746,7 +794,21 @@ onBeforeUnmount(() => {
           class="composer-dock sticky bottom-0 z-10 px-4 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] pt-8"
           @submit.prevent="send"
         >
-          <div class="mx-auto w-full max-w-3xl">
+          <div class="relative mx-auto w-full max-w-3xl">
+            <Transition name="latest-jump">
+              <button
+                v-if="chat.messages.length > 0 && !isAtBottom"
+                type="button"
+                class="absolute -top-14 left-1/2 grid h-11 w-11 -translate-x-1/2 place-items-center rounded-full border border-edge-strong bg-ink-raised/70 text-white/80 shadow-glass backdrop-blur-md transition duration-base ease-expressive hover:bg-ink-raised/90 hover:text-white active:scale-[0.94]"
+                aria-label="最新のメッセージへ移動"
+                @mousedown.prevent
+                @click="scrollToBottom('smooth')"
+              >
+                <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 5v14M5 12l7 7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+            </Transition>
             <div
               class="composer-shell flex items-end gap-2 rounded-[1.6rem] p-2"
               :class="{ 'composer-shell--streaming': chat.isSending }"
@@ -920,10 +982,25 @@ onBeforeUnmount(() => {
   transform: translateY(-0.25rem);
 }
 
+.latest-jump-enter-active,
+.latest-jump-leave-active {
+  transition:
+    opacity var(--motion-base) ease-out,
+    transform var(--motion-base) var(--ease-expressive);
+}
+
+.latest-jump-enter-from,
+.latest-jump-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 0.25rem) scale(0.96);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sources-collapse-enter-active,
   .sources-collapse-leave-active,
-  .sources-disclosure-icon {
+  .sources-disclosure-icon,
+  .latest-jump-enter-active,
+  .latest-jump-leave-active {
     transition: none !important;
   }
 
@@ -931,6 +1008,11 @@ onBeforeUnmount(() => {
   .sources-collapse-leave-to {
     opacity: 1;
     transform: none;
+  }
+
+  .latest-jump-enter-from,
+  .latest-jump-leave-to {
+    opacity: 1;
   }
 }
 </style>
