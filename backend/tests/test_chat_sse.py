@@ -5,6 +5,22 @@ import json
 import httpx
 import pytest
 
+from app.models.auth import User
+
+
+class RecordingAgent:
+    def __init__(self) -> None:
+        self.history: list[dict] | None = None
+
+    async def stream(self, question, user, thread_id, message_id, history=None):
+        self.history = history
+        yield "token", {"text": "記録済み"}
+        yield "done", {"thread_id": thread_id, "message_id": message_id, "sources": []}
+
+    @staticmethod
+    def format_sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+
 
 def _events(stream_text: str) -> list[tuple[str, dict]]:
     parsed: list[tuple[str, dict]] = []
@@ -51,6 +67,47 @@ async def test_chat_stream_uses_documented_sse_schema(app) -> None:
     assert events[-1][0] == "done"
     assert set(events[-1][1]) == {"thread_id", "message_id", "sources"}
     assert events[-1][1]["sources"][0]["type"] == "web"
+
+
+@pytest.mark.asyncio
+async def test_chat_passes_latest_eight_stored_messages_in_chronological_order(app) -> None:
+    recording_agent = RecordingAgent()
+    app.state.agent = recording_agent
+
+    async with await _client(app) as client:
+        register = await client.post("/api/auth/register", json={"name": "履歴テスト"})
+        assert register.status_code == 201
+        auth = register.json()
+        headers = {"Authorization": f"Bearer {auth['token']}"}
+        user = User(**auth["user"])
+        thread_id = app.state.thread_service.ensure_thread(user, None, "message-0")
+
+        message_ids = [
+            app.state.thread_service.add_message(
+                thread_id,
+                "user" if index % 2 == 0 else "assistant",
+                f"message-{index}",
+            )
+            for index in range(10)
+        ]
+        with app.state.database.connect() as connection:
+            for index, message_id in enumerate(message_ids):
+                connection.execute(
+                    "UPDATE messages SET created_at = ? WHERE id = ?",
+                    (f"2026-07-14 12:00:{index:02d}", message_id),
+                )
+
+        response = await client.post(
+            "/api/chat",
+            json={"message": "続きの質問", "thread_id": thread_id},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert recording_agent.history is not None
+    assert [message["content"] for message in recording_agent.history] == [
+        f"message-{index}" for index in range(2, 10)
+    ]
 
 
 @pytest.mark.asyncio

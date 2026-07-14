@@ -45,7 +45,8 @@ backend のローカル起動・Vite の `/api` プロキシ先はともに 8080
 | 埋め込み（旧） | `BAAI/bge-m3`（CPU） | v0.2 までの構成。`EMBEDDING_BASE_URL` 未設定時の開発用フォールバックとしてコードパスは残す |
 | リランカー | `BAAI/bge-reranker-v2-m3`（任意、Phase 3 で効果測定） | 検索精度向上の定番。効果がなければ外す |
 | ベクトル DB | Qdrant（docker） | 運用が軽く、メタデータフィルタが強い。compose に載せやすい |
-| Web 検索 | **Tavily API**（`TAVILY_API_KEY` を `.env` で供給。httpx 直、SDK 不使用）。`SearchProvider` インターフェースで抽象化 | **2026-07-12 利用者指示で ddgs から移行**。`include_domains` によるドメイン制限と `raw_content`（本文同梱）で検索品質とレイテンシを改善（AGENT_HARNESS.md §V4） |
+| Web 検索 | **Tavily API**（`TAVILY_API_KEY` を `.env` で供給。httpx 直、SDK 不使用）。`SearchProvider` インターフェースで抽象化 | **2026-07-12 利用者指示で ddgs から移行**。`include_domains` によるドメイン制限と `raw_content`（本文同梱）で検索品質とレイテンシを改善（AGENT_HARNESS.md §V4）。**2026-07-14 FR-18-1**: 枠超過等（401/403/429/432/433）でサーキットブレーカー作動 → Web ステップをスキップしナレッジのみで継続（`docs/RELEASE_PREP.md` §1） |
+| PWA 配布 | `frontend/public/manifest.json` ＋ アイコン一式（`public/icons/`、apple-touch-icon）。Nginx 公開・HTTPS 必須 | **2026-07-14 FR-18-4**。Service Worker はスコープ外（`docs/RELEASE_PREP.md` §4） |
 | ストリーミング | SSE（`text/event-stream`） | 単方向で十分。WebSocket より単純 |
 
 ## 3. API / SSE イベントスキーマ
@@ -100,6 +101,8 @@ oc_2026/
 ├── docs/                  # 仕様書（常に正）
 ├── frontend/              # Vue 3 SPA
 │   ├── public/app-icon.png   # ルートの app-icon.png をコピー
+│   ├── public/manifest.json  # PWA マニフェスト（FR-18-4）
+│   ├── public/icons/         # PWA アイコン（192/512/maskable、Fable 生成）
 │   └── src/...
 ├── backend/
 │   ├── app/               # FastAPI (api, agent, rag, search, llm)

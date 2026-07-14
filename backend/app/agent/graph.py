@@ -48,7 +48,7 @@ PROMPT_MARGIN_TOKENS = 192
 REAL_TOKEN_HEADROOM = 64
 REAL_TOKEN_REBUILD_SCALE = 0.95
 CONTEXT_RETRY_SCALE = 0.5
-MAX_HISTORY_MESSAGES = 4
+MAX_HISTORY_MESSAGES = 8
 MAX_HISTORY_CHARS = 500
 MIN_GENERATION_CONTEXT_TOKENS = 384
 GENERATION_HISTORY_CHAR_STAGES = (MAX_HISTORY_CHARS, 250, 120)
@@ -1752,6 +1752,8 @@ class RealCampusAgent:
         return self._merge_strings([], search_keywords)
 
     def _should_run_web_search(self, state: AgentState) -> bool:
+        if not getattr(self.search_provider, "available", True):
+            return False
         rounds = state.get("web_search_rounds", 0)
         if rounds < MIN_WEB_ROUNDS_BEFORE_GIVE_UP:
             return True
