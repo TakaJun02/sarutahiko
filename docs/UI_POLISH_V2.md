@@ -303,6 +303,8 @@ SSE・store は引き続き不変）。94 点の現行デザイン言語（Campu
   **本 §10 ではこのスクショを意匠の正とし、§9-1 の雲実装を置き換える**。
   - `referenceUI_white_PC.png` / `referenceUI_white_phone.png` → **ログイン画面**（白ベース）の参照
   - `referenceUI_black_PC.png` / `referenceUI_black_phone.png` → **チャット画面**（黒ベース）の参照
+  - ※ `referenceUI/` は利用者指示（2026-07-14）により **.gitignore のローカル保持のみ**（コミットしない。
+    chat.mov と同扱い）。リポジトリに画像はないが、合わせ込みに必要な実測値は §10-2 に転記済みで自足する。
 - デザインリードは引き続き Sol。FR-12 §2 不可侵制約はすべて継続。変更対象は
   `frontend/src/style.css`・`ChatView.vue`・`LoginView.vue`（+必要なら tailwind.config.js のトークン追加）のみ。
   backend・stores・API・LoadingSpinnerV5・タイプライターは触らない。
