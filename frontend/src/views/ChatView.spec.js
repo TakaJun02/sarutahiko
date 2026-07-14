@@ -69,6 +69,10 @@ describe('ChatView FR-24 scrolling', () => {
     )
   })
 
+  it('includes revealed length in the message-signature auto-follow trigger', () => {
+    expect(normalizedSource).toContain('message.content.length}:${message.revealedLength}')
+  })
+
   it('measures the visual bottom after subtracting the sticky footer height', () => {
     expect(normalizedSource).toContain(
       'const effectiveGap = scrollContainer.scrollHeight - currentScrollTop - scrollContainer.clientHeight - (footerRef.value?.offsetHeight || 0)',
@@ -97,5 +101,14 @@ describe('ChatView FR-24 scrolling', () => {
     )?.[0]
 
     expect(sendSource).toContain("pendingScrollBehavior = 'smooth'")
+  })
+})
+
+describe('ChatView FR-25 smooth reveal', () => {
+  it('passes only the revealed slice to MarkdownRenderer', () => {
+    expect(normalizedSource).toContain(
+      'function revealedMessageContent(message) { return message.content.slice(0, message.revealedLength ?? message.content.length) }',
+    )
+    expect(normalizedSource).toContain(':content="revealedMessageContent(message)"')
   })
 })

@@ -55,7 +55,7 @@ describe('chat store SSE helpers', () => {
     })
   })
 
-  it('switches from pending status to streamed tokens and done metadata', () => {
+  it('switches from pending status to streamed tokens and defers done metadata', () => {
     const message = createMessage('assistant', '', {
       pending: true,
       statusText: '質問を分析しています…',
@@ -78,6 +78,7 @@ describe('chat store SSE helpers', () => {
     expect(message.pending).toBe(false)
     expect(message.streaming).toBe(true)
     expect(message.content).toBe('秋田県立大学')
+    expect(message.revealedLength).toBe(0)
 
     const threadId = applyAssistantEvent(message, {
       event: 'done',
@@ -89,9 +90,61 @@ describe('chat store SSE helpers', () => {
     })
     expect(threadId).toBe('thread-1')
     expect(message.id).toBe('message-1')
-    expect(message.streaming).toBe(false)
-    expect(message.sources).toHaveLength(1)
+    expect(message.streaming).toBe(true)
+    expect(message.sources).toHaveLength(0)
+    expect(message.doneReceived).toBe(true)
+    expect(message.finalSources).toHaveLength(1)
     expect(message.clientId).toBe('local-id')
+  })
+
+  it('defers sources and settled state until reveal reaches the full answer', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '', { pending: true })
+    store.messages = [message]
+
+    applyAssistantEvent(message, {
+      event: 'token',
+      data: { text: '学生ホールにあります。' },
+    })
+    applyAssistantEvent(message, {
+      event: 'done',
+      data: {
+        thread_id: 'thread-1',
+        message_id: 'message-1',
+        sources: [{ title: '公式', url: 'https://example.test', type: 'knowledge' }],
+      },
+    })
+
+    expect(message.streaming).toBe(true)
+    expect(message.sources).toEqual([])
+    expect(message.doneReceived).toBe(true)
+
+    message.revealedLength = message.content.length
+    store.advanceRevealFrame(0.016)
+
+    expect(message.streaming).toBe(false)
+    expect(message.sources).toEqual([
+      { title: '公式', url: 'https://example.test', type: 'knowledge' },
+    ])
+    expect(message.doneReceived).toBeUndefined()
+    expect(message.finalSources).toBeUndefined()
+  })
+
+  it('snaps revealed length on assistant error events', () => {
+    const message = createMessage('assistant', '', { pending: true })
+
+    applyAssistantEvent(message, {
+      event: 'token',
+      data: { text: '途中まで' },
+    })
+    applyAssistantEvent(message, {
+      event: 'error',
+      data: { message: '回答生成中にエラーが発生しました。' },
+    })
+
+    expect(message.streaming).toBe(false)
+    expect(message.content).toBe('回答生成中にエラーが発生しました。')
+    expect(message.revealedLength).toBe(message.content.length)
   })
 
   it('consumes complete SSE blocks and preserves incomplete buffers', () => {
@@ -215,12 +268,14 @@ describe('chat store thread history actions', () => {
       id: 'm2',
       role: 'assistant',
       content: '学生ホールにあります。',
+      revealedLength: '学生ホールにあります。'.length,
       pending: false,
       streaming: false,
     })
     expect(store.messages[1].sources).toEqual([
       { title: '公式', url: 'https://example.test', type: 'knowledge' },
     ])
+    expect(store.messages.every((message) => message.revealedLength === message.content.length)).toBe(true)
   })
 
   it('starts a new chat without dropping the sidebar list', () => {

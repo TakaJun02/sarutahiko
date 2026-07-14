@@ -8,8 +8,17 @@ import {
   getStoredToken,
   renameThreadRequest,
 } from '../services/api'
+import { advanceRevealCount } from '../utils/revealPacing'
 
 const FRIENDLY_SEND_ERROR = 'うまく接続できませんでした。少し待ってからもう一度お試しください。'
+const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
+
+let revealRafId = null
+let revealLastTimestamp = null
+let revealStore = null
+let revealListenersInstalled = false
+let reducedMotionQuery = null
+let documentWasHidden = false
 
 // Backend "detail" strings are written in Japanese guide tone; anything else
 // (raw HTTP status texts such as "Internal Server Error") is replaced with a
@@ -24,7 +33,7 @@ export function toFriendlyErrorMessage(message) {
 
 export function createMessage(role, content = '', overrides = {}) {
   const id = overrides.id || crypto.randomUUID()
-  return {
+  const message = {
     id,
     clientId: overrides.clientId || id,
     role,
@@ -36,6 +45,10 @@ export function createMessage(role, content = '', overrides = {}) {
     sources: [],
     ...overrides,
   }
+  if (typeof message.revealedLength !== 'number') {
+    message.revealedLength = message.content.length
+  }
+  return message
 }
 
 export function parseSseBlock(block) {
@@ -74,15 +87,138 @@ export function applyAssistantEvent(message, event) {
   }
   if (event.event === 'done') {
     message.pending = false
-    message.streaming = false
+    message.streaming = true
     message.id = event.data.message_id || message.id
-    message.sources = event.data.sources || []
+    message.doneReceived = true
+    message.finalSources = event.data.sources || []
     return event.data.thread_id
   }
   if (event.event === 'error') {
     message.pending = false
     message.streaming = false
     message.content = event.data.message || '回答生成中にエラーが発生しました。'
+    message.revealedLength = message.content.length
+    message.sources = []
+    delete message.doneReceived
+    delete message.finalSources
+  }
+}
+
+function getReducedMotionQuery() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return null
+  }
+  if (!reducedMotionQuery) {
+    reducedMotionQuery = window.matchMedia(REDUCED_MOTION_QUERY)
+  }
+  return reducedMotionQuery
+}
+
+function isRevealPacingDisabled() {
+  return getReducedMotionQuery()?.matches === true
+}
+
+function clampMessageReveal(message) {
+  const total = message.content.length
+  if (typeof message.revealedLength !== 'number') {
+    message.revealedLength = total
+  } else if (message.revealedLength > total) {
+    message.revealedLength = total
+  } else if (message.revealedLength < 0) {
+    message.revealedLength = 0
+  }
+}
+
+function finalizeAssistantMessage(message) {
+  message.streaming = false
+  message.sources = message.finalSources || []
+  delete message.doneReceived
+  delete message.finalSources
+}
+
+function messageHasRevealWork(message) {
+  clampMessageReveal(message)
+  return (
+    (message.streaming && message.revealedLength < message.content.length)
+    || Boolean(message.doneReceived)
+  )
+}
+
+function installRevealListeners(store) {
+  revealStore = store
+  if (revealListenersInstalled || typeof window === 'undefined') {
+    return
+  }
+
+  revealListenersInstalled = true
+  const motionQuery = getReducedMotionQuery()
+  if (motionQuery) {
+    const handleMotionChange = () => {
+      if (motionQuery.matches) {
+        revealStore?.snapStreamingMessages()
+      } else {
+        revealStore?.ensureRevealTicker()
+      }
+    }
+    if (typeof motionQuery.addEventListener === 'function') {
+      motionQuery.addEventListener('change', handleMotionChange)
+    } else if (typeof motionQuery.addListener === 'function') {
+      motionQuery.addListener(handleMotionChange)
+    }
+  }
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    documentWasHidden = document.visibilityState === 'hidden'
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        documentWasHidden = true
+        return
+      }
+      if (documentWasHidden) {
+        documentWasHidden = false
+        revealStore?.snapStreamingMessages()
+      }
+    })
+  }
+}
+
+function requestRevealFrame(store) {
+  installRevealListeners(store)
+  if (isRevealPacingDisabled()) {
+    store.snapStreamingMessages()
+    return
+  }
+  if (revealRafId !== null || !store.hasRevealWork()) {
+    return
+  }
+  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+    return
+  }
+  revealLastTimestamp = null
+  revealRafId = window.requestAnimationFrame(runRevealFrame)
+}
+
+function runRevealFrame(timestamp) {
+  const store = revealStore
+  revealRafId = null
+  if (!store) {
+    revealLastTimestamp = null
+    return
+  }
+  if (isRevealPacingDisabled()) {
+    store.snapStreamingMessages()
+    revealLastTimestamp = null
+    return
+  }
+
+  const previousTimestamp = revealLastTimestamp ?? timestamp
+  const dtSeconds = Math.max(0, (timestamp - previousTimestamp) / 1000)
+  revealLastTimestamp = timestamp
+
+  if (store.advanceRevealFrame(dtSeconds)) {
+    revealRafId = window.requestAnimationFrame(runRevealFrame)
+  } else {
+    revealLastTimestamp = null
   }
 }
 
@@ -109,6 +245,36 @@ export const useChatStore = defineStore('chat', {
       this.threadId = null
       this.error = ''
       this.lastFailedMessage = ''
+    },
+    hasRevealWork() {
+      return this.messages.some((message) => messageHasRevealWork(message))
+    },
+    advanceRevealFrame(dtSeconds) {
+      for (const message of this.messages) {
+        clampMessageReveal(message)
+        if (message.streaming && message.revealedLength < message.content.length) {
+          message.revealedLength = advanceRevealCount({
+            revealed: message.revealedLength,
+            total: message.content.length,
+            dtSeconds,
+          })
+        }
+        if (message.doneReceived && message.revealedLength >= message.content.length) {
+          finalizeAssistantMessage(message)
+        }
+      }
+      return this.hasRevealWork()
+    },
+    snapStreamingMessages() {
+      for (const message of this.messages) {
+        if (message.streaming || message.doneReceived) {
+          message.revealedLength = message.content.length
+        }
+      }
+      this.advanceRevealFrame(0)
+    },
+    ensureRevealTicker() {
+      requestRevealFrame(this)
     },
     async loadThreads() {
       this.threads = await fetchThreads()
@@ -177,6 +343,10 @@ export const useChatStore = defineStore('chat', {
         }
         this.error = toFriendlyErrorMessage(error.message)
         assistantMessage.content = this.error
+        assistantMessage.revealedLength = assistantMessage.content.length
+        assistantMessage.sources = []
+        delete assistantMessage.doneReceived
+        delete assistantMessage.finalSources
         this.lastFailedMessage = messageText
       } finally {
         this.isSending = false
@@ -258,6 +428,7 @@ export const useChatStore = defineStore('chat', {
         if (threadId) {
           this.threadId = threadId
         }
+        this.ensureRevealTicker()
       }
 
       return incomplete
