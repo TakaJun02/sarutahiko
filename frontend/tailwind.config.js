@@ -41,6 +41,10 @@ export default {
           signal: '#ff7657',
           soft: '#ff9a80',
         },
+        gemma: {
+          start: '#497fef',
+          end: '#619af1',
+        },
       },
       backgroundImage: {
         'aurora-text': 'linear-gradient(105deg, #ff8f70 5%, #ffc46b 48%, #6fe8a8 96%)',

@@ -286,7 +286,7 @@ FR-18-2 の実装（フラットな 10px テキスト併記）は「地味」と
   - フォントは既存 font-display（Space Grotesk）系のまま。新フォント追加禁止。
 - 対象は引き続き ChatView の 2 ヘッダーのみ（sidebar / login / title 不変）。
 
-### 8-2 右上アイコンの画像化（「もう少し目立つ」）
+### 8-2 右上アイコンの画像化（「もう少し目立つ」）（※FR-21 §10-3 で白黒クレジットグリフへ再改訂）
 
 FR-18-3 の抽象グリフ（white/25 ストローク）を廃し、**`/app-icon.png`（CPS Lab ロゴ・フルカラー）
 の画像ボタン**に置き換える。ダークヘッダー上でフルカラーが自然に目を引く。
@@ -333,4 +333,92 @@ frame-ancestors で表示が壊れるリスクがあるため）。
 - [ ] モーダル: アイコン押下で開く。文言が §8-3 と一致。リンクが新規タブで研究室サイトを開く。
       Esc・背景クリック・閉じるボタンで閉じ、フォーカスがアイコンへ戻る。
 - [ ] スレッド rename/delete ダイアログに回帰がない。
+- [ ] `npm run test` / `npm run build` green。
+
+## 9. FR-20 Gemma4 ブランディング微調整（2026-07-14 追加・利用者指示）（※FR-21 §10 で一部改訂: 透過アイコン化・右配置・色改訂）
+
+背景: 利用者が Gemma 公式ロゴアイコン `frontend/public/icon-gemma4.jpeg`（640×640・白背景 JPEG・
+青グラデの四芒星）を支給。「Powered by Gemma4」の近くにこのアイコンを置き、「Gemma4」の文字色を
+Gemma 公式カラー（青〜水色）にして整える。デザインリードは引き続き Codex / GPT-5.6Sol。
+
+### 9-1 ロックアップへの Gemma アイコン追加
+
+- 対象は ChatView の 2 ヘッダー（モバイル h1 / デスクトップ h1）の suffix グループのみ。
+  表示順は **`Powered by` → アイコン → `Gemma4`**。両ブレークポイントで一貫。
+- 白背景 JPEG は透過化せず、**`rounded-full` の白チップ（ファビコン風バッジ）**として見せる。
+  - サイズ 14〜18px の正方形（両 BP 同一）・`shrink-0`。任意で `ring-1 ring-edge-strong` の髪線。
+  - 装飾画像として `alt=""`。ボタン化・リンク化しない。
+  - suffix グループは `items-baseline` のため、アイコンは `self-center` 等でワードマークと
+    光学中央合わせ（微調整は Sol 裁量）。
+- 360px で 1 行維持（FR-19 §8-1 と同じ）。きつい場合は区切り縦髪線の省略可（両 BP 一貫）。
+- **実装記録（R2・2026-07-14）**: チップ追加（+20px）により 360px でタイトルが 5px 溢れ
+  「APU-N…」に truncate されたため、本条項を発動し区切り縦髪線を両 BP で削除（7px 回収）。
+  Fable が Playwright 実測（title scrollWidth 67px = clientWidth 67px）で解消を検収済み。
+
+### 9-2 「Gemma4」を Gemma 公式ブルーのグラデへ
+
+- FR-19 §8-1 の「コーラル域内」制約は、**この要素に限り利用者指示で解除**する
+  （Campus Signal「コーラル単一アクセント」原則の明示的例外。青を他要素へ波及させない）。
+- `frontend/tailwind.config.js` にトークン追加（値はアイコン四芒星ストローク両端の実測）:
+  `colors.gemma = { start: '#3487fd', end: '#a3c1ff' }`
+- 適用（両 BP の Gemma4 span。現行 `from-brand-signal to-brand-soft` を置換）:
+  `bg-gradient-to-r from-gemma-start to-gemma-end bg-clip-text text-transparent`
+- 10px での可読性が弱いと判断した場合のみ、start の明度 +10% まで持ち上げ可（色相維持。
+  逸脱したら実値をこの節へ追記）。
+
+### 9-3 変更しないもの（厳守）
+
+- **右上ボタン（`/app-icon.png`・2 箇所）は不変**。Gemma アイコンを右上ボタンに使わない（利用者明示指示）。
+- About モーダル: working tree にある**利用者直編集の本文文言を保持**（巻き戻し禁止）。
+- sidebar / login / 空状態: 変更なし。新規モーションの追加も禁止（静的のまま）。
+
+### 9-4 検収チェックリスト（FR-20 分）
+
+- [ ] 360px / 1280px 両方で「Powered by ＋ アイコン ＋ Gemma4」が 1 行・光学整列・チップが潰れていない。
+- [ ] Gemma4 が青系グラデ（コーラルでない）。青が他要素へ波及していない。
+- [ ] 右上ボタンが app-icon.png のまま。About モーダルの利用者編集文言が保持されている。
+- [ ] `npm run test` / `npm run build` green。
+
+## 10. FR-21 Gemma ブランディング改訂 R2（2026-07-14 追加・利用者指示 3 点、§8-2/§9 を一部改訂）
+
+背景: 利用者が公式ロックアップの参照画像 `referenceUI/referenceUI_Gemma.png`（黒地・透過グリフ＋
+青グラデワードマーク。ローカル保持のみ・コミット禁止）を支給。白チップをやめ**透過をいかして
+ダークヘッダーへ直接載せる**方針に改訂。あわせて右上ボタンは「目立つ画像」から
+**「白黒・控えめ・クレジット風」**へ反転する（FR-19 §8-2 の狙いを利用者指示で更新）。
+
+### 10-1 ロックアップ: 透過スターアイコン（§9-1 改訂）
+
+- アセットは Fable 支給の **`/icon-gemma4.png`（96×96・透過・四芒星のみ）** を使う
+  （生成記録: 元 JPEG を fuzz 8% 白抜き → アルファ開演算 Disk:3 で格子線・円を除去 → trim・96px 化。
+  16px 表示での視認性を確認済み）。旧 `/icon-gemma4.jpeg` は参照しない（ファイル削除もしない）。
+- **表示順を変更: `Powered by` → `Gemma4` → アイコン**（アイコンはワードマークの右）。
+- `rounded-full` / `bg-white` / `ring` の白チップ装飾は**全廃**し、透過のまま置く。
+- サイズは h-4 w-4（16px）目安（14〜18px で Sol 裁量・両 BP 同一）・`shrink-0 self-center`・`alt=""`。
+- 両 BP 一貫・360px 1 行維持（区切り縦髪線なしは FR-20 R2 のまま）。
+
+### 10-2 ワードマーク色の改訂（§9-2 改訂）
+
+- 参照画像（黒地公式ロックアップ）のレターコア実測に合わせ、tailwind トークンを更新:
+  `colors.gemma = { start: '#497fef', end: '#619af1' }`（G 側 → 4 側。旧 #3487fd / #a3c1ff を置換）。
+- 適用クラスは現行のまま（`bg-gradient-to-r from-gemma-start to-gemma-end bg-clip-text text-transparent`）。
+
+### 10-3 右上ボタン: 白黒クレジットグリフ（§8-2 改訂）
+
+- `/app-icon.png` の `<img>` を廃し、**インライン SVG のモノクログリフ**へ置換（画像ファイル不使用・
+  カラー/グラデ不可）。ボタンとしての構造・a11y（`aria-haspopup="dialog"`・
+  `aria-label="このアプリについて"`・40px ヒット領域）・About モーダル挙動・フォーカス復帰は現状維持。
+- 意匠要件: 「クレジット / 奥付」の佇まい。細線 stroke（1.25〜1.5px 相当）・`currentColor`・
+  基底 `text-white/30` 前後 → hover `text-white/70` 程度（`hover:bg-fill-hover` 併用可）・
+  active 押し込み。ring / shadow / 常時の枠塗りは付けない。スケールは hover ≤1.04 まで。
+- グリフ実寸 16〜18px。モチーフは Sol 裁量で 1 案・両 BP 同一（例: 極細サークル＋「i」/
+  CPS の Y ノード抽象（FR-18-3 系譜）/ 奥付風 © の抽象）。
+- 配置は現行どおり（モバイル: ヘッダー右端 `ml-auto` / デスクトップ: HONJO / OC 2026 の右隣）。
+
+### 10-4 検収チェックリスト（FR-21 分）
+
+- [ ] 360px / 1280px: 「POWERED BY GEMMA4 ＋ 透過スター」の順で 1 行・白フチ/白箱が出ていない。
+- [ ] GEMMA4 のグラデが参照画像の色域（#497FEF → #619AF1）。青の他要素への波及なし。
+- [ ] 右上が白黒インライン SVG グリフ（app-icon 画像が消えている）。About モーダル開閉・
+      フォーカス復帰に回帰なし。
+- [ ] 利用者編集の About 文言（【CPS Lab】…の 1 段落のみ）がそのまま。
 - [ ] `npm run test` / `npm run build` green。
