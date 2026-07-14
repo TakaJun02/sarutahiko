@@ -481,11 +481,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="chat-shell flex h-dvh overflow-hidden text-white">
+  <div
+    class="chat-shell flex h-dvh overflow-hidden text-white"
+    :class="{ 'chat-shell--active': chat.messages.length > 0 }"
+  >
     <div class="ambient-clouds" aria-hidden="true">
-      <span class="ambient-cloud ambient-cloud--clay"></span>
-      <span class="ambient-cloud ambient-cloud--slate"></span>
-      <span class="ambient-cloud ambient-cloud--moss"></span>
+      <span class="ambient-glow"></span>
     </div>
 
     <aside class="relative z-10 hidden w-[17.5rem] shrink-0 border-r border-edge lg:block">
