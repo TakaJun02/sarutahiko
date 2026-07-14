@@ -31,6 +31,15 @@ frontend/backend/vllm(生成)/qdrant は本機の docker compose で起動する
 backend のローカル起動・Vite の `/api` プロキシ先はともに 8080 とする（8000 は vLLM が使うため）。
 プロキシ先は `VITE_API_PROXY_TARGET` 環境変数で上書き可能にする。
 
+### 本番公開構成（2026-07-14 Fable 決定）
+
+本番はホストの Nginx で公開する（https://ibera.cps.akita-pu.ac.jp）。
+
+- フロント: `npm run build` の dist を /var/www に配置し、ホスト Nginx が直接配信する。frontend コンテナは本番では起動しない。
+- バック: ホスト Nginx が `/api/` を `http://127.0.0.1:8080` へリバースプロキシする。`/api/chat` は SSE のため `proxy_buffering off`・`proxy_read_timeout 300s` が必須。
+- docker compose の公開ポートはすべて `127.0.0.1:` バインドとする（Docker の port publish はホストのファイアウォールを素通りするため、vLLM・Qdrant・backend への外部直アクセスを遮断する目的）。
+- 本番起動は `docker compose up -d backend`（depends_on で vllm・qdrant も起動する）。
+
 ## 2. 技術選定と理由
 
 | 項目 | 選定 | 理由 |
