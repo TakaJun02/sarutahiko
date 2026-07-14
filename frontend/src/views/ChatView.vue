@@ -185,6 +185,10 @@ function toggleSources(message) {
   expandedSourceKeys.value = nextKeys
 }
 
+function revealedMessageContent(message) {
+  return message.content.slice(0, message.revealedLength ?? message.content.length)
+}
+
 function logout() {
   auth.clearSession()
   chat.reset()
@@ -456,7 +460,7 @@ watch(
 watch(
   () => chat.messages.map((message) => {
     const sourceKey = message.sources.map((source) => source.url).join(',')
-    return `${message.clientId || message.id}:${message.content.length}:${message.statusText}:${message.statusStep}:${sourceKey}`
+    return `${message.clientId || message.id}:${message.content.length}:${message.revealedLength}:${message.statusText}:${message.statusStep}:${sourceKey}`
   }).join('|'),
   () => {
     if (pendingScrollBehavior || isAtBottom.value) {
@@ -696,7 +700,7 @@ onBeforeUnmount(() => {
                     :status-step="message.statusStep || 'generate'"
                   >
                     <div class="space-y-4">
-                      <MarkdownRenderer v-if="message.content" :content="message.content" />
+                      <MarkdownRenderer v-if="message.content" :content="revealedMessageContent(message)" />
                       <div v-if="message.sources.length" class="border-t border-edge pt-3">
                         <button
                           type="button"
