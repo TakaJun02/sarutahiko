@@ -613,3 +613,20 @@ Fable 実機検収(mock 8081/5174、390/1440):
 3. reduced-motion エミュレーション: 雲レイヤー opacity 0・枠は単色固定で残存。
 4. streaming 併存で破綻なし（目視）。
 5. frontend `npm test` / `npm run build` 通過。LoadingSpinnerV5.vue 差分ゼロ。backend 差分ゼロ。
+
+### 13-4. 検収記録（2026-07-14 Fable 実機・合格）
+
+実装は Sol: 近景/中景/遠景の 3 雲レイヤー（11s/16s/23s、alternate、負 delay で位相分散、
+linear で終端の減速なし）＋ composer 枠 3.6s linear（トークン `--motion-composer-focus`）。
+
+1. ドリフト（1440）: 近景 translateX 実測 -27px → +47.1px の単調移動、**3 秒窓で 43.0px**（基準 24px）。
+   2 フレーム比較スクショで雲塊の移動が目視明確。レイヤー opacity 0.52（上限 0.55 内）。
+2. スナップなし: 30ms ポーリング 421 サンプル（入→待機→出の全区間）で**最大ステップ 0.043**（基準 ≤0.05）。
+   終了後はレイヤー 0・全雲 paused（アイドル完全復帰）。
+3. フォーカス枠: 1px / offset 3px / 3.6s linear。1s 間隔サンプルの隣接 RGB 差 **40/88/120/37/90 — 全区間 ≥30**
+   （基準は「存在」）。色は #ff8f70→#ffc46b→#6fe8a8 域を巡回。
+4. streaming 併存: outline rgb(255,143,112) 固定・animation none（調停維持）。
+5. reduced-motion: 雲レイヤー opacity 0・アニメ none、枠は単色コーラル 1px で残存。
+6. 390: 雲は下部域に留まり本文可読性維持（ドリフト 10.2px/2s — 画面比で 1440 と同等）。
+7. npm test 21/21・build 成功。LoadingSpinnerV5.vue / backend 差分ゼロ。box-shadow グローは Sol 判断で不採用
+   （常時発光感の回避）。

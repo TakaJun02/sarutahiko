@@ -464,7 +464,11 @@ onBeforeUnmount(() => {
   >
     <div class="ambient-clouds" aria-hidden="true">
       <span class="ambient-glow"></span>
-      <span class="ambient-thinking-glow"></span>
+      <span class="ambient-thinking-glow">
+        <span class="ambient-thinking-cloud ambient-thinking-cloud--near"></span>
+        <span class="ambient-thinking-cloud ambient-thinking-cloud--middle"></span>
+        <span class="ambient-thinking-cloud ambient-thinking-cloud--far"></span>
+      </span>
     </div>
 
     <aside class="relative z-10 hidden w-[17.5rem] shrink-0 border-r border-edge lg:block">
