@@ -14,29 +14,16 @@ import {
   splitGreetingName,
 } from '../utils/emptyGreeting'
 
-const OPEN_CAMPUS_DATE = '2026-07-19'
 const LAST_GREETING_STORAGE_KEY = 'apu-navi:last-empty-greeting'
 // Line-grid aligned: 20px vertical padding + 24px line-height x 6 lines.
 const INPUT_MAX_HEIGHT_PX = 164
 
 // Suggested first questions for the empty state (tap inserts into the input).
 const suggestions = [
-  {
-    label: '無料送迎バスの時刻は？',
-    icon: 'M5 4h14a1.5 1.5 0 0 1 1.5 1.5V16a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2V5.5A1.5 1.5 0 0 1 5 4z M3.5 11h17 M8 21v-3 M16 21v-3 M7.5 15h.01 M16.5 15h.01',
-  },
-  {
-    label: '模擬講義は何がある？',
-    icon: 'M2.5 9.5 12 5l9.5 4.5L12 14 2.5 9.5z M6.5 11.6v3.9c0 1.3 2.5 2.4 5.5 2.4s5.5-1.1 5.5-2.4v-3.9 M21 10v4.5',
-  },
-  {
-    label: '食堂から D404 への行き方は？',
-    icon: 'M4 18h4a4 4 0 0 0 4-4v-4a4 4 0 0 1 4-4h8 M16 3l4 3-4 3',
-  },
-  {
-    label: '個別進学相談はどこでやってる？',
-    icon: 'M12 21s-6.5-5.4-6.5-10a6.5 6.5 0 1 1 13 0c0 4.6-6.5 10-6.5 10z M12 13a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
-  },
+  { label: '無料送迎バスの時刻は？' },
+  { label: '模擬講義は何がある？' },
+  { label: '食堂から D404 への行き方は？' },
+  { label: '個別進学相談はどこでやってる？' },
 ]
 
 const auth = useAuthStore()
@@ -73,19 +60,6 @@ let previousGreetingId = ''
 
 let footerResizeObserver = null
 let pendingScrollBehavior = null
-
-// Days until Open Campus 2026, computed against the JST calendar day.
-const countdownLabel = computed(() => {
-  const todayJst = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo' }).format(new Date())
-  const diffDays = Math.round((Date.parse(OPEN_CAMPUS_DATE) - Date.parse(todayJst)) / 86_400_000)
-  if (diffDays > 0) {
-    return `オープンキャンパス2026まで あと${diffDays}日`
-  }
-  if (diffDays === 0) {
-    return 'オープンキャンパス2026 本日開催！'
-  }
-  return ''
-})
 
 function chooseEmptyGreeting() {
   let previousId = previousGreetingId
@@ -546,18 +520,9 @@ onBeforeUnmount(() => {
               <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
             </svg>
           </button>
-          <div class="flex min-w-0 items-center gap-3 lg:hidden">
-            <img src="/app-icon.png" alt="" class="h-10 w-10 rounded-ui-sm shadow-soft" />
-            <div class="min-w-0">
-              <h1 class="font-display truncate text-base font-semibold tracking-[-0.025em]">APU-Navi</h1>
-              <p class="mt-0.5 truncate text-[11px] text-white/45">本荘キャンパス案内</p>
-            </div>
-          </div>
+          <h1 class="min-w-0 truncate font-display text-base font-semibold tracking-[-0.025em] lg:hidden">APU-Navi</h1>
           <div class="hidden w-full items-center justify-between gap-6 lg:flex">
-            <div class="flex items-center gap-3">
-              <img src="/app-icon.png" alt="" class="h-8 w-8 rounded-ui-sm shadow-soft" />
-              <h1 class="font-display text-sm font-semibold tracking-[-0.02em] text-white/90">APU-Navi</h1>
-            </div>
+            <h1 class="font-display text-sm font-semibold tracking-[-0.02em] text-white/90">APU-Navi</h1>
             <p class="font-display text-[10px] font-medium uppercase tracking-[0.18em] text-white/40">Honjo / OC 2026</p>
           </div>
         </div>
@@ -587,26 +552,19 @@ onBeforeUnmount(() => {
               </span>
             </h2>
 
-            <p
-              v-if="countdownLabel"
-              class="chat-empty__support countdown-chip mt-5 inline-flex min-h-11 w-fit shrink-0 items-center gap-2.5 rounded-full px-4 py-2 text-xs font-medium text-white/75"
-            >
-              <span class="h-1.5 w-1.5 rounded-full bg-brand-signal" aria-hidden="true"></span>
-              {{ countdownLabel }}
-            </p>
-
-            <div class="chat-empty__actions mt-8 grid w-full gap-2.5 sm:grid-cols-2">
+            <div class="chat-empty__actions mt-7 flex w-full flex-wrap gap-2.5">
               <button
                 v-for="suggestion in suggestions"
                 :key="suggestion.label"
                 type="button"
-                class="suggestion-card group flex min-h-16 items-center gap-4 rounded-ui border border-edge bg-ink-surface/75 px-4 py-3 text-left text-sm text-white/75 shadow-hairline transition duration-base ease-expressive hover:-translate-y-0.5 hover:border-edge-strong hover:bg-ink-raised hover:text-white active:translate-y-0 active:scale-[0.985]"
+                class="suggestion-card group inline-flex min-h-11 w-fit max-w-full items-center gap-3 rounded-full border border-edge-strong bg-ink-surface/65 px-4 py-2 text-left text-sm text-white/75 shadow-hairline transition duration-base ease-expressive hover:-translate-y-0.5 hover:bg-ink-raised hover:text-white active:translate-y-0 active:scale-[0.985]"
+                :aria-label="`入力欄に「${suggestion.label}」を入力`"
                 @click="applySuggestion(suggestion.label)"
               >
-                <svg aria-hidden="true" class="h-5 w-5 shrink-0 text-white/45 transition duration-base ease-standard group-hover:text-brand-soft" viewBox="0 0 24 24" fill="none">
-                  <path :d="suggestion.icon" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" />
+                <span>{{ suggestion.label }}</span>
+                <svg aria-hidden="true" class="suggestion-card__arrow h-4 w-4 shrink-0 text-brand-soft" viewBox="0 0 24 24" fill="none">
+                  <path d="M20 5v6a5 5 0 0 1-5 5H5 M9 12l-4 4 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
-                <span class="flex-1">{{ suggestion.label }}</span>
               </button>
             </div>
           </div>

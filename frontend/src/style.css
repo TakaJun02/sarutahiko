@@ -399,7 +399,6 @@ a {
 
 .chat-empty__identity,
 .chat-empty__heading,
-.chat-empty__support,
 .chat-empty__actions {
   animation: empty_item_enter var(--motion-slow) var(--ease-expressive) both;
 }
@@ -428,12 +427,8 @@ a {
   white-space: nowrap;
 }
 
-.chat-empty__support {
-  animation-delay: calc(var(--motion-stagger) * 3);
-}
-
 .chat-empty__actions {
-  animation-delay: calc(var(--motion-stagger) * 4);
+  animation-delay: calc(var(--motion-stagger) * 3);
 }
 
 .aurora-copy {
@@ -450,26 +445,18 @@ a {
   overflow: hidden;
 }
 
-.suggestion-card::before {
-  position: absolute;
-  top: 0;
-  right: 1rem;
-  left: 1rem;
-  height: 1px;
-  background: var(--color-signal);
-  content: "";
-  opacity: 0;
-  transform: scaleX(0.25);
-  transform-origin: left;
+.suggestion-card__arrow {
+  opacity: 0.58;
+  transform: translate3d(0, 0, 0);
   transition:
-    opacity var(--motion-base) ease-out,
+    opacity var(--motion-fast) ease-out,
     transform var(--motion-base) var(--ease-expressive);
 }
 
-.suggestion-card:hover::before,
-.suggestion-card:focus-visible::before {
-  opacity: 0.75;
-  transform: scaleX(1);
+.suggestion-card:hover .suggestion-card__arrow,
+.suggestion-card:focus-visible .suggestion-card__arrow {
+  opacity: 1;
+  transform: translate3d(-0.125rem, 0.125rem, 0);
 }
 
 .composer-dock {
@@ -569,12 +556,6 @@ a {
 .dialog-fade-leave-to .dialog-panel {
   opacity: 0;
   transform: translate3d(0, 0.75rem, 0) scale(0.985);
-}
-
-.countdown-chip {
-  border: 1px solid var(--color-edge-strong);
-  background: rgba(244, 243, 237, 0.025);
-  box-shadow: var(--shadow-hairline);
 }
 
 /* ------------------------------------------------------------------ */
