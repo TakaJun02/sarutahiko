@@ -7,6 +7,7 @@ import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import ThreadSidebar from '../components/ThreadSidebar.vue'
 import { useAuthStore } from '../stores/auth'
 import { toFriendlyErrorMessage, useChatStore } from '../stores/chat'
+import { getDialogAriaLabel, getDialogInitialFocus } from '../utils/dialog'
 import {
   buildGreetingLines,
   EMPTY_GREETING_VARIANTS,
@@ -43,8 +44,8 @@ const activeGreeting = ref(EMPTY_GREETING_VARIANTS[0])
 const greetingNameParts = computed(() => splitGreetingName(auth.user?.name || ''))
 const greetingLines = computed(() => buildGreetingLines(activeGreeting.value, auth.user?.name || ''))
 
-// Thread rename / delete confirmation dialog (replaces window.prompt/confirm).
-const dialog = ref(null) // { kind: 'rename' | 'delete', threadId, threadTitle }
+// Shared in-app dialog for thread actions and app information.
+const dialog = ref(null) // { kind: 'rename' | 'delete' | 'about', threadId?, threadTitle? }
 const dialogInput = ref('')
 const dialogError = ref('')
 const dialogBusy = ref(false)
@@ -215,17 +216,17 @@ function startNewChat() {
   }
 }
 
-function openDialog(kind, threadId) {
+function openDialog(kind, threadId = null) {
   // The immediate trigger is a menu item that unmounts with its menu, so
   // prefer the thread row's persistent kebab button for focus restoration.
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
   dialogReturnFocus = active?.closest('li')?.querySelector('[aria-haspopup="menu"]') || active
-  const thread = chat.threads.find((item) => item.id === threadId)
+  const thread = threadId ? chat.threads.find((item) => item.id === threadId) : null
   dialog.value = { kind, threadId, threadTitle: thread?.title || '' }
   dialogInput.value = kind === 'rename' ? thread?.title || '' : ''
   dialogError.value = ''
   nextTick(() => {
-    if (kind === 'rename') {
+    if (getDialogInitialFocus(kind) === 'input') {
       dialogInputRef.value?.focus()
       dialogInputRef.value?.select()
     } else {
@@ -250,6 +251,10 @@ function removeThread(threadId) {
   openDialog('delete', threadId)
 }
 
+function openAboutDialog() {
+  openDialog('about')
+}
+
 function closeDialog() {
   if (dialogBusy.value) {
     return
@@ -271,6 +276,10 @@ async function confirmDialog() {
     return
   }
   const { kind, threadId } = dialog.value
+
+  if (kind === 'about') {
+    return
+  }
 
   if (kind === 'rename') {
     const title = dialogInput.value.trim()
@@ -528,51 +537,51 @@ onBeforeUnmount(() => {
               <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
             </svg>
           </button>
-          <h1 class="flex min-w-0 items-baseline gap-1.5 font-display lg:hidden">
+          <h1 class="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-hidden font-display lg:hidden">
             <span class="min-w-0 truncate text-base font-semibold tracking-[-0.025em]">APU-Navi</span>
+            <span aria-hidden="true" class="h-3 w-px shrink-0 bg-edge-strong"></span>
             <span class="flex shrink-0 items-baseline gap-1 whitespace-nowrap">
-              <span class="text-[10px] font-medium uppercase tracking-[0.18em] text-white/35">Powered by</span>
-              <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-soft">Gemma4</span>
+              <span class="text-[9px] font-medium uppercase tracking-[0.16em] text-white/35">Powered by</span>
+              <span class="bg-gradient-to-r from-brand-signal to-brand-soft bg-clip-text text-[10px] font-bold uppercase tracking-[0.16em] text-transparent">Gemma4</span>
             </span>
           </h1>
-          <a
-            href="https://www.cps.akita-pu.ac.jp/"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="ml-auto grid h-9 w-9 shrink-0 place-items-center text-white/25 transition duration-fast ease-standard hover:text-white/70 focus-visible:text-white/70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-6px] focus-visible:outline-white/35 lg:hidden"
-            aria-label="CPS 研究室サイト"
+          <button
+            type="button"
+            class="group ml-auto grid h-10 w-10 shrink-0 place-items-center rounded-ui-sm lg:hidden"
+            aria-haspopup="dialog"
+            aria-label="このアプリについて"
+            @click="openAboutDialog"
           >
-            <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="none">
-              <path d="M5 6.5h3l4 5 4-5h3M12 11.5V18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-              <circle cx="5" cy="6.5" r="1.25" stroke="currentColor" stroke-width="1.6" />
-              <circle cx="19" cy="6.5" r="1.25" stroke="currentColor" stroke-width="1.6" />
-              <circle cx="12" cy="19.25" r="1.25" stroke="currentColor" stroke-width="1.6" />
-            </svg>
-          </a>
+            <img
+              src="/app-icon.png"
+              alt=""
+              class="h-7 w-7 rounded-ui-sm object-cover opacity-90 ring-1 ring-edge-strong shadow-soft transition duration-fast ease-expressive group-hover:-translate-y-0.5 group-hover:scale-[1.04] group-hover:opacity-100 group-active:translate-y-0 group-active:scale-[0.98] motion-reduce:transform-none motion-reduce:transition-none"
+            />
+          </button>
           <div class="hidden w-full items-center justify-between gap-6 lg:flex">
-            <h1 class="flex min-w-0 items-baseline gap-2 font-display">
+            <h1 class="flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden font-display">
               <span class="min-w-0 truncate text-sm font-semibold tracking-[-0.02em] text-white/90">APU-Navi</span>
+              <span aria-hidden="true" class="h-3 w-px shrink-0 bg-edge-strong"></span>
               <span class="flex shrink-0 items-baseline gap-1 whitespace-nowrap">
-                <span class="text-[10px] font-medium uppercase tracking-[0.18em] text-white/35">Powered by</span>
-                <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-soft">Gemma4</span>
+                <span class="text-[9px] font-medium uppercase tracking-[0.16em] text-white/35">Powered by</span>
+                <span class="bg-gradient-to-r from-brand-signal to-brand-soft bg-clip-text text-[10px] font-bold uppercase tracking-[0.16em] text-transparent">Gemma4</span>
               </span>
             </h1>
             <div class="ml-auto flex items-center gap-2">
               <p class="font-display text-[10px] font-medium uppercase tracking-[0.18em] text-white/40">Honjo / OC 2026</p>
-              <a
-                href="https://www.cps.akita-pu.ac.jp/"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="grid h-9 w-9 shrink-0 place-items-center text-white/25 transition duration-fast ease-standard hover:text-white/70 focus-visible:text-white/70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-6px] focus-visible:outline-white/35"
-                aria-label="CPS 研究室サイト"
+              <button
+                type="button"
+                class="group grid h-10 w-10 shrink-0 place-items-center rounded-ui-sm"
+                aria-haspopup="dialog"
+                aria-label="このアプリについて"
+                @click="openAboutDialog"
               >
-                <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="none">
-                  <path d="M5 6.5h3l4 5 4-5h3M12 11.5V18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-                  <circle cx="5" cy="6.5" r="1.25" stroke="currentColor" stroke-width="1.6" />
-                  <circle cx="19" cy="6.5" r="1.25" stroke="currentColor" stroke-width="1.6" />
-                  <circle cx="12" cy="19.25" r="1.25" stroke="currentColor" stroke-width="1.6" />
-                </svg>
-              </a>
+                <img
+                  src="/app-icon.png"
+                  alt=""
+                  class="h-7 w-7 rounded-ui-sm object-cover opacity-90 ring-1 ring-edge-strong shadow-soft transition duration-fast ease-expressive group-hover:-translate-y-0.5 group-hover:scale-[1.04] group-hover:opacity-100 group-active:translate-y-0 group-active:scale-[0.98] motion-reduce:transform-none motion-reduce:transition-none"
+                />
+              </button>
             </div>
           </div>
         </div>
@@ -801,7 +810,7 @@ onBeforeUnmount(() => {
         class="fixed inset-0 z-50 flex items-end justify-center p-4 pb-[calc(1rem_+_env(safe-area-inset-bottom))] sm:items-center sm:pb-4"
         role="dialog"
         aria-modal="true"
-        :aria-label="dialog.kind === 'rename' ? 'スレッド名を変更' : '会話を削除'"
+        :aria-label="getDialogAriaLabel(dialog.kind)"
       >
         <div class="absolute inset-0 bg-black/70 backdrop-blur-[2px]" @click="closeDialog"></div>
         <div class="dialog-panel relative w-full max-w-sm rounded-ui-lg border border-edge-strong bg-ink-raised p-5 shadow-glass">
@@ -816,14 +825,41 @@ onBeforeUnmount(() => {
               @keydown.enter="onDialogEnter"
             />
           </template>
-          <template v-else>
+          <template v-else-if="dialog.kind === 'delete'">
             <h3 class="text-lg font-semibold tracking-[-0.025em]">会話を削除しますか？</h3>
             <p class="mt-2 break-words text-sm leading-6 text-white/60">
               「{{ dialog.threadTitle }}」を削除すると元に戻せません。
             </p>
           </template>
+          <template v-else>
+            <img src="/app-icon.png" alt="" class="h-12 w-12 rounded-ui shadow-soft" />
+            <h3 class="mt-4 font-display text-xl font-semibold tracking-[-0.03em]">APU-Navi について</h3>
+            <div class="mt-3 space-y-3 text-sm leading-6 text-white/65">
+              <p>APU-Navi は、オープンキャンパス 2026 の出展として、サイバーフィジカルシステム研究室（CPS Lab）の高橋 潤大が開発した本荘キャンパス案内 AI エージェントです。</p>
+              <p>回答はローカル GPU 上の Gemma4 と Agentic RAG で生成しています。</p>
+            </div>
+            <a
+              href="https://www.cps.akita-pu.ac.jp/"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="group mt-5 flex min-h-11 w-full items-center justify-between gap-3 rounded-ui-sm border border-edge bg-ink-surface px-3.5 py-2.5 text-sm text-white/75 transition duration-fast ease-standard hover:border-edge-strong hover:bg-fill-hover hover:text-white"
+            >
+              <span class="text-[13px] leading-5">サイバーフィジカルシステム研究室のサイトへ</span>
+              <span aria-hidden="true" class="shrink-0 font-display text-base text-brand-soft transition duration-fast ease-expressive group-hover:-translate-y-0.5 group-hover:translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">↗</span>
+            </a>
+          </template>
           <p v-if="dialogError" class="mt-3 text-sm text-red-300" role="alert">{{ dialogError }}</p>
-          <div class="mt-5 flex justify-end gap-2">
+          <div v-if="dialog.kind === 'about'" class="mt-5 flex justify-end">
+            <button
+              ref="dialogCancelRef"
+              type="button"
+              class="min-h-11 rounded-ui-sm border border-edge px-4 py-2 text-sm text-white/70 transition duration-fast ease-standard hover:bg-fill-hover hover:text-white active:scale-[0.97]"
+              @click="closeDialog"
+            >
+              閉じる
+            </button>
+          </div>
+          <div v-else class="mt-5 flex justify-end gap-2">
             <button
               ref="dialogCancelRef"
               type="button"
