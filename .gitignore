@@ -1,0 +1,35 @@
+# 参考用の画面録画（約800MB）— 絶対にコミットしない
+chat.mov
+*.mov
+
+# 参考用 Gemini アプリ実スクショ（FR-14 意匠の正）— ローカル保持のみ
+referenceUI/
+
+# secrets
+.env
+.env.local
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+backend/data/*.sqlite3
+backend/data/*.db
+qdrant_data/
+
+# node
+node_modules/
+dist/
+
+# tools
+.serena/
+.codex/
+.claude/settings.local.json
+
+# os
+.DS_Store
+
+# playwright artifacts
+.playwright-mcp/

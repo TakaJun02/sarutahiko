@@ -1,0 +1,33 @@
+{
+  "name": "campus-guide-agent-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "6.0.1",
+    "vite": "5.4.21",
+    "vue": "3.5.21",
+    "vue-router": "4.5.1",
+    "pinia": "3.0.3",
+    "marked": "16.4.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "10.4.21",
+    "postcss": "8.5.6",
+    "tailwindcss": "3.4.17",
+    "vitest": "1.6.1"
+  },
+  "overrides": {
+    "glob": "10.4.5",
+    "minimatch": "9.0.5",
+    "minipass": "7.1.2",
+    "resolve": "1.22.10",
+    "strip-ansi": "7.1.2",
+    "yaml": "2.8.1"
+  }
+}

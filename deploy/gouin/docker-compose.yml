@@ -1,0 +1,35 @@
+# Embedding vLLM server for campus-guide-agent (runs on host "gouin", the second GPU server).
+# Usage (on gouin):
+#   docker compose up -d
+# Serves OpenAI-compatible /v1/embeddings at http://<gouin-ip>:8001/v1
+# The backend on the main machine connects via EMBEDDING_BASE_URL (see root docker-compose.yml).
+#
+# VRAM note: Qwen3-Embedding-8B in fp16 needs ~16 GB of weights. If gouin's GPU is
+# smaller, add `--dtype float16 --gpu-memory-utilization 0.95` tuning or ask Fable
+# to reconsider the model size before changing anything here.
+
+services:
+  vllm-embedding:
+    image: vllm/vllm-openai:latest
+    gpus: all
+    ipc: host
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    # `--task embed` was removed in newer vLLM images; `--runner pooling` is the
+    # replacement. The model must be a positional argument (--model is deprecated).
+    command: >-
+      Qwen/Qwen3-Embedding-8B
+      --runner pooling
+      --gpu-memory-utilization 0.90
+      --max-model-len 8192
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 300s

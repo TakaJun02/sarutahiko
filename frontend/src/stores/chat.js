@@ -1,0 +1,437 @@
+import { defineStore } from 'pinia'
+
+import {
+  ApiError,
+  deleteThreadRequest,
+  fetchThread,
+  fetchThreads,
+  getStoredToken,
+  renameThreadRequest,
+} from '../services/api'
+import { advanceRevealCount } from '../utils/revealPacing'
+
+const FRIENDLY_SEND_ERROR = 'うまく接続できませんでした。少し待ってからもう一度お試しください。'
+const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
+
+let revealRafId = null
+let revealLastTimestamp = null
+let revealStore = null
+let revealListenersInstalled = false
+let reducedMotionQuery = null
+let documentWasHidden = false
+
+// Backend "detail" strings are written in Japanese guide tone; anything else
+// (raw HTTP status texts such as "Internal Server Error") is replaced with a
+// friendly message so visitors never see bare English errors.
+export function toFriendlyErrorMessage(message) {
+  // CJK punctuation / kana / kanji ranges (U+3000-30FF, U+3400-9FFF).
+  if (typeof message === 'string' && /[\u3000-\u30ff\u3400-\u9fff]/.test(message)) {
+    return message
+  }
+  return FRIENDLY_SEND_ERROR
+}
+
+export function createMessage(role, content = '', overrides = {}) {
+  const id = overrides.id || crypto.randomUUID()
+  const message = {
+    id,
+    clientId: overrides.clientId || id,
+    role,
+    content,
+    pending: false,
+    streaming: false,
+    statusText: '',
+    statusStep: '',
+    sources: [],
+    ...overrides,
+  }
+  if (typeof message.revealedLength !== 'number') {
+    message.revealedLength = message.content.length
+  }
+  return message
+}
+
+export function parseSseBlock(block) {
+  const lines = block.split(/\r?\n/)
+  let event = 'message'
+  const dataLines = []
+  for (const line of lines) {
+    if (line.startsWith('event:')) {
+      event = line.slice(6).trim()
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trimStart())
+    }
+  }
+  if (!dataLines.length) {
+    return null
+  }
+  return {
+    event,
+    data: JSON.parse(dataLines.join('\n')),
+  }
+}
+
+export function applyAssistantEvent(message, event) {
+  if (event.event === 'status') {
+    message.statusText = event.data.text
+    message.statusStep = event.data.step
+    message.pending = true
+    message.streaming = false
+    return
+  }
+  if (event.event === 'token') {
+    message.pending = false
+    message.streaming = true
+    message.content += event.data.text
+    return
+  }
+  if (event.event === 'done') {
+    message.pending = false
+    message.streaming = true
+    message.id = event.data.message_id || message.id
+    message.doneReceived = true
+    message.finalSources = event.data.sources || []
+    return event.data.thread_id
+  }
+  if (event.event === 'error') {
+    message.pending = false
+    message.streaming = false
+    message.content = event.data.message || '回答生成中にエラーが発生しました。'
+    message.revealedLength = message.content.length
+    message.sources = []
+    delete message.doneReceived
+    delete message.finalSources
+  }
+}
+
+function getReducedMotionQuery() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return null
+  }
+  if (!reducedMotionQuery) {
+    reducedMotionQuery = window.matchMedia(REDUCED_MOTION_QUERY)
+  }
+  return reducedMotionQuery
+}
+
+function isRevealPacingDisabled() {
+  return getReducedMotionQuery()?.matches === true
+}
+
+function clampMessageReveal(message) {
+  const total = message.content.length
+  if (typeof message.revealedLength !== 'number') {
+    message.revealedLength = total
+  } else if (message.revealedLength > total) {
+    message.revealedLength = total
+  } else if (message.revealedLength < 0) {
+    message.revealedLength = 0
+  }
+}
+
+function finalizeAssistantMessage(message) {
+  message.streaming = false
+  message.sources = message.finalSources || []
+  delete message.doneReceived
+  delete message.finalSources
+}
+
+function messageHasRevealWork(message) {
+  clampMessageReveal(message)
+  return (
+    (message.streaming && message.revealedLength < message.content.length)
+    || Boolean(message.doneReceived)
+  )
+}
+
+function installRevealListeners(store) {
+  revealStore = store
+  if (revealListenersInstalled || typeof window === 'undefined') {
+    return
+  }
+
+  revealListenersInstalled = true
+  const motionQuery = getReducedMotionQuery()
+  if (motionQuery) {
+    const handleMotionChange = () => {
+      if (motionQuery.matches) {
+        revealStore?.snapStreamingMessages()
+      } else {
+        revealStore?.ensureRevealTicker()
+      }
+    }
+    if (typeof motionQuery.addEventListener === 'function') {
+      motionQuery.addEventListener('change', handleMotionChange)
+    } else if (typeof motionQuery.addListener === 'function') {
+      motionQuery.addListener(handleMotionChange)
+    }
+  }
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    documentWasHidden = document.visibilityState === 'hidden'
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        documentWasHidden = true
+        return
+      }
+      if (documentWasHidden) {
+        documentWasHidden = false
+        revealStore?.snapStreamingMessages()
+      }
+    })
+  }
+}
+
+function requestRevealFrame(store) {
+  installRevealListeners(store)
+  if (isRevealPacingDisabled()) {
+    store.snapStreamingMessages()
+    return
+  }
+  if (revealRafId !== null || !store.hasRevealWork()) {
+    return
+  }
+  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+    return
+  }
+  revealLastTimestamp = null
+  revealRafId = window.requestAnimationFrame(runRevealFrame)
+}
+
+function runRevealFrame(timestamp) {
+  const store = revealStore
+  revealRafId = null
+  if (!store) {
+    revealLastTimestamp = null
+    return
+  }
+  if (isRevealPacingDisabled()) {
+    store.snapStreamingMessages()
+    revealLastTimestamp = null
+    return
+  }
+
+  const previousTimestamp = revealLastTimestamp ?? timestamp
+  const dtSeconds = Math.max(0, (timestamp - previousTimestamp) / 1000)
+  revealLastTimestamp = timestamp
+
+  if (store.advanceRevealFrame(dtSeconds)) {
+    revealRafId = window.requestAnimationFrame(runRevealFrame)
+  } else {
+    revealLastTimestamp = null
+  }
+}
+
+export const useChatStore = defineStore('chat', {
+  state: () => ({
+    messages: [],
+    threadId: null,
+    threads: [],
+    isSending: false,
+    error: '',
+    lastFailedMessage: '',
+  }),
+  actions: {
+    reset() {
+      this.messages = []
+      this.threadId = null
+      this.threads = []
+      this.isSending = false
+      this.error = ''
+      this.lastFailedMessage = ''
+    },
+    newChat() {
+      this.messages = []
+      this.threadId = null
+      this.error = ''
+      this.lastFailedMessage = ''
+    },
+    hasRevealWork() {
+      return this.messages.some((message) => messageHasRevealWork(message))
+    },
+    advanceRevealFrame(dtSeconds) {
+      for (const message of this.messages) {
+        clampMessageReveal(message)
+        if (message.streaming && message.revealedLength < message.content.length) {
+          message.revealedLength = advanceRevealCount({
+            revealed: message.revealedLength,
+            total: message.content.length,
+            dtSeconds,
+          })
+        }
+        if (message.doneReceived && message.revealedLength >= message.content.length) {
+          finalizeAssistantMessage(message)
+        }
+      }
+      return this.hasRevealWork()
+    },
+    snapStreamingMessages() {
+      for (const message of this.messages) {
+        if (message.streaming || message.doneReceived) {
+          message.revealedLength = message.content.length
+        }
+      }
+      this.advanceRevealFrame(0)
+    },
+    ensureRevealTicker() {
+      requestRevealFrame(this)
+    },
+    async loadThreads() {
+      this.threads = await fetchThreads()
+    },
+    async openThread(threadId) {
+      const payload = await fetchThread(threadId)
+      this.threadId = payload.thread.id
+      this.messages = payload.messages.map((message) =>
+        createMessage(message.role, message.content, {
+          id: message.id,
+          pending: false,
+          streaming: false,
+          sources: message.sources || [],
+        }),
+      )
+      this.error = ''
+    },
+    async renameThread(threadId, title) {
+      const updated = await renameThreadRequest(threadId, title)
+      const index = this.threads.findIndex((thread) => thread.id === threadId)
+      if (index !== -1) {
+        this.threads.splice(index, 1, { ...this.threads[index], ...updated })
+      }
+    },
+    async deleteThread(threadId) {
+      await deleteThreadRequest(threadId)
+      this.threads = this.threads.filter((thread) => thread.id !== threadId)
+      if (this.threadId === threadId) {
+        this.newChat()
+      }
+    },
+    async sendMessage(text) {
+      const messageText = text.trim()
+      if (!messageText || this.isSending) {
+        return
+      }
+
+      const userMessage = createMessage('user', messageText)
+      const assistantDraft = createMessage('assistant', '', {
+        pending: true,
+        statusText: '質問を分析しています…',
+        statusStep: 'analyze',
+      })
+      this.messages.push(userMessage, assistantDraft)
+      const assistantMessage = this.messages[this.messages.length - 1]
+      this.isSending = true
+      this.error = ''
+      this.lastFailedMessage = ''
+
+      try {
+        await this.streamChatResponse(messageText, assistantMessage)
+        if (this.threadId) {
+          // Refresh the sidebar so new threads appear first and existing
+          // threads bubble up (updated_at descending on the server).
+          try {
+            await this.loadThreads()
+          } catch {
+            // A stale sidebar is not worth failing the whole send for.
+          }
+        }
+      } catch (error) {
+        assistantMessage.pending = false
+        assistantMessage.streaming = false
+        if (error.status === 401) {
+          throw error
+        }
+        this.error = toFriendlyErrorMessage(error.message)
+        assistantMessage.content = this.error
+        assistantMessage.revealedLength = assistantMessage.content.length
+        assistantMessage.sources = []
+        delete assistantMessage.doneReceived
+        delete assistantMessage.finalSources
+        this.lastFailedMessage = messageText
+      } finally {
+        this.isSending = false
+      }
+    },
+    async retryLast() {
+      const text = this.lastFailedMessage
+      if (!text || this.isSending) {
+        return
+      }
+      // Replace the failed exchange (its user + assistant pair are always the
+      // two most recent messages while the error banner is visible).
+      if (this.messages.length >= 2) {
+        this.messages.splice(this.messages.length - 2, 2)
+      }
+      this.error = ''
+      this.lastFailedMessage = ''
+      await this.sendMessage(text)
+    },
+    async streamChatResponse(text, assistantMessage) {
+      const token = getStoredToken()
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          message: text,
+          thread_id: this.threadId,
+        }),
+      })
+
+      if (!response.ok) {
+        let detail = response.statusText
+        try {
+          const body = await response.json()
+          detail = body.detail || detail
+        } catch {
+          // Keep response status text if the error body is not JSON.
+        }
+        throw new ApiError(detail, response.status)
+      }
+      if (!response.body) {
+        throw new ApiError('SSE ストリームを開始できませんでした。', response.status)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) {
+          break
+        }
+        buffer += decoder.decode(value, { stream: true })
+        buffer = this.consumeSseBuffer(buffer, assistantMessage)
+      }
+
+      buffer += decoder.decode()
+      this.consumeSseBuffer(buffer, assistantMessage, true)
+    },
+    consumeSseBuffer(buffer, assistantMessage, flush = false) {
+      const normalized = buffer.replace(/\r\n/g, '\n')
+      const blocks = normalized.split('\n\n')
+      const incomplete = flush ? '' : blocks.pop() || ''
+      const completeBlocks = flush ? blocks.filter(Boolean) : blocks
+
+      for (const block of completeBlocks) {
+        if (!block.trim()) {
+          continue
+        }
+        const parsed = parseSseBlock(block)
+        if (!parsed) {
+          continue
+        }
+        const threadId = applyAssistantEvent(assistantMessage, parsed)
+        if (threadId) {
+          this.threadId = threadId
+        }
+        this.ensureRevealTicker()
+      }
+
+      return incomplete
+    },
+  },
+})
