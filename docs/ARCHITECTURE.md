@@ -90,6 +90,14 @@ data: {"step": "analyze" | "retrieve" | "search" | "web_search" | "evaluate" | "
 event: token
 data: {"text": "秋田県立"}
 
+event: map
+data: {"mode": "route" | "place" | "ask_origin",
+       "origin": {"node": "...", "label": "..."} | null,
+       "destination": {"node": "...", "label": "...", "room": "..." | null, "floor": 4 | null} | null,
+       "path": {"nodes": [...], "edges": [...]},   // mode=route のみ
+       "steps": ["..."],                            // mode=route のみ
+       "prompt": "...", "question": "..."}          // mode=ask_origin のみ
+
 event: done
 data: {"thread_id": "...", "message_id": "...",
        "sources": [{"title": "...", "url": "...", "type": "knowledge" | "web"}]}
@@ -103,6 +111,9 @@ data: {"message": "..."}
   表示は FR-25 の「なめらか文字送り」でペーシングする（`docs/RELEASE_PREP.md` §14。frontend のみの
   変更で、SSE スキーマ・backend は不変）。
 - `done` の `sources` は回答末尾の出典表示に使う（FR-25 以降、表示は文字送り完了後）。
+- `map` は FR-26 のマップカード（2026-07-17 追加、詳細: `docs/MAP_CARD.md`）。token 完了後・`done` 直前に
+  最大 1 回。送らないケースのストリームは従来と完全同一（後方互換）。リクエスト body は不変
+  （マップタップの現在地は合成メッセージとして通常の `message` で送る — MAP_CARD.md §7-3）。
 
 ## 4. リポジトリ構成（計画）
 
