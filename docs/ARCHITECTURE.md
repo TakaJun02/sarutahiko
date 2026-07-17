@@ -47,7 +47,7 @@ backend のローカル起動・Vite の `/api` プロキシ先はともに 8080
 | フロントエンド | Vue 3 + Vite + Tailwind CSS + Pinia | 演出の参照実装 guidanceLLM2 と同スタックにし、Ver1.0 の「完全再現」をコード流用レベルで保証するため |
 | Markdown 描画 | marked | 参照実装と同じ |
 | バックエンド | Python 3.11+ / FastAPI | SSE・非同期・LLM エコシステムとの親和性 |
-| エージェント制御 | LangGraph | Agentic RAG のループ（検索→評価→再検索）とステップ通知フックを素直に書ける |
+| エージェント制御 | LangGraph **1.2.9**（**定義＝実行**・2026-07-18 FR-33 で一本化、`docs/LANGGRAPH_MIGRATION.md`） | Agentic RAG のループ（検索→評価→再検索）を StateGraph の循環＋条件エッジで実行し、status/token/map は `get_stream_writer()` の custom イベントでノード内から送出。**LangSmith 系環境変数（`LANGCHAIN_TRACING_V2` / `LANGSMITH_TRACING`）は設定しない**（テレメトリ無効を維持） |
 | LLM サービング | vLLM（OpenAI 互換サーバ） | 確定仕様。バックエンドからは OpenAI クライアントで接続 |
 | LLM モデル | **`google/gemma-4-12B-it-qat-w4a16-ct`**（**2026-07-12 利用者指示・Fable が HF 存在確認済み**） | 複数人同時利用を優先し 31B の1段下へ縮小（利用者指示「31B より1段階小さいもの、おそらく 12B」。Gemma 4 の系列は E2B / E4B / 12B / 26B-A4B / 31B で、31B と同じ vLLM ネイティブ w4a16-ct 形式の 12B を採用）。KV に余裕ができ、コンテキスト長（≥8192）と同時シーケンス数（≥8）を確保する。thinking 非対応・`chat_template_kwargs` を送らない規約は 31B と同じ（AGENT_HARNESS.md §4） |
 | 埋め込み | **`Qwen/Qwen3-Embedding-8B`（第2GPUサーバー・vLLM serve・OpenAI 互換 /v1/embeddings）** | **2026-07-12 利用者指示**: bge-m3(CPU) から変更。MTEB 多言語で最高水準・日本語検索に強い。生成用 GPU と取り合わないよう別マシンで提供。クエリ側 instruct プレフィックス等の利用規約はハーネス v5 §V5-1 | 

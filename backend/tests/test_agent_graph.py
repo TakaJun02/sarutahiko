@@ -17,6 +17,7 @@ from app.agent.graph import (
     MIN_GENERATION_CONTEXT_TOKENS,
     PROMPT_MARGIN_TOKENS,
     RealCampusAgent,
+    _ContextAssembly,
     estimate_tokens,
 )
 from app.models.auth import User
@@ -158,6 +159,23 @@ class FakeSearchProvider:
         offset = (len(self.calls) - 1) * max_results
         rows = self.results[offset : offset + max_results] or self.results[:max_results]
         return rows[:max_results]
+
+
+class FailingSearchProvider:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def search(self, query: str, *, max_results: int, include_domains=None):
+        self.calls.append(
+            {
+                "query": query,
+                "max_results": max_results,
+                "include_domains": include_domains,
+            }
+        )
+        raise RuntimeError("search unavailable")
 
 
 class FakeLexicalSearch:
@@ -421,6 +439,37 @@ confidence: high
     assert len(outcome.hits) == 1
 
 
+async def test_compiled_graph_contains_only_the_seven_runtime_nodes() -> None:
+    graph = _agent()._graph.get_graph()
+    runtime_nodes = set(graph.nodes) - {"__start__", "__end__"}
+    edges = {(edge.source, edge.target) for edge in graph.edges}
+
+    assert runtime_nodes == {
+        "analyze",
+        "ask_origin",
+        "retrieve",
+        "search",
+        "evaluate",
+        "web_search",
+        "generate",
+    }
+    assert {
+        ("__start__", "analyze"),
+        ("analyze", "ask_origin"),
+        ("analyze", "retrieve"),
+        ("ask_origin", "__end__"),
+        ("retrieve", "search"),
+        ("retrieve", "evaluate"),
+        ("search", "evaluate"),
+        ("evaluate", "search"),
+        ("evaluate", "retrieve"),
+        ("evaluate", "web_search"),
+        ("evaluate", "generate"),
+        ("web_search", "evaluate"),
+        ("generate", "__end__"),
+    }.issubset(edges)
+
+
 async def test_analyze_parses_json_retrieval_queries() -> None:
     llm = FakeLLMClient(
         completions=[
@@ -643,13 +692,25 @@ async def test_route_map_is_emitted_after_tokens_and_before_done() -> None:
             '"route":{"type":"route","origin":"食堂","destination":"D414"}}',
             '{"sufficient":true,"missing":"","web_queries":[]}',
         ],
-        tokens=["経路回答"],
+        tokens=["経", "路", "回答"],
     )
     agent = _agent(llm=llm, store=FakeKnowledgeStore([_chunk()]))
 
     events = await _collect(agent, "食堂から D414 への行き方は？")
 
-    assert events[-3] == ("token", {"text": "経路回答"})
+    assert [event for event, _ in events] == [
+        "status",
+        "status",
+        "status",
+        "status",
+        "status",
+        "token",
+        "token",
+        "token",
+        "map",
+        "done",
+    ]
+    assert [payload["text"] for event, payload in events if event == "token"] == ["経", "路", "回答"]
     assert events[-2][0] == "map"
     assert events[-2][1]["mode"] == "route"
     assert events[-2][1]["path"] == {
@@ -1046,6 +1107,138 @@ async def test_evaluate_insufficient_triggers_two_web_rounds_then_generates() ->
     assert [call["include_domains"] for call in search.calls] == [["akita-pu.ac.jp"], None]
     assert events[-2] == ("token", {"text": "最終回答"})
     assert llm.stream_calls[0]["temperature"] == 0.7
+
+
+async def test_web_search_exception_degrades_and_reaches_done(caplog) -> None:
+    caplog.set_level(logging.WARNING, logger="app.agent.graph")
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries":["最新情報"],"keywords":["最新情報"]}',
+            '{"sufficient":false,"missing":"Web確認","web_queries":["最新情報"]}',
+            '{"sufficient":true,"missing":"","web_queries":[]}',
+        ],
+        tokens=["縮退回答"],
+    )
+    search = FailingSearchProvider()
+    agent = _agent(llm=llm, search=search, lexical=FakeLexicalSearch())
+
+    events = await _collect(agent, "最新情報を教えて")
+
+    assert [payload["step"] for event, payload in events if event == "status"] == [
+        "analyze",
+        "retrieve",
+        "search",
+        "evaluate",
+        "web_search",
+        "evaluate",
+        "generate",
+    ]
+    assert events[-2] == ("token", {"text": "縮退回答"})
+    assert events[-1][0] == "done"
+    assert len(search.calls) == 1
+    assert any(
+        record.name == "app.agent.graph"
+        and record.getMessage() == "Web search step failed: RuntimeError"
+        for record in caplog.records
+    )
+
+
+async def test_fault_tolerant_nodes_return_the_degraded_state_patches(caplog) -> None:
+    class BrokenStore:
+        async def search(self, query: str, *, limit: int):
+            raise LookupError("vector unavailable")
+
+    class BrokenLexicalSearch:
+        def grep_sections_with_trace(self, keywords):
+            raise ValueError("lexical unavailable")
+
+    caplog.set_level(logging.WARNING, logger="app.agent.graph")
+    retrieve_agent = _agent(store=BrokenStore())
+    search_agent = _agent(lexical=BrokenLexicalSearch())
+    web_agent = _agent(search=FailingSearchProvider())
+
+    retrieve_patch = await retrieve_agent._retrieve(
+        {"question": "質問", "retrieval_queries": ["質問"], "retrieval_rounds": 2}
+    )
+    search_patch = await search_agent._search(
+        {"question": "質問", "keywords": ["質問"], "search_rounds": 2}
+    )
+    web_patch = await web_agent._web_search(
+        {
+            "question": "質問",
+            "keywords": ["質問"],
+            "web_queries": ["質問"],
+            "web_search_rounds": 2,
+        }
+    )
+
+    assert retrieve_patch == {"retrieve_executed": True, "retrieval_rounds": 3}
+    assert search_patch == {
+        "search_rounds": 3,
+        "search_executed": True,
+        "local_search_followups": 1,
+    }
+    assert web_patch == {"web_search_rounds": 3}
+    assert {record.getMessage() for record in caplog.records} >= {
+        "Retrieve step failed: LookupError",
+        "Search follow-up step failed: ValueError",
+        "Web search step failed: RuntimeError",
+    }
+
+
+async def test_evaluate_cycle_runs_search_retrieve_and_three_web_rounds() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries":["初期取得"],"keywords":["未解決語"]}',
+            '{"sufficient":false,"missing":"字句不足","grep_keywords":["追加語"],'
+            '"retrieval_queries":["追加取得"],"web_queries":["Web 1"]}',
+            '{"sufficient":false,"missing":"取得不足","grep_keywords":[],'
+            '"retrieval_queries":["追加取得"],"web_queries":["Web 1"]}',
+            '{"sufficient":false,"missing":"Web不足","grep_keywords":[],'
+            '"retrieval_queries":[],"web_queries":["Web 1"]}',
+            '{"sufficient":false,"missing":"Web不足","grep_keywords":[],'
+            '"retrieval_queries":[],"web_queries":["Web 2"]}',
+            '{"sufficient":false,"missing":"Web不足","grep_keywords":[],'
+            '"retrieval_queries":[],"web_queries":["Web 3"]}',
+            '{"sufficient":true,"missing":"","grep_keywords":[],'
+            '"retrieval_queries":[],"web_queries":[]}',
+        ],
+        tokens=["最終回答"],
+    )
+    store = FakeKnowledgeStore({"初期取得": [], "追加取得": []})
+    lexical = FakeLexicalSearch()
+    search = FakeSearchProvider([])
+    agent = _agent(llm=llm, store=store, lexical=lexical, search=search)
+
+    events = await _collect(agent, "未解決語について教えて")
+    statuses = [payload for event, payload in events if event == "status"]
+
+    assert [payload["step"] for payload in statuses] == [
+        "analyze",
+        "retrieve",
+        "search",
+        "evaluate",
+        "search",
+        "evaluate",
+        "retrieve",
+        "evaluate",
+        "web_search",
+        "evaluate",
+        "web_search",
+        "evaluate",
+        "web_search",
+        "evaluate",
+        "generate",
+    ]
+    assert [payload["text"] for payload in statuses if payload["step"] == "web_search"] == [
+        "Webで最新情報を探検しています…",
+        "別の角度からWebを調べています…",
+        "もうひと粘り、手掛かりを探しています…",
+    ]
+    assert [call["query"] for call in store.calls] == ["初期取得", "追加取得"]
+    assert lexical.calls[1] == ["追加語"]
+    assert events[-2] == ("token", {"text": "最終回答"})
+    assert events[-1][0] == "done"
 
 
 async def test_web_search_uses_include_domains_only_on_first_round() -> None:
@@ -1462,7 +1655,7 @@ async def test_route_after_evaluate_prioritizes_search_retrieve_web_then_generat
     agent = _agent()
 
     assert (
-        agent._route_after_evaluate(
+        await agent._route_after_evaluate(
             {
                 "sufficient": False,
                 "grep_keywords": ["研究室"],
@@ -1476,7 +1669,7 @@ async def test_route_after_evaluate_prioritizes_search_retrieve_web_then_generat
         == "search"
     )
     assert (
-        agent._route_after_evaluate(
+        await agent._route_after_evaluate(
             {
                 "sufficient": False,
                 "grep_keywords": [],
@@ -1490,7 +1683,7 @@ async def test_route_after_evaluate_prioritizes_search_retrieve_web_then_generat
         == "retrieve"
     )
     assert (
-        agent._route_after_evaluate(
+        await agent._route_after_evaluate(
             {
                 "sufficient": False,
                 "grep_keywords": [],
@@ -1504,7 +1697,7 @@ async def test_route_after_evaluate_prioritizes_search_retrieve_web_then_generat
         == "web_search"
     )
     assert (
-        agent._route_after_evaluate(
+        await agent._route_after_evaluate(
             {
                 "sufficient": False,
                 "grep_keywords": [],
@@ -1709,6 +1902,43 @@ async def test_generation_retries_context_length_bad_request_once_with_smaller_c
     assert "RETRY_HISTORY_ASSISTANT" in first_prompt
     assert "RETRY_HISTORY_USER" in retry_prompt
     assert "RETRY_HISTORY_ASSISTANT" in retry_prompt
+
+
+async def test_generation_retry_returns_reduced_sources_to_done(monkeypatch) -> None:
+    llm = RetryLLMClient(
+        completions=[
+            '{"retrieval_queries":["施設"],"keywords":["施設"]}',
+            '{"sufficient":true,"missing":"","web_queries":[]}',
+        ]
+    )
+    first = _chunk(
+        id="first",
+        title="第一根拠",
+        source_urls=["https://example.test/first"],
+    )
+    second = _chunk(
+        id="second",
+        title="第二根拠",
+        source_urls=["https://example.test/second"],
+    )
+    agent = _agent(llm=llm, store=FakeKnowledgeStore([]))
+
+    def build_messages(state, token_budget=None):
+        selected = [first, second] if token_budget is None else [first]
+        messages = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "context"},
+        ]
+        return messages, _ContextAssembly("context", selected, [])
+
+    monkeypatch.setattr(agent, "_build_generation_messages_with_sources", build_messages)
+
+    events = await _collect(agent, "施設について教えて")
+
+    assert events[-2] == ("token", {"text": "retry ok"})
+    assert events[-1][1]["sources"] == [
+        {"title": "第一根拠", "url": "https://example.test/first", "type": "knowledge"}
+    ]
 
 
 async def test_agent_trace_logs_structured_json_lines(caplog, monkeypatch) -> None:

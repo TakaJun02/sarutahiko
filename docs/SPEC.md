@@ -1,6 +1,9 @@
 # campus-guide-agent システム仕様書
 
-- 版: v0.24（2026-07-17, Fable 改訂 — 利用者指示: **FR-32 About モーダルの並び替え**。
+- 版: v0.25（2026-07-18, Fable 改訂 — 利用者指示: **FR-33 LangGraph 実行一本化**（詳細:
+  `docs/LANGGRAPH_MIGRATION.md`）。langgraph 1.2.9 へ更新し、エージェント制御を
+  「StateGraph 定義＝実行」に統一（Q-006 裁定更新）。SSE 外形は不変・実装 Codex/GPT-5.6Sol xhigh）
+- v0.24（2026-07-17, Fable 改訂 — 利用者指示: **FR-32 About モーダルの並び替え**。
   「本文 → 研究室サイトリンク → QR セクション」の順へ変更（FR-22 22-1 を改訂、
   詳細: `docs/RELEASE_PREP.md` §11-1 v0.5）。文言・意匠は不変のブロック入れ替えのみ）
 - v0.23（2026-07-17, Fable 改訂 — 利用者指示: **空状態サジェスト例文のマップ機能ショーケース化**
@@ -366,6 +369,16 @@
   （不可侵制約: 模式図注記・44px/a11y/reduced-motion・外部アセット禁止・FR-25 タイミング・情報量維持）。
 - **27-4 アーキテクチャ文書**: `docs/AGENT_ARCHITECTURE.md`（mermaid によるワークフロー図＋
   各ノードの使用ツール表）を新設・保守（Fable 起草。graph.py 変更時は本文書も更新）。
+
+### FR-33 LangGraph 実行一本化（2026-07-18 追加・利用者指示、詳細: `docs/LANGGRAPH_MIGRATION.md`）
+- 利用者要望「LangGraph で定義も実行もしたい」を受け、`langgraph==1.2.9` へ更新し
+  エージェント制御を StateGraph の「定義＝実行」へ統一（Q-006 裁定を追補で更新）。
+- 7 ノード（analyze / ask_origin / retrieve / search / evaluate / web_search / generate）＋
+  条件エッジ 3 箇所。status/token/map はノード内から `get_stream_writer()` で送出し、
+  `stream()` は薄い SSE アダプタに縮小。エイリアスノードと死にコードは廃止。
+- **SSE 外形（イベント種別・順序・step enum・文言・sources 内容）は完全不変**。
+  受け入れ: pytest 139 / Vitest 89 / build green・実 LLM E2E 4 シナリオ合格・
+  agent.trace 互換・レイテンシ実測 16.6 秒（60 秒目標内）。
 
 ## 4. 非機能要件
 
