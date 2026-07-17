@@ -80,7 +80,10 @@ GET    /api/health          ヘルスチェック（vLLM/Qdrant 疎通含む）
 
 ### チャット SSE
 
-`POST /api/chat`（リクエスト body: `{"message": "<質問文>", "thread_id": "<既存スレッドID または null>"}`。SSE ストリームを返す）
+`POST /api/chat`（リクエスト body: `{"message": "<質問文>", "thread_id": "<既存スレッドID または null>",
+"origin_node": "<キャンパスノードid（任意・FR-27。マップタップによる現在地申告）>"}`。SSE ストリームを返す。
+`origin_node` 省略時は従来と完全同一挙動。指定時は backend が「現在地は〇〇です。＋message」を内部合成して
+エージェント入力・履歴に用い、user メッセージの `map_json` に `origin_select` メタを保存する — MAP_CARD.md §11-2）
 
 ```
 event: status
