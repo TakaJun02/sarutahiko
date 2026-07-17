@@ -5,11 +5,13 @@ import logging
 import os
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, replace
+from functools import wraps
 from html.parser import HTMLParser
 from typing import Any, Literal, TypedDict
 
 import httpx
-from langgraph.graph import END, StateGraph
+from langgraph.config import get_stream_writer
+from langgraph.graph import END, START, StateGraph
 from openai import BadRequestError
 
 from app.agent.campus_map import (
@@ -94,6 +96,64 @@ LOCATION_INDEX_SOURCE = Source(
 
 logger = logging.getLogger(__name__)
 trace_logger = logging.getLogger("agent.trace")
+
+
+def _write_stream_event(event: str, data: dict) -> None:
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        # Node methods are also exercised directly by focused unit tests.
+        return
+    writer({"event": event, "data": data})
+
+
+def _fault_tolerant_node(step: Literal["retrieve", "search", "web_search"]):
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(self, state: AgentState, *args, **kwargs) -> dict:
+            _write_stream_event("status", self._status(step, state))
+            is_followup = (
+                bool(state.get("retrieve_executed"))
+                if step == "retrieve"
+                else state.get("search_rounds", 0) >= 1
+                if step == "search"
+                else False
+            )
+            try:
+                result = await func(self, state, *args, **kwargs)
+            except Exception as exc:
+                if step == "retrieve":
+                    label = "Retrieve follow-up step" if is_followup else "Retrieve step"
+                    patch = {
+                        "retrieve_executed": True,
+                        "retrieval_rounds": state.get("retrieval_rounds", 0) + 1,
+                    }
+                    if is_followup:
+                        patch["retrieval_followups"] = state.get("retrieval_followups", 0) + 1
+                elif step == "search":
+                    label = "Search follow-up step" if is_followup else "Search step"
+                    patch = {
+                        "search_rounds": state.get("search_rounds", 0) + 1,
+                        "search_executed": True,
+                    }
+                    if is_followup:
+                        patch["local_search_followups"] = state.get("local_search_followups", 0) + 1
+                else:
+                    label = "Web search step"
+                    patch = {"web_search_rounds": state.get("web_search_rounds", 0) + 1}
+                logger.warning("%s failed: %s", label, exc.__class__.__name__)
+                return patch
+
+            result = dict(result)
+            if step == "retrieve" and is_followup:
+                result["retrieval_followups"] = state.get("retrieval_followups", 0) + 1
+            elif step == "search" and is_followup:
+                result["local_search_followups"] = state.get("local_search_followups", 0) + 1
+            return result
+
+        return wrapper
+
+    return decorator
 
 GENERATE_SYSTEM_PROMPT = """秋田県立大学 本荘キャンパスのオープンキャンパス2026で来場者を案内する、明るく元気な学生ガイドAI「APU-Navi」です。挨拶・自己紹介・名前を聞かれた時だけ名乗り、毎回答では名乗りません。
 高校生・保護者に分かる日本語と、わくわくする親しみやすい口調で答えてください（例:「ぜひ体験してみてください！」）。
@@ -270,127 +330,24 @@ class RealCampusAgent:
             "same_file_expanded_file_ids": [],
             "same_file_expanded_chunk_ids": [],
         }
-
-        yield "status", self._status("analyze", state)
-        state.update(await self._analyze(state))
-
-        if self._should_ask_origin(state):
-            yield "status", StatusPayload(
-                step="generate",
-                text=ASK_ORIGIN_STATUS_TEXT,
-            ).model_dump()
-            yield "token", TokenPayload(text=ASK_ORIGIN_RESPONSE).model_dump()
-            yield "map", state["map_payload"]
-            yield "done", DonePayload(
-                thread_id=thread_id,
-                message_id=message_id,
-                sources=self._assemble_generation_sources(state, None),
-            ).model_dump()
-            return
-
-        yield "status", self._status("retrieve", state)
-        try:
-            state.update(await self._retrieve(state))
-        except Exception as exc:
-            logger.warning("Retrieve step failed: %s", exc.__class__.__name__)
-            state.update(
-                {
-                    "retrieve_executed": True,
-                    "retrieval_rounds": state.get("retrieval_rounds", 0) + 1,
-                }
-            )
-
-        yield "status", self._status("search", state)
-        try:
-            state.update(await self._search(state))
-        except Exception as exc:
-            logger.warning("Search step failed: %s", exc.__class__.__name__)
-            state.update(
-                {
-                    "search_rounds": state.get("search_rounds", 0) + 1,
-                    "search_executed": True,
-                }
-            )
-
-        yield "status", self._status("evaluate", state)
-        state.update(await self._evaluate(state))
-
-        while True:
-            route = self._route_after_evaluate(state)
-            if route == "search":
-                state["local_search_followups"] = state.get("local_search_followups", 0) + 1
-                yield "status", self._status("search", state)
-                try:
-                    state.update(await self._search(state, keywords=state.get("grep_keywords") or []))
-                except Exception as exc:
-                    logger.warning("Search follow-up step failed: %s", exc.__class__.__name__)
-                    state.update(
-                        {
-                            "search_rounds": state.get("search_rounds", 0) + 1,
-                            "search_executed": True,
-                        }
-                    )
-
-                yield "status", self._status("evaluate", state)
-                state.update(await self._evaluate(state))
-                continue
-
-            if route == "retrieve":
-                state["retrieval_followups"] = state.get("retrieval_followups", 0) + 1
-                yield "status", self._status("retrieve", state)
-                try:
-                    state.update(await self._retrieve(state))
-                except Exception as exc:
-                    logger.warning("Retrieve follow-up step failed: %s", exc.__class__.__name__)
-                    state.update(
-                        {
-                            "retrieve_executed": True,
-                            "retrieval_rounds": state.get("retrieval_rounds", 0) + 1,
-                        }
-                    )
-
-                yield "status", self._status("evaluate", state)
-                state.update(await self._evaluate(state))
-                continue
-
-            if route == "web_search":
-                yield "status", self._status("web_search", state)
-                try:
-                    state.update(await self._web_search(state))
-                except Exception as exc:
-                    logger.warning("Web search step failed: %s", exc.__class__.__name__)
-                    state.update({"web_search_rounds": state.get("web_search_rounds", 0) + 1})
-
-                yield "status", self._status("evaluate", state)
-                state.update(await self._evaluate(state))
-                continue
-
-            break
-
-        yield "status", self._status("generate", state)
-        state.update(await self._prepare_generation(state))
-        state.update(await self._verify_generation_prompt(state))
-        self._trace(
-            "generate",
+        merged_state = dict(state)
+        async for mode, payload in self._graph.astream(
             state,
-            {
-                "adopted_chunk_ids": state.get("generation_adopted_chunk_ids", []),
-                "rejected_chunk_ids": state.get("generation_rejected_chunk_ids", []),
-                "adopted_web_urls": state.get("generation_adopted_web_urls", []),
-                "prompt_tokens": state.get("generation_prompt_tokens"),
-            },
-        )
+            stream_mode=["updates", "custom"],
+            config={"recursion_limit": 50},
+        ):
+            if mode == "custom":
+                yield payload["event"], payload["data"]
+                continue
+            if mode == "updates":
+                for update in payload.values():
+                    if isinstance(update, dict):
+                        merged_state.update(update)
 
-        messages = state.get("generation_messages") or self._build_generation_messages(state)
-        async for token in self._stream_generation_with_retry(state, messages):
-            yield "token", TokenPayload(text=token).model_dump()
-
-        if state.get("map_payload") is not None:
-            yield "map", state["map_payload"]
         yield "done", DonePayload(
             thread_id=thread_id,
             message_id=message_id,
-            sources=state.get("sources", []),
+            sources=merged_state.get("sources", []),
         ).model_dump()
 
     @staticmethod
@@ -400,45 +357,47 @@ class RealCampusAgent:
     def _build_graph(self) -> Any:
         workflow = StateGraph(AgentState)
         workflow.add_node("analyze", self._analyze)
+        workflow.add_node("ask_origin", self._ask_origin)
         workflow.add_node("retrieve", self._retrieve)
-        workflow.add_node("retrieve_followup", self._retrieve)
         workflow.add_node("search", self._search)
         workflow.add_node("evaluate", self._evaluate)
         workflow.add_node("web_search", self._web_search)
-        workflow.add_node("evaluate_after_web", self._evaluate_after_web)
-        workflow.add_node("web_search_second", self._web_search_second)
-        workflow.add_node("evaluate_after_second", self._evaluate_after_second)
-        workflow.add_node("generate", self._prepare_generation)
-        workflow.set_entry_point("analyze")
-        workflow.add_edge("analyze", "retrieve")
-        workflow.add_edge("retrieve", "search")
+        workflow.add_node("generate", self._generate)
+        workflow.add_edge(START, "analyze")
+        workflow.add_conditional_edges(
+            "analyze",
+            self._route_after_analyze,
+            {
+                "ask_origin": "ask_origin",
+                "retrieve": "retrieve",
+            },
+        )
+        workflow.add_edge("ask_origin", END)
+        workflow.add_conditional_edges(
+            "retrieve",
+            self._route_after_retrieve,
+            {
+                "search": "search",
+                "evaluate": "evaluate",
+            },
+        )
         workflow.add_edge("search", "evaluate")
         workflow.add_conditional_edges(
             "evaluate",
             self._route_after_evaluate,
             {
                 "search": "search",
-                "retrieve": "retrieve_followup",
+                "retrieve": "retrieve",
                 "web_search": "web_search",
                 "generate": "generate",
             },
         )
-        workflow.add_edge("retrieve_followup", "evaluate")
-        workflow.add_edge("web_search", "evaluate_after_web")
-        workflow.add_conditional_edges(
-            "evaluate_after_web",
-            self._route_after_first_web_evaluate,
-            {
-                "web_search_second": "web_search_second",
-                "generate": "generate",
-            },
-        )
-        workflow.add_edge("web_search_second", "evaluate_after_second")
-        workflow.add_edge("evaluate_after_second", "generate")
+        workflow.add_edge("web_search", "evaluate")
         workflow.add_edge("generate", END)
         return workflow.compile()
 
     async def _analyze(self, state: AgentState) -> dict:
+        _write_stream_event("status", self._status("analyze", state))
         question = state["question"]
         raw_output = await self.llm_client.complete_chat(
             self._build_analyze_messages(question, state.get("history", [])),
@@ -539,6 +498,16 @@ class RealCampusAgent:
             and (state.get("map_payload") or {}).get("mode") == "ask_origin"
         )
 
+    async def _ask_origin(self, state: AgentState) -> dict:
+        _write_stream_event(
+            "status",
+            StatusPayload(step="generate", text=ASK_ORIGIN_STATUS_TEXT).model_dump(),
+        )
+        _write_stream_event("token", TokenPayload(text=ASK_ORIGIN_RESPONSE).model_dump())
+        _write_stream_event("map", state["map_payload"])
+        return {"sources": self._assemble_generation_sources(state, None)}
+
+    @_fault_tolerant_node("retrieve")
     async def _retrieve(self, state: AgentState, queries: Sequence[str] | None = None) -> dict:
         existing_results = state.get("knowledge_results") or []
         retrieved_results: list[KnowledgeChunk] = []
@@ -574,6 +543,7 @@ class RealCampusAgent:
             "same_file_expanded_chunk_ids": merge_outcome.expanded_chunk_ids,
         }
 
+    @_fault_tolerant_node("search")
     async def _search(self, state: AgentState, keywords: Sequence[str] | None = None) -> dict:
         search_keywords = self._search_keywords(state, keywords)
         existing_results = state.get("knowledge_results") or []
@@ -623,6 +593,7 @@ class RealCampusAgent:
         }
 
     async def _evaluate(self, state: AgentState) -> dict:
+        _write_stream_event("status", self._status("evaluate", state))
         raw_output = await self.llm_client.complete_chat(
             self._build_evaluate_messages(state),
             temperature=0.2,
@@ -686,12 +657,7 @@ class RealCampusAgent:
             "web_queries": web_queries,
         }
 
-    async def _evaluate_after_web(self, state: AgentState) -> dict:
-        return await self._evaluate(state)
-
-    async def _evaluate_after_second(self, state: AgentState) -> dict:
-        return await self._evaluate(state)
-
+    @_fault_tolerant_node("web_search")
     async def _web_search(self, state: AgentState) -> dict:
         round_number = state.get("web_search_rounds", 0) + 1
         outcome = await self._search_web_round(
@@ -723,9 +689,6 @@ class RealCampusAgent:
                 [*(state.get("used_web_query_keys") or []), *outcome.executed_query_keys]
             ),
         }
-
-    async def _web_search_second(self, state: AgentState) -> dict:
-        return await self._web_search(state)
 
     async def _prepare_generation(self, state: AgentState) -> dict:
         messages, context = self._build_generation_messages_with_sources(state)
@@ -791,7 +754,45 @@ class RealCampusAgent:
             ):
                 yield token
 
-    def _route_after_evaluate(self, state: AgentState) -> str:
+    async def _generate(self, state: AgentState) -> dict:
+        _write_stream_event("status", self._status("generate", state))
+        generation_updates = await self._prepare_generation(state)
+        working_state: AgentState = {**state, **generation_updates}
+        verification_updates = await self._verify_generation_prompt(working_state)
+        generation_updates.update(verification_updates)
+        working_state.update(verification_updates)
+        self._trace(
+            "generate",
+            working_state,
+            {
+                "adopted_chunk_ids": working_state.get("generation_adopted_chunk_ids", []),
+                "rejected_chunk_ids": working_state.get("generation_rejected_chunk_ids", []),
+                "adopted_web_urls": working_state.get("generation_adopted_web_urls", []),
+                "prompt_tokens": working_state.get("generation_prompt_tokens"),
+            },
+        )
+
+        messages = working_state.get("generation_messages") or self._build_generation_messages(working_state)
+        async for token in self._stream_generation_with_retry(working_state, messages):
+            _write_stream_event("token", TokenPayload(text=token).model_dump())
+
+        if working_state.get("map_payload") is not None:
+            _write_stream_event("map", working_state["map_payload"])
+
+        for key in ("generation_messages", "generation_token_budget", "sources"):
+            if key in working_state:
+                generation_updates[key] = working_state[key]
+        return generation_updates
+
+    async def _route_after_analyze(self, state: AgentState) -> str:
+        return "ask_origin" if self._should_ask_origin(state) else "retrieve"
+
+    async def _route_after_retrieve(self, state: AgentState) -> str:
+        # Follow-up retrieves go straight back to evaluate (pre-FR-33 behavior);
+        # only the initial retrieve is followed by the lexical search arm.
+        return "search" if state.get("retrieval_rounds", 0) <= 1 else "evaluate"
+
+    async def _route_after_evaluate(self, state: AgentState) -> str:
         if state.get("sufficient", True):
             return "generate"
         if (
@@ -808,33 +809,6 @@ class RealCampusAgent:
         if self._should_run_web_search(state):
             return "web_search"
         return "generate"
-
-    def _route_after_first_web_evaluate(self, state: AgentState) -> str:
-        if self._route_after_evaluate(state) == "web_search":
-            return "web_search_second"
-        return "generate"
-
-    def _next_step_after(self, node_name: str, state: AgentState) -> Step | None:
-        if node_name == "analyze":
-            return "retrieve"
-        if node_name == "retrieve":
-            return "search"
-        if node_name == "search":
-            return "evaluate"
-        if node_name == "evaluate":
-            route = self._route_after_evaluate(state)
-            return route if route in {"search", "retrieve", "web_search"} else "generate"
-        if node_name == "retrieve_followup":
-            return "evaluate"
-        if node_name == "web_search":
-            return "evaluate"
-        if node_name == "evaluate_after_web":
-            return "web_search" if self._route_after_first_web_evaluate(state) == "web_search_second" else "generate"
-        if node_name == "web_search_second":
-            return "evaluate"
-        if node_name == "evaluate_after_second":
-            return "generate"
-        return None
 
     @staticmethod
     def _status(step: Step, state: AgentState | None = None) -> dict:
@@ -1911,6 +1885,8 @@ class RealCampusAgent:
 
     def _search_keywords(self, state: AgentState, keywords: Sequence[str] | None) -> list[str]:
         search_keywords = list(keywords or [])
+        if keywords is None and state.get("search_rounds", 0) >= 1:
+            search_keywords = list(state.get("grep_keywords") or [])
         if not search_keywords:
             search_keywords = list(state.get("keywords") or [])
         if not search_keywords:

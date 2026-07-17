@@ -1,7 +1,10 @@
 # FR-33: LangGraph 実行一本化（定義＝実行）
 
-- 版: v0.1（2026-07-17, Fable 起草 — 利用者要望「LangGraph で定義も実行もしたい」）
-- 状態: **仕様確定・実装未着手（利用者の Go 待ち）**。実装は Codex 委譲。
+- 版: v0.2（2026-07-18, Fable — 実装・検収完了を反映。検収で判明した仕様側の誤り 2 件を
+  出荷済み挙動へ訂正: §1 followup retrieve の条件エッジ・§2 ask_origin の sources。検収記録 §9）
+  - v0.1（2026-07-17, Fable 起草 — 利用者要望「LangGraph で定義も実行もしたい」）
+- 状態: **実装・検収完了（2026-07-18）**。実装: Codex/GPT-5.6Sol（reasoning xhigh）、
+  検収・挙動保存修正: Fable。
 - 背景: Q-006（2026-07-11）で `langgraph==0.0.69` が 2 回目 evaluate 後の分岐で停止したため、
   実行を `stream()` の手動逐次制御に移していた（経緯: `docs/AGENT_ARCHITECTURE.md` §2-0）。
   本 FR で当時の裁定を更新し、定義と実行を LangGraph に一本化する（Q-006 追補 2026-07-17）。
@@ -34,7 +37,9 @@ flowchart TD
     RA -->|"ask_origin"| AO["ask_origin<br/>定型 status/token/map を writer 送出"]
     AO --> EN(("END"))
     RA -->|"通常"| RT["retrieve = _retrieve"]
-    RT --> SE["search = _search"]
+    RT --> RR{"_route_after_retrieve"}
+    RR -->|"初回"| SE["search = _search"]
+    RR -->|"followup（search を挟まない）"| EV
     SE --> EV["evaluate = _evaluate"]
     EV --> RE{"_route_after_evaluate<br/>（現行ロジック不変）"}
     RE -->|"search（≤1）"| SE
@@ -61,7 +66,8 @@ flowchart TD
   アダプタは custom payload をそのまま `yield (event, data)` する（変換ロジックを持たない）。
 - アダプタは `updates` を辞書にマージ累積し、グラフ終了後に
   `DonePayload(thread_id, message_id, sources=merged_state["sources"])` で `done` を送出
-  （ask_origin 経路は sources 空。done 送出は従来どおり 1 回・終端のみ）。
+  （ask_origin 経路の sources は `_assemble_generation_sources(state, None)` — FR-29 の
+  位置インデックス出典を含む従来挙動。done 送出は従来どおり 1 回・終端のみ）。
 - `updates` はトレース・done 用の内部利用のみで SSE には流さない。
 
 ## 3. ノード実装規約
@@ -90,7 +96,8 @@ flowchart TD
 - `requirements.txt`: `langgraph==0.0.69` → `langgraph==1.2.9`（直接依存のみピンの現行方針を維持）。
 - 随伴して langchain-core 1.4.9 / langgraph-checkpoint / langgraph-sdk / langsmith 等が入る。
   **LangSmith テレメトリが無効であること**（`LANGCHAIN_TRACING_V2` / `LANGSMITH_TRACING`
-  未設定＝送信なし）を確認し、`.env.example` にも「設定しない」旨を注記。
+  未設定＝送信なし）を実装時に確認する。リポジトリに `.env.example` は存在しない
+  （2026-07-17 確認）ため、運用注意は `ARCHITECTURE.md` に記載する（§7・Fable 担当）。
 - checkpointer は使わない（1 リクエスト = 1 実行・永続化は SQLite の現行構成を維持）。
 
 ## 5. 削除・整理
@@ -124,3 +131,29 @@ flowchart TD
 
 - `feature/fr-33-langgraph-unify` → PR は `develop` 向け（リポジトリ規約どおり）。
 - 不明点は実装を止めず `docs/QUESTIONS.md` に起票（Q-006 の追補も参照のこと）。
+
+## 9. 検収記録（2026-07-18, Fable）
+
+- 実装: Codex/GPT-5.6Sol（reasoning xhigh、session 019f7094-c6b8、232,890 tokens）。
+  変更: `graph.py` / `requirements.txt` / `tests/test_agent_graph.py`。QUESTIONS 起票なし。
+- **検収指摘 2 件 — いずれも仕様書側（v0.1）の誤りで、Sol は仕様に忠実だった。
+  裁定「SSE 外形不変 ＞ 仕様書の字面」により出荷済み挙動へ戻し、仕様を訂正（Fable 直接修正）**:
+  1. ask_origin done の sources を空にしていた → 旧実装どおり
+     `_assemble_generation_sources(state, None)`（FR-29 位置インデックス出典）へ復元。
+  2. 目標グラフの静的エッジ `retrieve → search` が followup retrieve にも search を強制
+     （旧実装は followup → 直接 evaluate）→ `_route_after_retrieve` 条件エッジを追加し復元。
+  教訓: 既存テストのアサーション変更は外形変更のシグナル。仕様起草時は「現行挙動の写し」を
+  必ず実装・テストから直接取ること（古い文書の記述を信じない）。
+- 受け入れ結果: pytest **139/139**（既存 134 は挙動保存アサーションのまま green・新規 5 =
+  グラフ形状/例外縮退/循環系列/リトライ sources/系列強化）・Vitest 89・build green。
+- 実 LLM E2E（検収用 :8081・実 vLLM/Qdrant/gouin・全 4 シナリオ合格）:
+  1. 通常 RAG「食堂」: status 13 個（grep 追い・followup retrieve→直接 evaluate・Web 2 周の
+     文言含む全アーム発火）→ token 176 → map(place) → done sources 11 件。
+  2. ask_origin「D404に行きたい」: analyze → 現在地確認 status → 定型 token →
+     map(ask_origin, 大学院棟) → done sources=[位置インデックス]。
+  3. origin_node=cafeteria 再送: 全パイプライン → token 272 → map(route, カフェテリア→大学院棟,
+     5 steps, 全 token 後・done 直前) → 回答冒頭で現在地明示（FR-26 §7-4）。
+  4. レイテンシ実測: 標準質問 16.6 秒 / 569 token（60 秒目標内）。
+- agent.trace 互換: 35 行・全イベント種別（analyze/expand/retrieve/search/evaluate/
+  web_search/generate）出現・generate トレースのフィールド一致。
+- LangSmith 系環境変数: 未設定のまま全件動作（テレメトリ送信なし）。
