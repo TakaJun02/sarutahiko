@@ -2,12 +2,21 @@ import { describe, expect, it } from 'vitest'
 
 import {
   CAMPUS_EDGES,
+  CAMPUS_MAP_FIT,
+  CAMPUS_MAP_FULL_BOUNDS,
   CAMPUS_MAP_VIEWBOX,
   CAMPUS_NODES,
   destinationBadge,
   edgeBadgeText,
   edgePath,
+  fitMapViewBox,
+  fullMapViewBox,
 } from './campusMap'
+
+function parseViewBox(viewBox) {
+  const [x, y, width, height] = viewBox.split(' ').map(Number)
+  return { x, y, width, height }
+}
 
 describe('campus map presentation data', () => {
   it('contains exactly the eight real-map nodes and the remaining edges', () => {
@@ -45,8 +54,41 @@ describe('campus map presentation data', () => {
   })
 
   it('keeps every SVG node target at least 44px at the narrow mobile card scale', () => {
-    const renderedTargetSize = 90 * (288 / 581)
+    const renderedTargetSize = 90 * (343 / CAMPUS_MAP_FULL_BOUNDS.width)
     expect(renderedTargetSize).toBeGreaterThanOrEqual(44)
+  })
+
+  it('fits a route to its relevant nodes and preserves the measured canvas aspect', () => {
+    const mobileAspect = 343 / 352
+    const route = {
+      mode: 'route',
+      destination: { node: 'd', room: 'D404', floor: null },
+      path: { nodes: ['k', 'g1', 'd'], edges: ['E5', 'E1'] },
+    }
+    const fitted = parseViewBox(fitMapViewBox(route, mobileAspect))
+    const full = parseViewBox(fullMapViewBox(mobileAspect))
+
+    expect(fitted.width).toBeLessThan(full.width)
+    expect(fitted.height).toBeLessThan(full.height)
+    expect(fitted.width / fitted.height).toBeCloseTo(mobileAspect, 2)
+    expect(fitted.x).toBeLessThan(222)
+    expect(fitted.y).toBeLessThan(88)
+    expect(fitted.x + fitted.width).toBeGreaterThan(300)
+    expect(fitted.y + fitted.height).toBeGreaterThan(400)
+  })
+
+  it('enforces the minimum place crop and keeps ask-origin on the whole campus', () => {
+    const mobileAspect = 343 / 352
+    const place = parseViewBox(fitMapViewBox({
+      mode: 'place',
+      destination: { node: 'g1', room: 'GI512', floor: 5 },
+    }, mobileAspect))
+    const askOrigin = fitMapViewBox({ mode: 'ask_origin' }, mobileAspect)
+
+    expect(place.width).toBeGreaterThanOrEqual(CAMPUS_MAP_FIT.minimumWidth)
+    expect(place.height).toBeGreaterThanOrEqual(CAMPUS_MAP_FIT.minimumHeight)
+    expect(askOrigin).toBe(fullMapViewBox(mobileAspect))
+    expect(CAMPUS_MAP_VIEWBOX).toBe('82 24 581 500')
   })
 
   it('shows only sourced connector floors and walking minutes', () => {
