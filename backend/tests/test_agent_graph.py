@@ -9,8 +9,10 @@ import pytest
 import httpx
 from openai import BadRequestError
 
+from app.agent.campus_map import resolve_location
 from app.agent.graph import (
     GENERATE_SYSTEM_PROMPT,
+    LOCATION_INDEX_SOURCE,
     MAX_HISTORY_MESSAGES,
     MIN_GENERATION_CONTEXT_TOKENS,
     PROMPT_MARGIN_TOKENS,
@@ -495,9 +497,143 @@ async def test_ask_origin_ends_turn_without_retrieval_or_generation() -> None:
         "prompt": "いまいる場所をマップでタップしてください",
         "question": "D414 に行きたい",
     }
-    assert events[-1][1]["sources"] == []
+    assert events[-1][1]["sources"] == [LOCATION_INDEX_SOURCE.model_dump()]
     assert store.calls == []
     assert llm.stream_calls == []
+
+
+async def test_cps_place_name_drives_ask_origin_then_deterministic_route_payload() -> None:
+    ask_llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries":["サイバーフィジカルシステム研究室"],'
+            '"keywords":["サイバーフィジカルシステム研究室"],'
+            '"route":{"type":"route","origin":null,'
+            '"destination":"サイバーフィジカルシステム研究室まで"}}'
+        ]
+    )
+    ask_agent = _agent(llm=ask_llm, store=FakeKnowledgeStore([]))
+
+    ask_events = await _collect(ask_agent, "サイバーフィジカルシステム研究室まで行きたいです")
+
+    ask_map = next(payload for event, payload in ask_events if event == "map")
+    assert ask_map["mode"] == "ask_origin"
+    assert ask_map["destination"] == {
+        "node": "d",
+        "label": "大学院棟",
+        "room": "D404",
+        "floor": None,
+    }
+    assert ask_events[-1][1]["sources"] == [LOCATION_INDEX_SOURCE.model_dump()]
+
+    route_llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries":["総合受付 サイバーフィジカルシステム研究室"],'
+            '"keywords":["総合受付","サイバーフィジカルシステム研究室"],'
+            '"route":{"type":"route","origin":"総合受付",'
+            '"destination":"サイバーフィジカルシステム研究室"}}',
+            '{"sufficient":true,"missing":"","web_queries":[]}',
+        ],
+        tokens=["大学院棟（Dゾーン）のD404へご案内します。"],
+    )
+    route_agent = _agent(llm=route_llm, store=FakeKnowledgeStore([_chunk()]))
+
+    route_events = await _collect(
+        route_agent,
+        "現在地は共通施設棟（総合受付）です。サイバーフィジカルシステム研究室まで行きたいです",
+    )
+
+    route_map = next(payload for event, payload in route_events if event == "map")
+    assert route_map["mode"] == "route"
+    assert route_map["path"] == {"nodes": ["k", "g1", "d"], "edges": ["E5", "E2"]}
+    assert route_map["destination"]["room"] == "D404"
+    assert route_map["destination"]["floor"] is None
+    assert route_map["steps"][-1] == "D404 の階は館内表示・当日スタッフでご確認ください"
+    assert not any("D404" in step and "4階" in step for step in route_map["steps"])
+    answer = "".join(payload["text"] for event, payload in route_events if event == "token")
+    assert "大学院棟" in answer
+    assert "D404" in answer
+    assert "位置を特定でき" not in answer
+
+    generation_prompt = "\n".join(
+        message["content"] for message in route_llm.stream_calls[0]["messages"]
+    )
+    assert (
+        "【位置データ（オープンキャンパス2026 会場・場所インデックスより）】"
+        "サイバーフィジカルシステム研究室: D404 — 大学院棟。"
+        "階の記載がない部屋は棟までが確定情報。"
+    ) in generation_prompt
+    assert LOCATION_INDEX_SOURCE.model_dump() in route_events[-1][1]["sources"]
+
+
+async def test_place_aliases_and_known_floor_produce_place_cards_and_location_facts() -> None:
+    cases = [
+        (
+            "山口研究室はどこ？",
+            "山口研究室",
+            {"node": "d", "label": "大学院棟", "room": "D404", "floor": None},
+            "山口研究室: D404 — 大学院棟。",
+        ),
+        (
+            "情報ネットワーク研究室はどこ？",
+            "情報ネットワーク研究室",
+            {"node": "g1", "label": "学部棟Ⅰ", "room": "GI512", "floor": 5},
+            "情報ネットワーク研究室: GI512 — 学部棟Ⅰ / 5階。",
+        ),
+    ]
+    for question, destination, expected_destination, expected_fact in cases:
+        llm = FakeLLMClient(
+            completions=[
+                json.dumps(
+                    {
+                        "retrieval_queries": [destination],
+                        "keywords": [destination],
+                        "route": {"type": "place", "origin": None, "destination": destination},
+                    },
+                    ensure_ascii=False,
+                ),
+                '{"sufficient":true,"missing":"","web_queries":[]}',
+            ],
+            tokens=["場所回答"],
+        )
+        agent = _agent(llm=llm, store=FakeKnowledgeStore([_chunk()]))
+
+        events = await _collect(agent, question)
+
+        map_payload = next(payload for event, payload in events if event == "map")
+        assert map_payload == {
+            "mode": "place",
+            "origin": None,
+            "destination": expected_destination,
+        }
+        prompt = "\n".join(message["content"] for message in llm.stream_calls[0]["messages"])
+        assert expected_fact in prompt
+        assert LOCATION_INDEX_SOURCE.model_dump() in events[-1][1]["sources"]
+
+
+async def test_multiple_node_place_names_stay_on_the_map_free_flow() -> None:
+    for destination in ("情報工学科", "自然エネルギー応用工学研究室", "知能情報処理研究室"):
+        llm = FakeLLMClient(
+            completions=[
+                json.dumps(
+                    {
+                        "retrieval_queries": [destination],
+                        "keywords": [destination],
+                        "route": {"type": "place", "origin": None, "destination": destination},
+                    },
+                    ensure_ascii=False,
+                ),
+                '{"sufficient":true,"missing":"","web_queries":[]}',
+            ],
+            tokens=["従来テキスト回答"],
+        )
+        agent = _agent(llm=llm, store=FakeKnowledgeStore([_chunk()]))
+
+        events = await _collect(agent, f"{destination}はどこ？")
+
+        assert "map" not in [event for event, _ in events]
+        prompt = "\n".join(message["content"] for message in llm.stream_calls[0]["messages"])
+        assert "【位置データ（オープンキャンパス2026 会場・場所インデックスより）】" not in prompt
+        assert LOCATION_INDEX_SOURCE.model_dump() not in events[-1][1]["sources"]
 
 
 async def test_route_map_is_emitted_after_tokens_and_before_done() -> None:
@@ -1452,6 +1588,55 @@ async def test_real_agent_deduplicates_sources_from_generation_context() -> None
     assert events[-1][1]["sources"] == [
         {"title": "施設A", "url": "https://example.test/shared", "type": "knowledge"}
     ]
+
+
+async def test_location_index_source_uses_existing_url_dedupe() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries":["情報ネットワーク研究室"],'
+            '"keywords":["情報ネットワーク研究室"],'
+            '"route":{"type":"place","origin":null,"destination":"情報ネットワーク研究室"}}',
+            '{"sufficient":true,"missing":"","web_queries":[]}',
+        ],
+        tokens=["回答"],
+    )
+    location_chunk = _chunk(
+        id="event-location",
+        title=LOCATION_INDEX_SOURCE.title,
+        source_urls=[LOCATION_INDEX_SOURCE.url],
+    )
+    agent = _agent(llm=llm, store=FakeKnowledgeStore([location_chunk]))
+
+    events = await _collect(agent, "情報ネットワーク研究室はどこ？")
+
+    matching_sources = [
+        source
+        for source in events[-1][1]["sources"]
+        if source["url"] == LOCATION_INDEX_SOURCE.url
+    ]
+    assert matching_sources == [LOCATION_INDEX_SOURCE.model_dump()]
+
+
+async def test_location_fact_survives_zero_retrieval_context_budget() -> None:
+    destination = resolve_location("情報ネットワーク研究室")
+    assert destination is not None
+    agent = _agent(store=FakeKnowledgeStore([_long_context_chunk()]))
+    state = {
+        "question": "情報ネットワーク研究室はどこ？",
+        "history": [],
+        "knowledge_results": [_long_context_chunk()],
+        "web_results": [],
+        "route_destination": destination,
+    }
+
+    messages, context = agent._build_generation_messages_with_sources(state, token_budget=0)
+
+    assert context.text == ""
+    prompt = "\n".join(message["content"] for message in messages)
+    assert (
+        "情報ネットワーク研究室: GI512 — 学部棟Ⅰ / 5階。"
+        "階の記載がない部屋は棟までが確定情報。"
+    ) in prompt
 
 
 async def test_generate_uses_answer_max_tokens_setting() -> None:
