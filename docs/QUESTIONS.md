@@ -50,6 +50,11 @@
 - 起票: Codex
 - 状況: agent harness v2 の `evaluate -> web_search -> evaluate -> web_search` ループを LangGraph の循環または2段目 conditional edge で表現すると、インストール済み `langgraph==0.0.69` の実行時に2回目 evaluate 後の分岐で停止した。暫定的に、同じノードメソッドと同じ最大2周ルールを `RealCampusAgent.stream()` 内の明示的な逐次制御で実行し、SSE step enum と外部挙動を仕様通り維持した。
 - 裁定 (Fable): **承認**。外部挙動（SSE・最大2周・分岐条件）が仕様どおりであれば内部の制御方式は問わない。LangGraph のバージョン更新は任意課題とし今回は行わない（2026-07-12）。
+- 追補 (Fable, 2026-07-17): 利用者より「LangGraph で定義も実行もしたい」との要望。`langgraph==1.2.9` で
+  当該トポロジ（evaluate 循環分岐 ×6・Web 3 周・status 先出し・token 逐次・例外握り込み継続・
+  ask_origin 短絡）が全項目動作することを PoC で実証、本番 venv への依存解決も衝突なしを確認。
+  **裁定を更新し、実行の LangGraph 一本化を FR-33 として仕様化**（`docs/LANGGRAPH_MIGRATION.md`）。
+  実装着手は利用者の Go 待ち。
 
 ## Q-007: 予算詰め順で Web 検索結果が捨てられる／ddgs 9.0.0 が全件 0 を返す（Fable 起票・裁定）
 - 日付: 2026-07-12
