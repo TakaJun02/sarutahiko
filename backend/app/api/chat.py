@@ -6,12 +6,30 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import StreamingResponse
 
+from app.agent.campus_map import ORIGIN_SELECT_LABELS
 from app.api.dependencies import get_agent, get_current_user, get_thread_service
 from app.models.auth import User
 from app.models.chat import ChatRequest, ThreadRenameRequest
 from app.services.threads import ThreadService
 
 router = APIRouter(tags=["chat"])
+
+ASK_ORIGIN_HISTORY_SUMMARY = "（現在地の選択をお願いしました）"
+
+
+def _sanitize_agent_history(messages: list[dict]) -> list[dict]:
+    sanitized: list[dict] = []
+    for message in messages:
+        agent_message = dict(message)
+        map_payload = message.get("map")
+        if (
+            message.get("role") == "assistant"
+            and isinstance(map_payload, dict)
+            and map_payload.get("mode") == "ask_origin"
+        ):
+            agent_message["content"] = ASK_ORIGIN_HISTORY_SUMMARY
+        sanitized.append(agent_message)
+    return sanitized
 
 
 @router.post("/api/chat")
@@ -22,11 +40,26 @@ async def chat(
     agent: Annotated[object, Depends(get_agent)],
 ) -> StreamingResponse:
     question = payload.message
+    user_map_payload = None
+    if payload.origin_node is not None:
+        origin_label = ORIGIN_SELECT_LABELS[payload.origin_node]
+        question = f"現在地は{origin_label}です。{payload.message}"
+        user_map_payload = {
+            "mode": "origin_select",
+            "origin": {"node": payload.origin_node, "label": origin_label},
+        }
     thread_id = payload.thread_id
 
     ensured_thread_id = thread_service.ensure_thread(user, thread_id, question)
-    history = thread_service.get_recent_messages(ensured_thread_id, limit=8)
-    thread_service.add_message(ensured_thread_id, "user", question)
+    history = _sanitize_agent_history(
+        thread_service.get_recent_messages(ensured_thread_id, limit=8)
+    )
+    thread_service.add_message(
+        ensured_thread_id,
+        "user",
+        question,
+        map_payload=user_map_payload,
+    )
     assistant_message_id = str(uuid.uuid4())
 
     async def event_stream():

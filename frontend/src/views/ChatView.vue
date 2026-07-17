@@ -46,6 +46,9 @@ const footerClearancePx = ref(224)
 const expandedSourceKeys = ref(new Set())
 const activeGreeting = ref(EMPTY_GREETING_VARIANTS[0])
 const isAtBottom = ref(true)
+const composerPlaceholder = computed(() => (
+  chat.isOriginSelectionPending ? 'マップから現在地を選んでください' : '質問を入力'
+))
 
 const greetingNameParts = computed(() => splitGreetingName(auth.user?.name || ''))
 const greetingLines = computed(() => buildGreetingLines(activeGreeting.value, auth.user?.name || ''))
@@ -105,6 +108,9 @@ async function send() {
   if (!text.trim()) {
     return
   }
+  if (chat.isOriginSelectionPending) {
+    return
+  }
   if (chat.isSending) {
     showBusyHint()
     return
@@ -134,11 +140,21 @@ async function selectMapOrigin(message, origin) {
   }
 }
 
+function cancelMapOrigin(message) {
+  chat.cancelMapOrigin(message)
+  nextTick(() => {
+    inputRef.value?.focus()
+  })
+}
+
 function onEnter(event) {
   if (event.isComposing || event.shiftKey) {
     return
   }
   event.preventDefault()
+  if (chat.isOriginSelectionPending) {
+    return
+  }
   if (chat.isSending) {
     showBusyHint()
     return
@@ -147,6 +163,9 @@ function onEnter(event) {
 }
 
 function applySuggestion(text) {
+  if (chat.isOriginSelectionPending || chat.isSending) {
+    return
+  }
   draft.value = text
   nextTick(() => {
     inputRef.value?.focus()
@@ -687,6 +706,7 @@ onBeforeUnmount(() => {
                 :key="suggestion.label"
                 type="button"
                 class="suggestion-card group inline-flex min-h-11 w-fit max-w-full items-center gap-3 rounded-full border border-edge-strong bg-ink-surface/65 px-4 py-2 text-left text-sm text-white/75 shadow-hairline transition duration-base ease-expressive hover:-translate-y-0.5 hover:bg-ink-raised hover:text-white active:translate-y-0 active:scale-[0.985]"
+                :disabled="chat.isOriginSelectionPending || chat.isSending"
                 :aria-label="`入力欄に「${suggestion.label}」を入力`"
                 @click="applySuggestion(suggestion.label)"
               >
@@ -719,7 +739,10 @@ onBeforeUnmount(() => {
                         v-if="message.map"
                         :payload="message.map"
                         :interactive="message.mapInteractive"
+                        :selected-node-id="message.mapSelectedNode || ''"
+                        :cancelled="Boolean(message.mapCancelled)"
                         @origin-selected="selectMapOrigin(message, $event)"
+                        @origin-cancelled="cancelMapOrigin(message)"
                       />
                       <div v-if="message.sources.length" class="border-t border-edge pt-3">
                         <button
@@ -803,7 +826,24 @@ onBeforeUnmount(() => {
                 </div>
               </template>
               <div v-else class="flex justify-end">
-                <p class="max-w-[88%] whitespace-pre-wrap break-words rounded-[1.35rem] rounded-br-md border border-white/[0.075] bg-ink-high px-4 py-2.5 text-base leading-7 text-[#f1f1ec] shadow-soft sm:max-w-[78%]">
+                <div
+                  v-if="message.map?.mode === 'origin_select'"
+                  class="current-location-chip"
+                  role="status"
+                  :aria-label="`現在地: ${message.map.origin?.label || ''}`"
+                >
+                  <span class="current-location-chip__icon" aria-hidden="true">
+                    <svg viewBox="0 0 20 20" fill="none">
+                      <path d="M10 17.5s4.8-4.28 4.8-8.8a4.8 4.8 0 1 0-9.6 0c0 4.52 4.8 8.8 4.8 8.8z" stroke="currentColor" stroke-width="1.45" />
+                      <circle cx="10" cy="8.7" r="1.65" fill="currentColor" />
+                    </svg>
+                  </span>
+                  <span class="current-location-chip__copy">
+                    <small>現在地:</small>
+                    <strong>{{ message.map.origin?.label }}</strong>
+                  </span>
+                </div>
+                <p v-else class="max-w-[88%] whitespace-pre-wrap break-words rounded-[1.35rem] rounded-br-md border border-white/[0.075] bg-ink-high px-4 py-2.5 text-base leading-7 text-[#f1f1ec] shadow-soft sm:max-w-[78%]">
                   {{ message.content }}
                 </p>
               </div>
@@ -835,20 +875,25 @@ onBeforeUnmount(() => {
             </Transition>
             <div
               class="composer-shell flex items-end gap-2 rounded-[1.6rem] p-2"
-              :class="{ 'composer-shell--streaming': chat.isSending }"
+              :class="{
+                'composer-shell--streaming': chat.isSending,
+                'composer-shell--origin-locked': chat.isOriginSelectionPending,
+              }"
+              :aria-disabled="chat.isOriginSelectionPending"
             >
               <textarea
                 ref="inputRef"
                 v-model="draft"
                 rows="1"
                 class="max-h-[164px] min-h-11 flex-1 resize-none bg-transparent px-3 py-2.5 text-base leading-6 text-white outline-none placeholder:text-white/45 focus-visible:outline-none"
-                placeholder="質問を入力"
+                :placeholder="composerPlaceholder"
+                :disabled="chat.isOriginSelectionPending"
                 @keydown.enter="onEnter"
               ></textarea>
               <button
                 type="submit"
                 class="grid h-11 w-11 shrink-0 place-items-center rounded-full text-[#11130f] transition duration-base ease-expressive enabled:bg-ink-paper enabled:hover:-translate-y-0.5 enabled:hover:bg-white enabled:active:translate-y-0 enabled:active:scale-[0.94] disabled:cursor-not-allowed disabled:bg-white/[0.07] disabled:text-white/25"
-                :disabled="!draft.trim() || chat.isSending"
+                :disabled="!draft.trim() || chat.isSending || chat.isOriginSelectionPending"
                 aria-label="送信"
               >
                 <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none">
@@ -993,6 +1038,75 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.current-location-chip {
+  display: inline-flex;
+  max-width: min(88%, 25rem);
+  align-items: center;
+  gap: 0.62rem;
+  border: 1px solid rgba(255, 118, 87, 0.28);
+  border-radius: 1.15rem 1.15rem 0.35rem 1.15rem;
+  background:
+    linear-gradient(135deg, rgba(255, 118, 87, 0.1), rgba(255, 118, 87, 0.035)),
+    #242724;
+  padding: 0.48rem 0.72rem 0.48rem 0.52rem;
+  box-shadow:
+    0 14px 34px -24px rgba(0, 0, 0, 0.95),
+    inset 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.current-location-chip__icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  place-items: center;
+  border-radius: 0.72rem;
+  background: #ff7657;
+  color: #2a120c;
+}
+
+.current-location-chip__icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.current-location-chip__copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.04rem;
+  text-align: left;
+}
+
+.current-location-chip__copy small {
+  color: rgba(242, 241, 236, 0.43);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.56rem;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  line-height: 1.3;
+}
+
+.current-location-chip__copy strong {
+  overflow-wrap: anywhere;
+  color: rgba(242, 241, 236, 0.9);
+  font-size: 0.76rem;
+  font-weight: 620;
+  line-height: 1.45;
+}
+
+.composer-shell--origin-locked {
+  border-color: rgba(255, 118, 87, 0.26);
+  background: color-mix(in srgb, var(--color-raised) 94%, var(--color-signal) 6%);
+  box-shadow:
+    0 0 0 1px rgba(255, 118, 87, 0.035),
+    var(--shadow-raised);
+}
+
+.composer-shell--origin-locked textarea {
+  cursor: not-allowed;
+  color: rgba(242, 241, 236, 0.42);
+}
+
 .sources-collapse-enter-active,
 .sources-collapse-leave-active {
   transition:

@@ -11,8 +11,10 @@ from app.models.auth import User
 class RecordingAgent:
     def __init__(self) -> None:
         self.history: list[dict] | None = None
+        self.question: str | None = None
 
     async def stream(self, question, user, thread_id, message_id, history=None):
+        self.question = question
         self.history = history
         yield "token", {"text": "記録済み"}
         yield "done", {"thread_id": thread_id, "message_id": message_id, "sources": []}
@@ -125,6 +127,60 @@ async def test_chat_passes_latest_eight_stored_messages_in_chronological_order(a
 
 
 @pytest.mark.asyncio
+async def test_chat_sanitizes_ask_origin_assistant_content_only_for_agent_history(app) -> None:
+    recording_agent = RecordingAgent()
+    app.state.agent = recording_agent
+    original_content = (
+        "いまいる場所をマップでタップして教えてください！"
+        "そこからの行き方をご案内します🗺️"
+    )
+
+    async with await _client(app) as client:
+        register = await client.post("/api/auth/register", json={"name": "履歴サニタイズ"})
+        auth = register.json()
+        headers = {"Authorization": f"Bearer {auth['token']}"}
+        user = User(**auth["user"])
+        thread_id = app.state.thread_service.ensure_thread(user, None, "体育館に行きたい")
+        app.state.thread_service.add_message(thread_id, "user", "体育館に行きたい")
+        ask_message_id = app.state.thread_service.add_message(
+            thread_id,
+            "assistant",
+            original_content,
+            map_payload={
+                "mode": "ask_origin",
+                "origin": None,
+                "destination": {"node": "gym", "label": "体育館"},
+                "prompt": "いまいる場所をマップでタップしてください",
+                "question": "体育館に行きたい",
+            },
+        )
+
+        response = await client.post(
+            "/api/chat",
+            json={"message": "GI512はどこ？", "thread_id": thread_id},
+            headers=headers,
+        )
+        history_response = await client.get(f"/api/threads/{thread_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert recording_agent.history is not None
+    agent_ask_message = next(
+        message
+        for message in recording_agent.history
+        if (message.get("map") or {}).get("mode") == "ask_origin"
+    )
+    assert agent_ask_message["content"] == "（現在地の選択をお願いしました）"
+
+    persisted_ask_message = next(
+        message
+        for message in history_response.json()["messages"]
+        if message["id"] == ask_message_id
+    )
+    assert persisted_ask_message["content"] == original_content
+    assert persisted_ask_message["map"]["mode"] == "ask_origin"
+
+
+@pytest.mark.asyncio
 async def test_map_event_is_persisted_as_assistant_metadata_and_returned_by_thread_api(app) -> None:
     app.state.agent = MapRecordingAgent()
 
@@ -176,3 +232,109 @@ async def test_chat_rejects_blank_message(app) -> None:
             headers=auth_headers,
         )
         assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_origin_node_is_synthesized_and_persisted_as_user_map_metadata(app) -> None:
+    recording_agent = RecordingAgent()
+    app.state.agent = recording_agent
+
+    async with await _client(app) as client:
+        auth_headers = await _auth_headers(client)
+        response = await client.post(
+            "/api/chat",
+            json={
+                "message": "D414 に行きたい",
+                "thread_id": None,
+                "origin_node": "cafeteria",
+            },
+            headers=auth_headers,
+        )
+        events = _events(response.text)
+        thread_id = events[-1][1]["thread_id"]
+        history_response = await client.get(f"/api/threads/{thread_id}", headers=auth_headers)
+
+    synthesized = "現在地はカフェテリア（食堂）です。D414 に行きたい"
+    assert response.status_code == 200
+    assert recording_agent.question == synthesized
+    user_message = history_response.json()["messages"][0]
+    assert user_message["content"] == synthesized
+    assert user_message["map"] == {
+        "mode": "origin_select",
+        "origin": {"node": "cafeteria", "label": "カフェテリア（食堂）"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_origin_select_content_is_available_to_following_turn_history(app) -> None:
+    recording_agent = RecordingAgent()
+    app.state.agent = recording_agent
+
+    async with await _client(app) as client:
+        auth_headers = await _auth_headers(client)
+        selected = await client.post(
+            "/api/chat",
+            json={"message": "D414 に行きたい", "origin_node": "k"},
+            headers=auth_headers,
+        )
+        thread_id = _events(selected.text)[-1][1]["thread_id"]
+        following = await client.post(
+            "/api/chat",
+            json={"message": "じゃあ体育館は？", "thread_id": thread_id},
+            headers=auth_headers,
+        )
+
+    assert following.status_code == 200
+    assert recording_agent.history is not None
+    assert "現在地は共通施設棟（総合受付）です。D414 に行きたい" in [
+        message["content"] for message in recording_agent.history
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_rejects_unknown_origin_node_before_creating_a_thread(app) -> None:
+    recording_agent = RecordingAgent()
+    app.state.agent = recording_agent
+
+    async with await _client(app) as client:
+        auth_headers = await _auth_headers(client)
+        response = await client.post(
+            "/api/chat",
+            json={"message": "D414 に行きたい", "origin_node": "unknown"},
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 422
+    assert recording_agent.question is None
+    with app.state.database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM threads").fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_omitting_origin_node_keeps_the_existing_sse_bytes(app) -> None:
+    recording_agent = RecordingAgent()
+    app.state.agent = recording_agent
+
+    async with await _client(app) as client:
+        auth_headers = await _auth_headers(client)
+        response = await client.post(
+            "/api/chat",
+            json={"message": "通常の質問", "thread_id": None},
+            headers=auth_headers,
+        )
+
+    events = _events(response.text)
+    done = events[-1][1]
+    expected = (
+        "event: token\ndata: {\"text\":\"記録済み\"}\n\n"
+        "event: done\ndata: "
+        f"{{\"thread_id\":\"{done['thread_id']}\",\"message_id\":\"{done['message_id']}\","
+        "\"sources\":[]}\n\n"
+    )
+    assert response.text == expected
+    assert recording_agent.question == "通常の質問"
+    with app.state.database.connect() as connection:
+        row = connection.execute(
+            "SELECT content, map_json FROM messages WHERE role = 'user'"
+        ).fetchone()
+    assert tuple(row) == ("通常の質問", None)

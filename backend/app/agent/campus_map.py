@@ -78,6 +78,21 @@ NODES: dict[str, CampusNode] = {
     "o_minami": CampusNode("o_minami", "屋外O 南側多目的広場", None),
 }
 
+# Labels used when a visitor declares their current position from MapCard.
+# Every value is also an alias in locations.json so the synthesized question
+# stays on the same deterministic resolver path as a typed location.
+ORIGIN_SELECT_LABELS: dict[str, str] = {
+    "g1": "学部棟Ⅰ",
+    "g2": "学部棟Ⅱ",
+    "d": "大学院棟",
+    "k": "共通施設棟（総合受付）",
+    "cafeteria": "カフェテリア（食堂）",
+    "j": "特別実験棟",
+    "gym": "体育館",
+    "o_bakuro": "屋外O 暴露試験場",
+    "o_minami": "屋外O 南側多目的広場",
+}
+
 EDGES: tuple[CampusEdge, ...] = (
     CampusEdge("E1", "g1", "d", 4, None, "connector"),
     CampusEdge("E2", "g1", "d", 2, None, "connector"),

@@ -119,6 +119,40 @@ describe('ChatView FR-25 smooth reveal', () => {
     expect(mapPosition).toBeGreaterThan(0)
     expect(sourcesPosition).toBeGreaterThan(mapPosition)
     expect(normalizedSource).toContain(':interactive="message.mapInteractive"')
+    expect(normalizedSource).toContain(':selected-node-id="message.mapSelectedNode || \'\'"')
     expect(normalizedSource).toContain('@origin-selected="selectMapOrigin(message, $event)"')
+  })
+})
+
+describe('ChatView FR-27 origin selection flow', () => {
+  it('locks every composer entry point and switches the placeholder', () => {
+    expect(normalizedSource).toContain(
+      "chat.isOriginSelectionPending ? 'マップから現在地を選んでください' : '質問を入力'",
+    )
+    expect(normalizedSource).toContain(':disabled="chat.isOriginSelectionPending" @keydown.enter="onEnter"')
+    expect(normalizedSource).toContain(
+      ':disabled="!draft.trim() || chat.isSending || chat.isOriginSelectionPending"',
+    )
+    expect(normalizedSource).toContain(
+      ':disabled="chat.isOriginSelectionPending || chat.isSending"',
+    )
+    expect(normalizedSource).toContain(
+      'event.preventDefault() if (chat.isOriginSelectionPending) { return }',
+    )
+  })
+
+  it('wires the explicit card cancellation escape hatch', () => {
+    expect(normalizedSource).toContain('@origin-cancelled="cancelMapOrigin(message)"')
+    expect(normalizedSource).toContain('chat.cancelMapOrigin(message)')
+  })
+
+  it('renders origin-select user turns as a location chip instead of message content', () => {
+    const chipPosition = normalizedSource.indexOf('v-if="message.map?.mode === \'origin_select\'"')
+    const normalBubblePosition = normalizedSource.indexOf('<p v-else class="max-w-[88%]')
+    expect(chipPosition).toBeGreaterThan(0)
+    expect(normalBubblePosition).toBeGreaterThan(chipPosition)
+    expect(normalizedSource).toContain('class="current-location-chip"')
+    expect(normalizedSource).toContain('<small>現在地:</small>')
+    expect(normalizedSource).toContain('{{ message.map.origin?.label }}')
   })
 })

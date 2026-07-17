@@ -4,10 +4,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.agent.campus_map import ORIGIN_SELECT_LABELS
+
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     thread_id: str | None = None
+    origin_node: str | None = None
 
     @field_validator("message")
     @classmethod
@@ -16,6 +19,13 @@ class ChatRequest(BaseModel):
         if not normalized:
             raise ValueError("message is required")
         return normalized
+
+    @field_validator("origin_node")
+    @classmethod
+    def validate_origin_node(cls, value: str | None) -> str | None:
+        if value is not None and value not in ORIGIN_SELECT_LABELS:
+            raise ValueError("unknown campus map node")
+        return value
 
 
 class ThreadRenameRequest(BaseModel):
