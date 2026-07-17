@@ -24,10 +24,10 @@ const AT_BOTTOM_THRESHOLD_PX = 72
 
 // Suggested first questions for the empty state (tap inserts into the input).
 const suggestions = [
+  { label: 'サイバーフィジカルシステム研究室に行きたい' },
+  { label: '総合受付から学部棟Ⅰへの行き方は？' },
+  { label: 'GI512 はどこ？' },
   { label: '無料送迎バスの時刻は？' },
-  { label: '模擬講義は何がある？' },
-  { label: '食堂から D404 への行き方は？' },
-  { label: '個別進学相談はどこでやってる？' },
 ]
 
 const auth = useAuthStore()
