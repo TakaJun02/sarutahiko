@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.agent.campus_map import (
     EDGES,
     NODES,
+    ORIGIN_SELECT_LABELS,
     ResolvedLocation,
     build_route_map_payload,
     find_shortest_route,
@@ -81,6 +82,14 @@ def test_resolver_accepts_the_exact_labels_sent_by_map_taps() -> None:
         label="共通施設棟（総合受付）",
         floor=1,
     )
+
+
+def test_origin_select_labels_match_all_nodes_and_resolve_as_aliases() -> None:
+    assert set(ORIGIN_SELECT_LABELS) == set(NODES)
+    for node_id, label in ORIGIN_SELECT_LABELS.items():
+        resolved = resolve_location(label)
+        assert resolved is not None
+        assert resolved.node == node_id
 
 
 def test_dijkstra_prefers_connector_matching_known_destination_floor() -> None:

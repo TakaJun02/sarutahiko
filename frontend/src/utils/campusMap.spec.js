@@ -19,6 +19,13 @@ describe('campus map presentation data', () => {
     ])
   })
 
+  it('uses concise sign codes instead of exposing internal node ids', () => {
+    expect(CAMPUS_NODES.map((node) => node.displayCode)).toEqual([
+      'G1', 'G2', 'D', 'K', 'MC', 'J', 'GYM', 'O-1', 'O-2',
+    ])
+    expect(CAMPUS_NODES.every((node) => !node.displayCode.includes('_'))).toBe(true)
+  })
+
   it('keeps every SVG node target at least 44px at the narrow mobile card scale', () => {
     const renderedTargetHeight = 58 * (288 / 360)
     expect(renderedTargetHeight).toBeGreaterThanOrEqual(44)

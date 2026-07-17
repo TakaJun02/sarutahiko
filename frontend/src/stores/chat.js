@@ -245,7 +245,13 @@ export const useChatStore = defineStore('chat', {
     isSending: false,
     error: '',
     lastFailedMessage: '',
+    lastFailedRequest: null,
   }),
+  getters: {
+    isOriginSelectionPending: (state) => state.messages.some(
+      (message) => message.map?.mode === 'ask_origin' && message.mapInteractive,
+    ),
+  },
   actions: {
     reset() {
       this.messages = []
@@ -254,12 +260,14 @@ export const useChatStore = defineStore('chat', {
       this.isSending = false
       this.error = ''
       this.lastFailedMessage = ''
+      this.lastFailedRequest = null
     },
     newChat() {
       this.messages = []
       this.threadId = null
       this.error = ''
       this.lastFailedMessage = ''
+      this.lastFailedRequest = null
     },
     hasRevealWork() {
       return this.messages.some((message) => messageHasRevealWork(message))
@@ -308,6 +316,8 @@ export const useChatStore = defineStore('chat', {
         }),
       )
       this.error = ''
+      this.lastFailedMessage = ''
+      this.lastFailedRequest = null
     },
     async renameThread(threadId, title) {
       const updated = await renameThreadRequest(threadId, title)
@@ -323,14 +333,25 @@ export const useChatStore = defineStore('chat', {
         this.newChat()
       }
     },
-    async sendMessage(text) {
+    async sendMessage(text, options = {}) {
       const messageText = text.trim()
-      if (!messageText || this.isSending) {
+      const originNode = options.originNode || null
+      const originLabel = options.originLabel || ''
+      if (
+        !messageText
+        || this.isSending
+        || (this.isOriginSelectionPending && !originNode)
+      ) {
         return
       }
 
       this.deactivateMapCards()
-      const userMessage = createMessage('user', messageText)
+      const userMessage = createMessage('user', messageText, originNode ? {
+        map: {
+          mode: 'origin_select',
+          origin: { node: originNode, label: originLabel },
+        },
+      } : {})
       const assistantDraft = createMessage('assistant', '', {
         pending: true,
         statusText: '質問を分析しています…',
@@ -341,9 +362,10 @@ export const useChatStore = defineStore('chat', {
       this.isSending = true
       this.error = ''
       this.lastFailedMessage = ''
+      this.lastFailedRequest = null
 
       try {
-        await this.streamChatResponse(messageText, assistantMessage)
+        await this.streamChatResponse(messageText, assistantMessage, { originNode })
         if (this.threadId) {
           // Refresh the sidebar so new threads appear first and existing
           // threads bubble up (updated_at descending on the server).
@@ -370,6 +392,20 @@ export const useChatStore = defineStore('chat', {
         delete assistantMessage.finalMap
         delete assistantMessage.finalMapInteractive
         this.lastFailedMessage = messageText
+        this.lastFailedRequest = {
+          message: messageText,
+          originNode,
+          originLabel,
+          originCardClientId: options.originCardClientId || null,
+        }
+        if (originNode && options.originCardClientId) {
+          const originCard = this.messages.find(
+            (message) => message.clientId === options.originCardClientId,
+          )
+          if (originCard?.map?.mode === 'ask_origin') {
+            originCard.mapInteractive = true
+          }
+        }
       } finally {
         this.isSending = false
       }
@@ -387,6 +423,7 @@ export const useChatStore = defineStore('chat', {
         this.isSending
         || !message?.mapInteractive
         || message?.map?.mode !== 'ask_origin'
+        || !origin?.node
         || !origin?.label
       ) {
         return
@@ -397,11 +434,34 @@ export const useChatStore = defineStore('chat', {
         return
       }
       message.mapInteractive = false
-      await this.sendMessage(`現在地は${origin.label}です。${question}`)
+      message.mapSelectedNode = origin.node
+      message.mapCancelled = false
+      await this.sendMessage(question, {
+        originNode: origin.node,
+        originLabel: origin.label,
+        originCardClientId: message.clientId,
+      })
+    },
+    cancelMapOrigin(message) {
+      if (
+        !message?.mapInteractive
+        || message?.map?.mode !== 'ask_origin'
+        || this.isSending
+      ) {
+        return
+      }
+      message.mapInteractive = false
+      message.mapSelectedNode = null
+      message.mapCancelled = true
+      if (this.lastFailedRequest?.originCardClientId === message.clientId) {
+        this.error = ''
+        this.lastFailedMessage = ''
+        this.lastFailedRequest = null
+      }
     },
     async retryLast() {
-      const text = this.lastFailedMessage
-      if (!text || this.isSending) {
+      const request = this.lastFailedRequest
+      if (!request?.message || this.isSending) {
         return
       }
       // Replace the failed exchange (its user + assistant pair are always the
@@ -411,20 +471,29 @@ export const useChatStore = defineStore('chat', {
       }
       this.error = ''
       this.lastFailedMessage = ''
-      await this.sendMessage(text)
+      this.lastFailedRequest = null
+      await this.sendMessage(request.message, {
+        originNode: request.originNode,
+        originLabel: request.originLabel,
+        originCardClientId: request.originCardClientId,
+      })
     },
-    async streamChatResponse(text, assistantMessage) {
+    async streamChatResponse(text, assistantMessage, { originNode = null } = {}) {
       const token = getStoredToken()
+      const requestBody = {
+        message: text,
+        thread_id: this.threadId,
+      }
+      if (originNode) {
+        requestBody.origin_node = originNode
+      }
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          message: text,
-          thread_id: this.threadId,
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       if (!response.ok) {

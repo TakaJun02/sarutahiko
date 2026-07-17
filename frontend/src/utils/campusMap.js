@@ -1,10 +1,11 @@
 export const CAMPUS_NODES = Object.freeze([
-  { id: 'g1', label: '学部棟Ⅰ', selectionLabel: '学部棟Ⅰ', x: 120, y: 104, groundFloor: 2 },
-  { id: 'g2', label: '学部棟Ⅱ', selectionLabel: '学部棟Ⅱ', x: 240, y: 104, groundFloor: 2 },
-  { id: 'd', label: '大学院棟', selectionLabel: '大学院棟', x: 180, y: 42, groundFloor: 2 },
-  { id: 'k', label: '共通施設棟', selectionLabel: '共通施設棟（総合受付）', x: 52, y: 172, groundFloor: 1 },
+  { id: 'g1', displayCode: 'G1', label: '学部棟Ⅰ', selectionLabel: '学部棟Ⅰ', x: 120, y: 104, groundFloor: 2 },
+  { id: 'g2', displayCode: 'G2', label: '学部棟Ⅱ', selectionLabel: '学部棟Ⅱ', x: 240, y: 104, groundFloor: 2 },
+  { id: 'd', displayCode: 'D', label: '大学院棟', selectionLabel: '大学院棟', x: 180, y: 42, groundFloor: 2 },
+  { id: 'k', displayCode: 'K', label: '共通施設棟', selectionLabel: '共通施設棟（総合受付）', x: 52, y: 172, groundFloor: 1 },
   {
     id: 'cafeteria',
+    displayCode: 'MC',
     label: 'メディア交流棟',
     lines: ['メディア', '交流棟'],
     selectionLabel: 'カフェテリア（食堂）',
@@ -12,10 +13,11 @@ export const CAMPUS_NODES = Object.freeze([
     y: 184,
     groundFloor: 1,
   },
-  { id: 'j', label: '特別実験棟', selectionLabel: '特別実験棟', x: 38, y: 78, groundFloor: 1 },
-  { id: 'gym', label: '体育館', selectionLabel: '体育館', x: 308, y: 184, groundFloor: 1 },
+  { id: 'j', displayCode: 'J', label: '特別実験棟', selectionLabel: '特別実験棟', x: 38, y: 78, groundFloor: 1 },
+  { id: 'gym', displayCode: 'GYM', label: '体育館', selectionLabel: '体育館', x: 308, y: 184, groundFloor: 1 },
   {
     id: 'o_bakuro',
+    displayCode: 'O-1',
     label: '屋外O 暴露試験場',
     lines: ['O 暴露', '試験場'],
     selectionLabel: '屋外O 暴露試験場',
@@ -25,6 +27,7 @@ export const CAMPUS_NODES = Object.freeze([
   },
   {
     id: 'o_minami',
+    displayCode: 'O-2',
     label: '屋外O 南側多目的広場',
     lines: ['O 南側', '多目的広場'],
     selectionLabel: '屋外O 南側多目的広場',

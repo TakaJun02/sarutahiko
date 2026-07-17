@@ -159,7 +159,7 @@ describe('chat store SSE helpers', () => {
     expect(message.finalMap).toBeUndefined()
   })
 
-  it('sends the specified synthetic message and deactivates the ask-origin card', async () => {
+  it('sends the original question with origin metadata and deactivates the ask-origin card', async () => {
     const store = useChatStore()
     const message = createMessage('assistant', '現在地を選んでください', {
       map: { mode: 'ask_origin', question: 'D414 に行きたい' },
@@ -174,9 +174,121 @@ describe('chat store SSE helpers', () => {
     })
 
     expect(message.mapInteractive).toBe(false)
-    expect(store.sendMessage).toHaveBeenCalledWith(
-      '現在地はカフェテリア（食堂）です。D414 に行きたい',
+    expect(message.mapSelectedNode).toBe('cafeteria')
+    expect(store.isOriginSelectionPending).toBe(false)
+    expect(store.sendMessage).toHaveBeenCalledWith('D414 に行きたい', {
+      originNode: 'cafeteria',
+      originLabel: 'カフェテリア（食堂）',
+      originCardClientId: message.clientId,
+    })
+  })
+
+  it('locks ordinary store sends while an ask-origin card is active', async () => {
+    const store = useChatStore()
+    store.messages = [createMessage('assistant', '現在地を選んでください', {
+      map: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      mapInteractive: true,
+    })]
+    store.streamChatResponse = vi.fn()
+
+    await store.sendMessage('別の質問')
+
+    expect(store.isOriginSelectionPending).toBe(true)
+    expect(store.streamChatResponse).not.toHaveBeenCalled()
+    expect(store.messages).toHaveLength(1)
+  })
+
+  it('cancels the active ask-origin card without sending', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '現在地を選んでください', {
+      map: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      mapInteractive: true,
+    })
+    store.messages = [message]
+
+    store.cancelMapOrigin(message)
+
+    expect(message.mapInteractive).toBe(false)
+    expect(message.mapCancelled).toBe(true)
+    expect(store.isOriginSelectionPending).toBe(false)
+  })
+
+  it('posts origin_node and creates a live origin-select chip without exposing synthetic copy', async () => {
+    stubLocalStorage()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(createSseResponse([
+        'event: token\ndata: {"text":"経路をご案内します。"}',
+      ]))),
     )
+    const store = useChatStore()
+    const message = createMessage('assistant', '現在地を選んでください', {
+      map: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      mapInteractive: true,
+    })
+    store.messages = [message]
+
+    await store.selectMapOrigin(message, {
+      node: 'cafeteria',
+      label: 'カフェテリア（食堂）',
+    })
+
+    const request = JSON.parse(fetch.mock.calls[0][1].body)
+    expect(request).toEqual({
+      message: 'D414 に行きたい',
+      thread_id: null,
+      origin_node: 'cafeteria',
+    })
+    expect(store.messages[1]).toMatchObject({
+      role: 'user',
+      content: 'D414 に行きたい',
+      map: {
+        mode: 'origin_select',
+        origin: { node: 'cafeteria', label: 'カフェテリア（食堂）' },
+      },
+    })
+    expect(store.messages[1].content).not.toContain('現在地は')
+  })
+
+  it('reactivates the card after a failed tap and preserves origin_node on retry', async () => {
+    stubLocalStorage()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockRejectedValueOnce(new Error('network failure'))
+        .mockResolvedValueOnce(createSseResponse([
+          'event: token\ndata: {"text":"再試行に成功しました。"}',
+        ])),
+    )
+    const store = useChatStore()
+    const message = createMessage('assistant', '現在地を選んでください', {
+      map: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      mapInteractive: true,
+    })
+    store.messages = [message]
+
+    await store.selectMapOrigin(message, {
+      node: 'k',
+      label: '共通施設棟（総合受付）',
+    })
+
+    expect(message.mapInteractive).toBe(true)
+    expect(store.isOriginSelectionPending).toBe(true)
+    expect(store.lastFailedRequest).toMatchObject({
+      message: 'D414 に行きたい',
+      originNode: 'k',
+      originLabel: '共通施設棟（総合受付）',
+    })
+
+    await store.retryLast()
+
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({
+      message: 'D414 に行きたい',
+      thread_id: null,
+      origin_node: 'k',
+    })
+    expect(message.mapInteractive).toBe(false)
+    expect(store.isOriginSelectionPending).toBe(false)
   })
 
   it('prevents a pending ask-origin card from reactivating after another send', () => {
@@ -389,6 +501,36 @@ describe('chat store thread history actions', () => {
 
     expect(store.messages[0].map.mode).toBe('ask_origin')
     expect(store.messages[0].mapInteractive).toBe(false)
+    expect(store.isOriginSelectionPending).toBe(false)
+  })
+
+  it('restores a persisted origin-select user message for identical chip rendering', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(createJsonResponse({
+        thread: { id: 'thread-origin', title: 'D414', created_at: 'c1', updated_at: 'u1' },
+        messages: [{
+          id: 'm-origin',
+          role: 'user',
+          content: '現在地はカフェテリア（食堂）です。D414 に行きたい',
+          sources: [],
+          map: {
+            mode: 'origin_select',
+            origin: { node: 'cafeteria', label: 'カフェテリア（食堂）' },
+          },
+          created_at: 't1',
+        }],
+      }))),
+    )
+
+    const store = useChatStore()
+    await store.openThread('thread-origin')
+
+    expect(store.messages[0].map).toEqual({
+      mode: 'origin_select',
+      origin: { node: 'cafeteria', label: 'カフェテリア（食堂）' },
+    })
+    expect(store.messages[0].content).toContain('現在地は')
   })
 
   it('starts a new chat without dropping the sidebar list', () => {
