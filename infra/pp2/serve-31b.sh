@@ -81,6 +81,10 @@ EXEC_ENV=()
 if [[ -n "${VLLM_PP_LAYER_PARTITION:-}" ]]; then
   EXEC_ENV+=(--env "VLLM_PP_LAYER_PARTITION=${VLLM_PP_LAYER_PARTITION}")
 fi
+# Pin the torch-distributed (c10d) rendezvous to a deterministic high port.
+# Without this, vLLM picked a low port (100) that the LAN/firewall dropped
+# between the hosts (2026-07-18 PoC). Keep it in the opened range.
+EXEC_ENV+=(--env "VLLM_PORT=${PP2_VLLM_INTERNAL_PORT:-29500}")
 
 DOCKER_TTY=()
 if [[ -t 0 && -t 1 ]]; then
