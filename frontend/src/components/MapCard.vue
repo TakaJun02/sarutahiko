@@ -1,8 +1,11 @@
 <script setup>
 import { computed } from 'vue'
 
+import campusMapImage from '../assets/honjo-campus-map.png'
 import {
   CAMPUS_EDGES,
+  CAMPUS_MAP_IMAGE_SIZE,
+  CAMPUS_MAP_VIEWBOX,
   CAMPUS_NODES,
   destinationBadge,
   edgeBadgeText,
@@ -188,13 +191,32 @@ function edgeBadge(edge) {
     </div>
 
     <div class="map-card__canvas">
-      <div class="map-card__grid" aria-hidden="true"></div>
       <svg
         class="map-card__svg"
-        viewBox="0 0 360 328"
+        :viewBox="CAMPUS_MAP_VIEWBOX"
         :role="isAskOrigin ? 'group' : 'img'"
-        :aria-label="`${cardTitle}のキャンパス模式図（縮尺・方位なし）`"
+        :aria-label="`${cardTitle}の本荘キャンパスマップ`"
       >
+        <image
+          class="map-card__image"
+          :href="campusMapImage"
+          aria-hidden="true"
+          x="0"
+          y="0"
+          :width="CAMPUS_MAP_IMAGE_SIZE.width"
+          :height="CAMPUS_MAP_IMAGE_SIZE.height"
+          preserveAspectRatio="none"
+        />
+        <rect
+          class="map-card__paper-edge"
+          x="90.75"
+          y="40.75"
+          width="579.5"
+          height="458.5"
+          rx="3"
+          aria-hidden="true"
+        />
+
         <g class="map-edges" aria-hidden="true">
           <path
             v-for="edge in CAMPUS_EDGES"
@@ -211,7 +233,7 @@ function edgeBadge(edge) {
             class="map-edge-badge"
             :transform="`translate(${edge.badge[0]} ${edge.badge[1]})`"
           >
-            <rect x="-27" y="-9" width="54" height="18" rx="9" />
+            <rect x="-47" y="-14" width="94" height="28" rx="14" />
             <text text-anchor="middle" dominant-baseline="central">{{ edgeBadge(edge) }}</text>
           </g>
         </g>
@@ -230,36 +252,40 @@ function edgeBadge(edge) {
           @click="selectNode(node)"
           @keydown="onNodeKeydown($event, node)"
         >
-          <rect class="map-node__target" x="-37" y="-29" width="74" height="58" rx="12" />
-          <rect class="map-node__shadow" x="-31" y="-18" width="64" height="40" rx="10" />
-          <rect class="map-node__surface" x="-32" y="-20" width="64" height="40" rx="10" />
-          <text class="map-node__code" x="-26" y="-11">{{ node.displayCode }}</text>
-          <text v-if="!node.lines" class="map-node__label" text-anchor="middle" dominant-baseline="central" y="3">
-            {{ node.label }}
-          </text>
-          <text v-else class="map-node__label" text-anchor="middle">
-            <tspan x="0" y="0">{{ node.lines[0] }}</tspan>
-            <tspan x="0" y="11">{{ node.lines[1] }}</tspan>
-          </text>
+          <circle class="map-node__target" cy="-12" r="45" />
+          <g class="map-node__pin" transform="translate(0 -20)">
+            <path
+              class="map-node__shadow"
+              d="M0 20C-4 13-18 1-18-10a18 18 0 1 1 36 0c0 11-14 23-18 30z"
+            />
+            <path
+              class="map-node__surface"
+              d="M0 20C-4 13-18 1-18-10a18 18 0 1 1 36 0c0 11-14 23-18 30z"
+            />
+            <circle class="map-node__core" cy="-10" r="11" />
+            <text class="map-node__code" text-anchor="middle" dominant-baseline="central" y="-10">
+              {{ node.displayCode }}
+            </text>
+          </g>
 
-          <g v-if="selectedNodeId === node.id" class="map-selected-marker" transform="translate(27 -20)">
-            <circle r="9" />
-            <path d="M-3 0l2 2 4-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          <g v-if="selectedNodeId === node.id" class="map-selected-marker" transform="translate(18 -39)">
+            <circle r="12" />
+            <path d="M-4 0l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" />
           </g>
           <g
             v-if="groundNotes.has(node.id)"
             class="map-floor-badge"
-            transform="translate(0 -27)"
+            transform="translate(40 -27)"
           >
-            <rect x="-24" y="-8" width="48" height="16" rx="8" />
+            <rect x="-42" y="-14" width="84" height="28" rx="14" />
             <text text-anchor="middle" dominant-baseline="central">{{ groundNotes.get(node.id) }}</text>
           </g>
           <g
             v-if="destinationNode === node.id && destinationLabel"
             class="map-destination-badge"
-            transform="translate(0 29)"
+            transform="translate(0 34)"
           >
-            <rect x="-29" y="-9" width="58" height="18" rx="9" />
+            <rect x="-52" y="-14" width="104" height="28" rx="14" />
             <text text-anchor="middle" dominant-baseline="central">{{ destinationLabel }}</text>
           </g>
         </g>
@@ -271,13 +297,13 @@ function edgeBadge(edge) {
         <circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.2" />
         <path d="M8 7.1v4M8 4.7h.01" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
       </svg>
-      ※模式図（縮尺・方位は実際と異なります）
+      ※経路線は建物間のつながりを模式的に示したものです（実際の通路とは異なる場合があります）
     </p>
 
     <div v-if="isAskOrigin" class="map-card__selection-panel">
       <div class="map-card__selection-heading">
         <span>現在地を施設名から選ぶ</span>
-        <small>{{ active ? '9 LOCATIONS' : stateLabel }}</small>
+        <small>{{ active ? '8 LOCATIONS' : stateLabel }}</small>
       </div>
       <div class="map-card__chips" aria-label="現在地をノード名から選択">
         <button
@@ -561,22 +587,15 @@ function edgeBadge(edge) {
   width: calc(100% - 1.25rem);
   overflow: hidden;
   margin: 0 0.625rem;
-  border: 1px solid rgba(244, 243, 237, 0.075);
+  border: 1px solid rgba(244, 243, 237, 0.13);
   border-radius: 1.1rem;
   background:
-    radial-gradient(circle at 50% 48%, rgba(255, 118, 87, 0.045), transparent 46%),
-    rgba(8, 10, 9, 0.27);
-}
-
-.map-card__grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(244, 243, 237, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(244, 243, 237, 0.025) 1px, transparent 1px);
-  background-size: 22px 22px;
-  mask-image: radial-gradient(circle at center, #000 20%, transparent 86%);
-  pointer-events: none;
+    linear-gradient(145deg, rgba(244, 243, 237, 0.1), rgba(244, 243, 237, 0.025)),
+    #111411;
+  box-shadow:
+    0 17px 36px -27px rgba(0, 0, 0, 0.9),
+    inset 0 1px rgba(255, 255, 255, 0.075);
+  padding: 0.38rem;
 }
 
 .map-card__svg {
@@ -585,26 +604,47 @@ function edgeBadge(edge) {
   width: 100%;
   height: auto;
   max-width: 100%;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  background: #f8f8f5;
+  box-shadow:
+    0 8px 20px -13px rgba(0, 0, 0, 0.78),
+    0 0 0 1px rgba(20, 23, 20, 0.22);
+}
+
+.map-card__image {
+  pointer-events: none;
+}
+
+.map-card__paper-edge {
+  fill: none;
+  stroke: rgba(30, 34, 30, 0.24);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .map-edge {
   fill: none;
-  stroke: rgba(244, 243, 237, 0.13);
+  stroke: rgba(24, 28, 24, 0.28);
+  stroke-dasharray: 2 5;
   stroke-linecap: round;
-  stroke-width: 1.6;
+  stroke-width: 1.8;
   vector-effect: non-scaling-stroke;
 }
 
 .map-edge--active {
   stroke: var(--map-signal);
-  stroke-dasharray: 5 4;
-  stroke-width: 3.6;
-  filter: drop-shadow(0 0 3px rgba(255, 118, 87, 0.42));
+  stroke-dasharray: 7 5;
+  stroke-width: 4;
+  filter:
+    drop-shadow(0 1px 0 rgba(40, 17, 11, 0.88))
+    drop-shadow(0 0 3px rgba(255, 118, 87, 0.62));
   animation: map-route-flow 1.2s linear infinite;
 }
 
 .map-node {
-  color: rgba(242, 241, 236, 0.62);
+  color: #f7f4ed;
   outline: none;
 }
 
@@ -614,48 +654,51 @@ function edgeBadge(edge) {
 }
 
 .map-node__shadow {
-  fill: rgba(0, 0, 0, 0.34);
-  transform: translate(1px, 2px);
+  fill: rgba(0, 0, 0, 0.42);
+  transform: translate(2px, 3px);
 }
 
 .map-node__surface {
-  fill: #20231f;
-  stroke: rgba(244, 243, 237, 0.15);
-  stroke-width: 1;
+  fill: #252925;
+  stroke: rgba(255, 255, 252, 0.96);
+  stroke-width: 2;
   vector-effect: non-scaling-stroke;
   transition: fill 180ms ease, stroke 180ms ease, transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.map-node__code {
-  fill: rgba(242, 241, 236, 0.27);
-  font-family: "Space Grotesk", sans-serif;
-  font-size: 4.2px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  pointer-events: none;
+.map-node__core {
+  fill: #f7f4ed;
+  stroke: rgba(20, 23, 20, 0.22);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  transition: fill 180ms ease;
 }
 
-.map-node__label {
-  fill: currentColor;
-  font-size: 7px;
-  font-weight: 650;
+.map-node__code {
+  fill: #222622;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 9px;
+  font-weight: 780;
+  letter-spacing: -0.025em;
   pointer-events: none;
 }
 
 .map-node--active .map-node__surface,
 .map-node--selected .map-node__surface {
-  fill: #3c2922;
-  stroke: var(--map-signal);
-  stroke-width: 1.8;
+  fill: var(--map-signal);
+  stroke: #fff7f2;
+  stroke-width: 2.4;
 }
 
-.map-node--active,
-.map-node--selected {
-  color: #fff4ef;
+.map-node--active .map-node__core,
+.map-node--selected .map-node__core {
+  fill: #462118;
+  stroke: rgba(255, 255, 255, 0.3);
 }
 
-.map-node--destination .map-node__surface {
-  fill: #4b2e25;
+.map-node--active .map-node__code,
+.map-node--selected .map-node__code {
+  fill: #fff7f2;
 }
 
 .map-node--interactive {
@@ -664,15 +707,21 @@ function edgeBadge(edge) {
 
 .map-node--interactive:hover .map-node__surface,
 .map-node--interactive:focus-visible .map-node__surface {
-  fill: #343732;
-  stroke: rgba(255, 173, 152, 0.88);
-  transform: translateY(-1px);
+  fill: #343a34;
+  stroke: var(--map-signal);
+  transform: translateY(-2px);
+}
+
+.map-node--interactive:hover .map-node__core,
+.map-node--interactive:focus-visible .map-node__core {
+  fill: #ffe0d8;
 }
 
 .map-node--interactive:focus-visible .map-node__target {
-  fill: rgba(255, 118, 87, 0.08);
+  fill: rgba(255, 118, 87, 0.12);
   stroke: var(--map-signal-soft);
-  stroke-width: 1.5;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
 }
 
 .map-floor-badge rect,
@@ -686,7 +735,7 @@ function edgeBadge(edge) {
 .map-edge-badge text {
   fill: rgba(242, 241, 236, 0.82);
   font-family: "Space Grotesk", sans-serif;
-  font-size: 5px;
+  font-size: 9px;
   font-weight: 680;
 }
 
@@ -698,14 +747,15 @@ function edgeBadge(edge) {
 .map-destination-badge text {
   fill: #29120c;
   font-family: "Space Grotesk", sans-serif;
-  font-size: 5.5px;
+  font-size: 9px;
   font-weight: 780;
 }
 
 .map-selected-marker circle {
   fill: var(--map-paper);
   stroke: var(--map-signal);
-  stroke-width: 1.4;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
 }
 
 .map-selected-marker path {

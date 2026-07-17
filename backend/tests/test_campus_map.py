@@ -12,7 +12,7 @@ from app.agent.campus_map import (
 )
 
 
-def test_campus_map_has_only_the_nine_specified_nodes() -> None:
+def test_campus_map_has_only_the_eight_real_map_nodes() -> None:
     assert set(NODES) == {
         "g1",
         "g2",
@@ -21,7 +21,6 @@ def test_campus_map_has_only_the_nine_specified_nodes() -> None:
         "cafeteria",
         "j",
         "gym",
-        "o_bakuro",
         "o_minami",
     }
 
@@ -43,8 +42,6 @@ def test_campus_map_edges_are_an_exact_transcription_of_the_spec() -> None:
         ("E8", "k", "cafeteria", None, 10, "walk"),
         ("E9", "k", "j", None, 15, "walk"),
         ("E10", "j", "g1", None, 10, "walk"),
-        ("E11", "g1", "o_bakuro", None, 10, "walk"),
-        ("E12", "o_bakuro", "o_minami", None, 15, "walk"),
         ("E13", "o_minami", "k", None, 15, "walk"),
         ("E14", "o_minami", "cafeteria", None, 10, "walk"),
         ("E15", "g1", "o_minami", None, 15, "walk"),
@@ -90,6 +87,14 @@ def test_origin_select_labels_match_all_nodes_and_resolve_as_aliases() -> None:
         resolved = resolve_location(label)
         assert resolved is not None
         assert resolved.node == node_id
+
+
+def test_every_real_map_node_pair_has_a_route() -> None:
+    for origin_node in NODES:
+        for destination_node in NODES:
+            route = find_shortest_route(origin_node, destination_node)
+            assert route.nodes[0] == origin_node
+            assert route.nodes[-1] == destination_node
 
 
 def test_dijkstra_prefers_connector_matching_known_destination_floor() -> None:
@@ -151,13 +156,18 @@ def test_unknown_room_floor_is_not_inferred_in_steps() -> None:
     assert not any("4階へ → D404" in step for step in payload["steps"])
 
 
-def test_minutes_are_displayed_only_when_the_source_edge_has_minutes() -> None:
-    origin = resolve_location("学部棟Ⅰ")
-    destination = resolve_location("暴露試験場")
+def test_reception_to_south_multipurpose_area_uses_e13() -> None:
+    origin = resolve_location("総合受付")
+    destination = resolve_location("南側多目的広場")
     assert origin is not None and destination is not None
 
     payload = build_route_map_payload(origin, destination)
 
-    assert payload["path"]["edges"] == ["E11"]
-    assert any("徒歩 約10分" in step for step in payload["steps"])
+    assert payload["path"]["edges"] == ["E13"]
+    assert any("徒歩 約15分" in step for step in payload["steps"])
     assert not any("徒歩 約3分" in step or "徒歩 約5分" in step for step in payload["steps"])
+
+
+def test_exposure_test_site_is_not_resolved_for_map_cards() -> None:
+    assert resolve_location("暴露試験場") is None
+    assert resolve_location("公開ゾーンO（暴露試験場）") is None

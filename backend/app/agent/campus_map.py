@@ -74,7 +74,6 @@ NODES: dict[str, CampusNode] = {
     "cafeteria": CampusNode("cafeteria", "メディア交流棟", 1),
     "j": CampusNode("j", "特別実験棟", 1),
     "gym": CampusNode("gym", "体育館", 1),
-    "o_bakuro": CampusNode("o_bakuro", "屋外O 暴露試験場", None),
     "o_minami": CampusNode("o_minami", "屋外O 南側多目的広場", None),
 }
 
@@ -89,7 +88,6 @@ ORIGIN_SELECT_LABELS: dict[str, str] = {
     "cafeteria": "カフェテリア（食堂）",
     "j": "特別実験棟",
     "gym": "体育館",
-    "o_bakuro": "屋外O 暴露試験場",
     "o_minami": "屋外O 南側多目的広場",
 }
 
@@ -106,8 +104,6 @@ EDGES: tuple[CampusEdge, ...] = (
     CampusEdge("E8", "k", "cafeteria", None, 10, "walk"),
     CampusEdge("E9", "k", "j", None, 15, "walk"),
     CampusEdge("E10", "j", "g1", None, 10, "walk"),
-    CampusEdge("E11", "g1", "o_bakuro", None, 10, "walk"),
-    CampusEdge("E12", "o_bakuro", "o_minami", None, 15, "walk"),
     CampusEdge("E13", "o_minami", "k", None, 15, "walk"),
     CampusEdge("E14", "o_minami", "cafeteria", None, 10, "walk"),
     CampusEdge("E15", "g1", "o_minami", None, 15, "walk"),

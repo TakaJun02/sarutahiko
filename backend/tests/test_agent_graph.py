@@ -570,6 +570,31 @@ async def test_unresolved_or_null_route_never_emits_map() -> None:
     assert event_streams[0] == event_streams[1]
 
 
+async def test_exposure_test_site_route_uses_normal_map_free_flow() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries":["暴露試験場 行き方"],"keywords":["暴露試験場"],'
+            '"route":{"type":"route","origin":"総合受付","destination":"暴露試験場"}}',
+            '{"sufficient":true,"missing":"","web_queries":[]}',
+        ],
+        tokens=["従来テキスト回答"],
+    )
+    agent = _agent(llm=llm, store=FakeKnowledgeStore([_chunk()]))
+
+    events = await _collect(agent, "暴露試験場への行き方")
+
+    assert "map" not in [event for event, _ in events]
+    assert [payload["step"] for event, payload in events if event == "status"] == [
+        "analyze",
+        "retrieve",
+        "search",
+        "evaluate",
+        "generate",
+    ]
+    assert events[-2] == ("token", {"text": "従来テキスト回答"})
+    assert events[-1][0] == "done"
+
+
 async def test_map_free_stream_keeps_the_legacy_sse_bytes() -> None:
     llm = FakeLLMClient(
         completions=[

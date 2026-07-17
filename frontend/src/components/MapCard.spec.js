@@ -4,8 +4,19 @@ import { describe, expect, it } from 'vitest'
 
 const source = readFileSync(new URL('./MapCard.vue', import.meta.url), 'utf8')
 const normalized = source.replace(/\s+/g, ' ')
+const mapImage = readFileSync(new URL('../assets/honjo-campus-map.png', import.meta.url))
 
-describe('MapCard FR-26 contract', () => {
+describe('MapCard real campus map contract', () => {
+  it('bundles the approved 671x720 map and renders it in the cropped SVG', () => {
+    expect(mapImage.subarray(1, 4).toString()).toBe('PNG')
+    expect(mapImage.readUInt32BE(16)).toBe(671)
+    expect(mapImage.readUInt32BE(20)).toBe(720)
+    expect(normalized).toContain("import campusMapImage from '../assets/honjo-campus-map.png'")
+    expect(normalized).toContain(':viewBox="CAMPUS_MAP_VIEWBOX"')
+    expect(normalized).toContain('<image class="map-card__image" :href="campusMapImage"')
+    expect(normalized).not.toContain('map-card__grid')
+  })
+
   it('offers equivalent SVG and chip controls with accessible names', () => {
     expect(normalized).toContain(':role="isAskOrigin ? \'button\' : undefined"')
     expect(normalized).toContain(':tabindex="active ? 0 : undefined"')
@@ -18,7 +29,7 @@ describe('MapCard FR-26 contract', () => {
     expect(source).toMatch(/\.map-card__chip\s*\{[\s\S]*?min-height:\s*44px/)
     expect(source).toMatch(/\.map-card__steps summary\s*\{[\s\S]*?min-height:\s*44px/)
     expect(source).toMatch(/\.map-card__cancel\s*\{[\s\S]*?min-height:\s*44px/)
-    expect(normalized).toContain('class="map-node__target" x="-37" y="-29" width="74" height="58"')
+    expect(normalized).toContain('<circle class="map-node__target" cy="-12" r="45"')
   })
 
   it('has reduced-motion overrides and no horizontal scrolling', () => {
@@ -57,9 +68,9 @@ describe('MapCard FR-26 contract', () => {
     expect(normalized).not.toContain('node.id.toUpperCase()')
   })
 
-  it('shows the schematic disclaimer in every mode', () => {
+  it('shows the real-map route disclaimer in every mode', () => {
     expect(normalized).toContain('<p class="map-card__schematic-note">')
-    expect(normalized).toContain('※模式図（縮尺・方位は実際と異なります）')
+    expect(normalized).toContain('※経路線は建物間のつながりを模式的に示したものです（実際の通路とは異なる場合があります）')
     expect(source).toMatch(/\.map-card__schematic-note\s*\{[\s\S]*?font-size:\s*0\.625rem/)
   })
 })

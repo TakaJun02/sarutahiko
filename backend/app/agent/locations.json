@@ -39,7 +39,6 @@
     "J113、J106": {"node": "j"},
     "G1アトリウム": {"node": "g1", "floor": 2},
     "カフェテリア付近": {"node": "cafeteria"},
-    "公開ゾーンO（暴露試験場）": {"node": "o_bakuro"},
     "公開ゾーンO（南側多目的広場）": {"node": "o_minami"},
     "公開ゾーンK（1階 受付エントランス）": {"node": "k", "floor": 1},
     "GII517": {"node": "g2"},
@@ -84,9 +83,6 @@
     "Jゾーン": {"node": "j", "label": "特別実験棟"},
     "体育館": {"node": "gym", "label": "体育館"},
     "屋内運動施設": {"node": "gym", "label": "体育館"},
-    "屋外O 暴露試験場": {"node": "o_bakuro", "label": "屋外O 暴露試験場"},
-    "暴露試験場": {"node": "o_bakuro", "label": "屋外O 暴露試験場"},
-    "公開ゾーンO（暴露試験場）": {"node": "o_bakuro", "label": "屋外O 暴露試験場"},
     "屋外O 南側多目的広場": {"node": "o_minami", "label": "屋外O 南側多目的広場"},
     "南側多目的広場": {"node": "o_minami", "label": "屋外O 南側多目的広場"},
     "公開ゾーンO（南側多目的広場）": {"node": "o_minami", "label": "屋外O 南側多目的広場"}
