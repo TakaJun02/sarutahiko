@@ -972,6 +972,15 @@ onBeforeUnmount(() => {
             <div class="mt-3 space-y-3 text-sm leading-6 text-white/65">
               <p>APU-Navi は、秋田県立大学 サイバーフィジカルシステム研究室【CPS Lab】によって開発されました！</p>
             </div>
+            <a
+              href="https://www.cps.akita-pu.ac.jp/"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="group mt-5 flex min-h-11 w-full items-center justify-between gap-3 rounded-ui-sm border border-edge bg-ink-surface px-3.5 py-2.5 text-sm text-white/75 transition duration-fast ease-standard hover:border-edge-strong hover:bg-fill-hover hover:text-white"
+            >
+              <span class="text-[13px] leading-5">サイバーフィジカルシステム研究室のHPはこちらをクリック！</span>
+              <span aria-hidden="true" class="shrink-0 font-display text-base text-brand-soft transition duration-fast ease-expressive group-hover:-translate-y-0.5 group-hover:translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">↗</span>
+            </a>
             <section class="mt-5 border-t border-edge pt-5" aria-labelledby="about-qr-heading">
               <h4 id="about-qr-heading" class="text-center font-display text-sm font-semibold tracking-[-0.015em] text-white/90">
                 お手元のスマートフォンでも使えます
@@ -988,15 +997,6 @@ onBeforeUnmount(() => {
                 ibera.cps.akita-pu.ac.jp
               </p>
             </section>
-            <a
-              href="https://www.cps.akita-pu.ac.jp/"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="group mt-5 flex min-h-11 w-full items-center justify-between gap-3 rounded-ui-sm border border-edge bg-ink-surface px-3.5 py-2.5 text-sm text-white/75 transition duration-fast ease-standard hover:border-edge-strong hover:bg-fill-hover hover:text-white"
-            >
-              <span class="text-[13px] leading-5">サイバーフィジカルシステム研究室のHPはこちらをクリック！</span>
-              <span aria-hidden="true" class="shrink-0 font-display text-base text-brand-soft transition duration-fast ease-expressive group-hover:-translate-y-0.5 group-hover:translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">↗</span>
-            </a>
           </template>
           <p v-if="dialogError" class="mt-3 text-sm text-red-300" role="alert">{{ dialogError }}</p>
           <div v-if="dialog.kind === 'about'" class="mt-5 flex justify-end">
