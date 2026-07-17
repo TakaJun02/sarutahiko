@@ -118,12 +118,29 @@ docker run --rm --entrypoint python3 vllm/vllm-openai:v0.25.0 \
 【利用者・nubia】同じ 3 コマンドを実行する。version が両方 `0.25.0`、RepoDigest が完全一致する
 ことを確認する。multi-node では vLLM / Ray / CUDA の差異が典型的な起動失敗原因になる。
 
+**派生イメージのビルド（必須・両筐体）**: 公式 `vllm/vllm-openai:v0.25.0` は **ray を同梱しない**
+（2026-07-18 の PoC 実施で判明。`ray` CLI も `import ray` も存在しない）。Ray クラスタ用に
+以下の派生イメージを両筐体でビルドする。起動スクリプトの既定イメージはこの派生タグ
+（`pp2-vllm:v0.25.0-ray`。`PP2_IMAGE` で上書き可）。
+
+```bash
+docker build -t pp2-vllm:v0.25.0-ray - <<'EOF'
+FROM vllm/vllm-openai:v0.25.0
+RUN pip install --no-cache-dir "ray[default,cgraph]"
+EOF
+```
+
+- digest 照合は**ベースイメージ**（`vllm/vllm-openai:v0.25.0`）で行う（派生イメージの digest は
+  ビルドごとに変わるため比較対象にしない）。ray のバージョンは両筐体のビルドログで一致を確認する。
+- TODO（PoC 合格後・仕様 v1.0 で対応）: PoC で検証された ray バージョンを `ray[default,cgraph]==X`
+  に固定する。
+
 実施時に以下へ転記する。
 
-| host | image tag | RepoDigest | `vllm.__version__` | 確認日 |
-|---|---|---|---|---|
-| ibera | `vllm/vllm-openai:v0.25.0` | （利用者記録） | （利用者記録） | （利用者記録） |
-| nubia | `vllm/vllm-openai:v0.25.0` | （利用者記録） | （利用者記録） | （利用者記録） |
+| host | image tag | base RepoDigest | `vllm.__version__` | ray | 確認日 |
+|---|---|---|---|---|---|
+| ibera | `pp2-vllm:v0.25.0-ray` | （利用者記録） | （利用者記録） | （利用者記録） | （利用者記録） |
+| nubia | `pp2-vllm:v0.25.0-ray` | （利用者記録） | （利用者記録） | （利用者記録） | （利用者記録） |
 
 ### 1-4. `.env`、LAN IP、NIC
 

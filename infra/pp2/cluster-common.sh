@@ -6,7 +6,9 @@ set -euo pipefail
 
 PP2_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PP2_REPO_ROOT="$(cd -- "${PP2_SCRIPT_DIR}/../.." && pwd)"
-PP2_IMAGE="vllm/vllm-openai:v0.25.0"
+# The official v0.25.0 image does not bundle ray (multi-node extras were moved
+# out of the base image); both hosts build this derived tag from README §1-3.
+PP2_IMAGE="${PP2_IMAGE:-pp2-vllm:v0.25.0-ray}"
 
 load_project_env() {
   local env_file="${ENV_FILE:-${PP2_REPO_ROOT}/.env}"
@@ -61,7 +63,8 @@ require_command() {
 require_image() {
   if ! docker image inspect "${PP2_IMAGE}" >/dev/null 2>&1; then
     echo "ERROR: ${PP2_IMAGE} is not present locally." >&2
-    echo "Pull it and record its RepoDigest as described in infra/pp2/README.md." >&2
+    echo "Build it with the docker build command in infra/pp2/README.md §1-3" >&2
+    echo "(or pull/pin as described there for the base image)." >&2
     exit 1
   fi
 }
