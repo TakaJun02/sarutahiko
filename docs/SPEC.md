@@ -1,6 +1,10 @@
 # campus-guide-agent システム仕様書
 
-- 版: v0.25（2026-07-18, Fable 改訂 — 利用者指示: **FR-33 LangGraph 実行一本化**（詳細:
+- 版: v0.26（2026-07-18, Fable 改訂 — 利用者指示: **FR-34 ReAct ハーネス刷新＋Gemma 4 31B 復帰**
+  （詳細: `docs/AGENT_REACT.md`）。ワークフローノード内の固定処理をツール駆動の ReAct ループへ
+  刷新（ハーネス v6）。経路ドメインはサブエージェントへ切り出し。生成 LLM を 31B へ戻し
+  本機＋nubia の PP=2 で運用。着手は FR-33 本番反映 → PoC（P1〜P4）合格後）
+- v0.25（2026-07-18, Fable 改訂 — 利用者指示: **FR-33 LangGraph 実行一本化**（詳細:
   `docs/LANGGRAPH_MIGRATION.md`）。langgraph 1.2.9 へ更新し、エージェント制御を
   「StateGraph 定義＝実行」に統一（Q-006 裁定更新）。SSE 外形は不変・実装 Codex/GPT-5.6Sol xhigh）
 - v0.24（2026-07-17, Fable 改訂 — 利用者指示: **FR-32 About モーダルの並び替え**。
@@ -380,9 +384,26 @@
   受け入れ: pytest 139 / Vitest 89 / build green・実 LLM E2E 4 シナリオ合格・
   agent.trace 互換・レイテンシ実測 16.6 秒（60 秒目標内）。
 
+### FR-34 ReAct ハーネス刷新＋Gemma 4 31B 復帰（2026-07-18 追加・利用者指示、詳細: `docs/AGENT_REACT.md`）
+- ワークフローノード内の固定処理を**ツール駆動の ReAct ループ**へ刷新（ハーネス v6）。
+  メインの decide が retrieve / search / web_search / campus_navigator / ask_user / finish から
+  選択し、観測を見てクエリ再構成・打ち切りを判断する。ツール 0 回での finish は無効。
+- 経路・場所ドメインは**経路案内サブエージェント**（campus_navigator。内部ツール:
+  resolve_place / find_route / ask_origin=ターン終端・バリデータ裁定）へ切り出し。
+  最終文章は常にメイン generate が一本で書く。FR-26/27/29 の UX 契約は不変。
+- **Web 周回ポリシー廃止**（第 1R 公式ドメイン限定・周回上限を撤去。Tavily CB は存続）。
+  停止条件は総アクション回数でなく**コンテキスト予算**（soft/hard 2 閾値＋反復ガード・
+  recursion_limit の安全弁）。逆質問ツール ask_user を新設（clarification メタで履歴サニタイズ）。
+- 生成 LLM を **Gemma 4 31B** へ復帰し、本機 3090 Ti＋nubia 3090（同一 LAN・`.env` の
+  `Inference_sever`）の**パイプライン並列 PP=2** で 1 論理エンドポイント化（利用者裁定 R2。
+  旧 31B 単カードの max-model-len 2816 問題を解消し 16k 窓を狙う）。12B 単機は緊急切り戻し用に保持。
+- SSE 契約（イベント種別・step 語彙・status 自由文）は互換維持・フロント無改修。
+  着手順は FR-33 本番反映 → PP=2 疎通（P1）→ PoC（P2〜P4）→ 仕様 v1.0 確定 → 実装・検収。
+
 ## 4. 非機能要件
 
-- **NFR-1**: LLM 推論はローカル GPU（RTX 3090 Ti 24GB）上の vLLM のみを使用。外部 LLM API に依存しない。
+- **NFR-1**: LLM 推論はローカル GPU 群上の vLLM のみを使用し、外部 LLM API に依存しない
+  （生成: 本機 RTX 3090 Ti＋nubia RTX 3090 の PP=2〔FR-34〕、埋め込み: gouin。いずれも自前運用）。
 - **NFR-2**: 最初のステータス通知は送信後 1 秒以内に返す（体感応答性）。
 - **NFR-3**: スマートフォン縦画面を第一とするレスポンシブ UI。
 - **NFR-4**: docker compose で全コンポーネントを起動できること。
