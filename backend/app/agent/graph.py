@@ -83,6 +83,14 @@ ASK_ORIGIN_RESPONSE = (
     "いまいる場所をマップでタップして教えてください！"
     "そこからの行き方をご案内します🗺️"
 )
+LOCATION_INDEX_SOURCE = Source(
+    title="オープンキャンパス2026 会場・場所インデックス（どこ・何階・何号室）",
+    url=(
+        "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/"
+        "OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf"
+    ),
+    type="knowledge",
+)
 
 logger = logging.getLogger(__name__)
 trace_logger = logging.getLogger("agent.trace")
@@ -276,7 +284,7 @@ class RealCampusAgent:
             yield "done", DonePayload(
                 thread_id=thread_id,
                 message_id=message_id,
-                sources=[],
+                sources=self._assemble_generation_sources(state, None),
             ).model_dump()
             return
 
@@ -721,7 +729,7 @@ class RealCampusAgent:
 
     async def _prepare_generation(self, state: AgentState) -> dict:
         messages, context = self._build_generation_messages_with_sources(state)
-        sources = self._assemble_sources(context.knowledge_results, context.web_results)
+        sources = self._assemble_generation_sources(state, context)
         generation_trace = self._generation_context_trace(state, context)
         return {
             "generation_messages": messages,
@@ -741,7 +749,7 @@ class RealCampusAgent:
         current_budget = int(state.get("generation_token_budget", 0))
         reduced_budget = max(int(current_budget * factor), 0)
         messages, context = self._build_generation_messages_with_sources(state, token_budget=reduced_budget)
-        sources = self._assemble_sources(context.knowledge_results, context.web_results)
+        sources = self._assemble_generation_sources(state, context)
         rebuilt_count = await self._count_real_tokens(messages)
         return {
             "generation_messages": messages,
@@ -774,7 +782,7 @@ class RealCampusAgent:
             )
             state["generation_messages"] = retry_messages
             state["generation_token_budget"] = retry_budget
-            state["sources"] = self._assemble_sources(retry_context.knowledge_results, retry_context.web_results)
+            state["sources"] = self._assemble_generation_sources(state, retry_context)
             async for token in self.llm_client.stream_chat(
                 retry_messages,
                 temperature=0.7,
@@ -912,6 +920,7 @@ class RealCampusAgent:
         user_content_factory = lambda context: (
                 f"質問: {state['question']}\n\n"
                 f"{self._generation_route_note(state)}"
+                f"{self._generation_location_fact(state)}"
                 "利用可能な根拠:\n"
                 f"{context}\n\n"
                 f"{self._generation_investigation_log_line(state)}"
@@ -1164,6 +1173,20 @@ class RealCampusAgent:
         if origin is None or not state.get("route_origin_from_history"):
             return ""
         return f"経路の出発地（直前の会話から継承）: {origin.label}\n\n"
+
+    @staticmethod
+    def _generation_location_fact(state: AgentState) -> str:
+        destination = state.get("route_destination")
+        if destination is None:
+            return ""
+        resolved_name = destination.resolved_name or destination.room or destination.label
+        room = f"{destination.room} — " if destination.room else ""
+        floor = f" / {destination.floor}階" if destination.floor is not None else ""
+        return (
+            "【位置データ（オープンキャンパス2026 会場・場所インデックスより）】"
+            f"{resolved_name}: {room}{destination.label}{floor}。"
+            "階の記載がない部屋は棟までが確定情報。\n\n"
+        )
 
     @staticmethod
     def _compose_context_messages(
@@ -1473,6 +1496,7 @@ class RealCampusAgent:
     def _assemble_sources(
         knowledge_results: Sequence[KnowledgeChunk],
         web_results: Sequence[WebSearchResult],
+        additional_sources: Sequence[Source] = (),
     ) -> list[Source]:
         sources: list[Source] = []
         seen: set[tuple[str, str]] = set()
@@ -1491,7 +1515,23 @@ class RealCampusAgent:
                 continue
             seen.add(key)
             sources.append(Source(title=result.title, url=result.url, type="web"))
+        for source in additional_sources:
+            key = (source.type, source.url)
+            if key in seen:
+                continue
+            seen.add(key)
+            sources.append(source)
         return sources
+
+    def _assemble_generation_sources(
+        self,
+        state: AgentState,
+        context: _ContextAssembly | None,
+    ) -> list[Source]:
+        knowledge_results = context.knowledge_results if context is not None else []
+        web_results = context.web_results if context is not None else []
+        location_sources = [LOCATION_INDEX_SOURCE] if state.get("route_destination") is not None else []
+        return self._assemble_sources(knowledge_results, web_results, location_sources)
 
     @staticmethod
     def _generation_context_trace(state: AgentState, context: _ContextAssembly) -> dict[str, list[str]]:

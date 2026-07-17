@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import heapq
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -47,6 +48,7 @@ class ResolvedLocation:
     label: str
     room: str | None = None
     floor: int | None = None
+    resolved_name: str | None = field(default=None, compare=False)
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -118,15 +120,23 @@ def _load_location_data() -> dict[str, Any]:
 
 _LOCATION_DATA = _load_location_data()
 _ROOMS = {normalize_text(key): (key, value) for key, value in _LOCATION_DATA["rooms"].items()}
-_ALIASES = {normalize_text(key): value for key, value in _LOCATION_DATA["aliases"].items()}
+_ALIASES = {normalize_text(key): (key, value) for key, value in _LOCATION_DATA["aliases"].items()}
+_PLACES = {normalize_text(key): (key, value) for key, value in _LOCATION_DATA["places"].items()}
+
+_PARENTHETICAL_PATTERN = re.compile(r"\(([^()]*)\)")
+_PARENTHETICAL_ELEMENT_PATTERN = re.compile(r"[、,/]\s*")
+_LOCATION_SUFFIXES = ("まで", "へ", "に")
 
 
 def resolve_location(expression: str | None) -> ResolvedLocation | None:
     if not isinstance(expression, str) or not expression.strip():
         return None
-    key = normalize_text(expression.strip())
-    room_entry = _ROOMS.get(key)
-    if room_entry is not None:
+    candidate_keys = _location_candidate_keys(expression)
+
+    for key in candidate_keys:
+        room_entry = _ROOMS.get(key)
+        if room_entry is None:
+            continue
         room, value = room_entry
         node = NODES[value["node"]]
         return ResolvedLocation(
@@ -134,15 +144,64 @@ def resolve_location(expression: str | None) -> ResolvedLocation | None:
             label=node.label,
             room=room,
             floor=value.get("floor"),
+            resolved_name=room,
         )
-    alias = _ALIASES.get(key)
-    if alias is None:
-        return None
-    return ResolvedLocation(
-        node=alias["node"],
-        label=alias["label"],
-        floor=alias.get("floor"),
-    )
+
+    for key in candidate_keys:
+        alias_entry = _ALIASES.get(key)
+        if alias_entry is None:
+            continue
+        alias_name, alias = alias_entry
+        return ResolvedLocation(
+            node=alias["node"],
+            label=alias["label"],
+            floor=alias.get("floor"),
+            resolved_name=alias_name,
+        )
+
+    for key in candidate_keys:
+        place_entry = _PLACES.get(key)
+        if place_entry is None:
+            continue
+        place_name, place = place_entry
+        node = NODES[place["node"]]
+        return ResolvedLocation(
+            node=node.id,
+            label=node.label,
+            room=place.get("room"),
+            floor=place.get("floor"),
+            resolved_name=place_name,
+        )
+    return None
+
+
+def _location_candidate_keys(expression: str) -> list[str]:
+    normalized = normalize_text(expression.strip())
+    candidates = [normalized]
+
+    without_parentheticals = _PARENTHETICAL_PATTERN.sub("", normalized).strip()
+    if without_parentheticals:
+        candidates.append(without_parentheticals)
+
+    for group in _PARENTHETICAL_PATTERN.findall(normalized):
+        candidates.extend(
+            element.strip()
+            for element in _PARENTHETICAL_ELEMENT_PATTERN.split(group)
+            if element.strip()
+        )
+
+    for candidate in tuple(candidates):
+        trimmed = _trim_location_suffix(candidate)
+        if trimmed != candidate:
+            candidates.append(trimmed)
+    return list(dict.fromkeys(candidates))
+
+
+def _trim_location_suffix(value: str) -> str:
+    for suffix in _LOCATION_SUFFIXES:
+        if value.endswith(suffix):
+            return value[: -len(suffix)].rstrip()
+    return value
 
 
 def normalize_location_name(value: str) -> str:
