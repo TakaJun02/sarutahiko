@@ -182,6 +182,17 @@ Ray の既定 GCS port は `6379`。上書きする場合は両筐体で同じ `
 `RAY_MAX_WORKER_PORT` で上書きできる。最も確実な PoC firewall 条件は、外部からは閉じたまま、ibera と
 nubia の正確な 2 IP 間だけ双方向 TCP を許可することである。
 
+**ポート列挙では足りない（2026-07-18 実施の教訓）**: Ray のポート群を開けても、torch distributed
+（c10d・`VLLM_PORT=29500` に固定済み）に加えて **NCCL / Gloo が動的な高位ポートで相互に listen する**
+ため、許可リスト方式は必ずどこかで詰まる。ufw ならピアホスト全許可を使う:
+
+```bash
+# ibera 側（nubia からの全 TCP/UDP を許可）
+sudo ufw allow from <nubia の IP>
+# nubia 側で ufw が有効な場合は対称に
+sudo ufw allow from <ibera の IP>
+```
+
 ## 2. 起動手順（nubia worker → ibera head → serve → 検証）
 
 ### 2-1. 既存 12B の停止
