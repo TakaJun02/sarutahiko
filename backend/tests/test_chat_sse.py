@@ -22,6 +22,20 @@ class RecordingAgent:
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
 
+class MapRecordingAgent(RecordingAgent):
+    async def stream(self, question, user, thread_id, message_id, history=None):
+        self.history = history
+        yield "token", {"text": "経路です"}
+        yield "map", {
+            "mode": "route",
+            "origin": {"node": "cafeteria", "label": "カフェテリア（食堂）"},
+            "destination": {"node": "d", "label": "大学院棟", "room": "D414", "floor": 4},
+            "path": {"nodes": ["cafeteria", "g1", "d"], "edges": ["E6a", "E1"]},
+            "steps": ["カフェテリア（食堂）を出る", "4階の連絡通路で 大学院棟へ"],
+        }
+        yield "done", {"thread_id": thread_id, "message_id": message_id, "sources": []}
+
+
 def _events(stream_text: str) -> list[tuple[str, dict]]:
     parsed: list[tuple[str, dict]] = []
     for block in stream_text.strip().split("\n\n"):
@@ -108,6 +122,29 @@ async def test_chat_passes_latest_eight_stored_messages_in_chronological_order(a
     assert [message["content"] for message in recording_agent.history] == [
         f"message-{index}" for index in range(2, 10)
     ]
+
+
+@pytest.mark.asyncio
+async def test_map_event_is_persisted_as_assistant_metadata_and_returned_by_thread_api(app) -> None:
+    app.state.agent = MapRecordingAgent()
+
+    async with await _client(app) as client:
+        register = await client.post("/api/auth/register", json={"name": "マップ履歴"})
+        headers = {"Authorization": f"Bearer {register.json()['token']}"}
+        chat_response = await client.post(
+            "/api/chat",
+            json={"message": "食堂から D414 へ", "thread_id": None},
+            headers=headers,
+        )
+        events = _events(chat_response.text)
+        thread_id = events[-1][1]["thread_id"]
+        history_response = await client.get(f"/api/threads/{thread_id}", headers=headers)
+
+    assert [event for event, _ in events] == ["token", "map", "done"]
+    messages = history_response.json()["messages"]
+    assert messages[0]["map"] is None
+    assert messages[1]["map"]["mode"] == "route"
+    assert messages[1]["map"]["path"]["edges"] == ["E6a", "E1"]
 
 
 @pytest.mark.asyncio

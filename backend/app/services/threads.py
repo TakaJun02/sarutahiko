@@ -44,6 +44,7 @@ class ThreadService:
         role: str,
         content: str,
         sources: list[Source | dict] | None = None,
+        map_payload: dict | None = None,
         message_id: str | None = None,
     ) -> str:
         new_message_id = message_id or str(uuid.uuid4())
@@ -54,13 +55,14 @@ class ThreadService:
                 for source in sources
             ]
             sources_json = json.dumps(serialized_sources, ensure_ascii=False)
+        map_json = json.dumps(map_payload, ensure_ascii=False) if map_payload is not None else None
         with self.database.connect() as connection:
             connection.execute(
                 """
-                INSERT INTO messages (id, thread_id, role, content, sources_json)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO messages (id, thread_id, role, content, sources_json, map_json)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (new_message_id, thread_id, role, content, sources_json),
+                (new_message_id, thread_id, role, content, sources_json, map_json),
             )
             connection.execute(
                 "UPDATE threads SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -72,7 +74,7 @@ class ThreadService:
         with self.database.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, role, content, sources_json, created_at
+                SELECT id, role, content, sources_json, map_json, created_at
                 FROM messages
                 WHERE thread_id = ?
                 ORDER BY created_at DESC
@@ -133,7 +135,7 @@ class ThreadService:
                 )
             messages = connection.execute(
                 """
-                SELECT id, role, content, sources_json, created_at
+                SELECT id, role, content, sources_json, map_json, created_at
                 FROM messages
                 WHERE thread_id = ?
                 ORDER BY created_at ASC
@@ -160,10 +162,12 @@ class ThreadService:
     @staticmethod
     def _message_to_dict(row: sqlite3.Row) -> dict:
         sources = json.loads(row["sources_json"]) if row["sources_json"] else []
+        map_payload = json.loads(row["map_json"]) if row["map_json"] else None
         return {
             "id": row["id"],
             "role": row["role"],
             "content": row["content"],
             "sources": sources,
+            "map": map_payload,
             "created_at": row["created_at"],
         }

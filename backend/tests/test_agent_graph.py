@@ -429,10 +429,10 @@ async def test_analyze_parses_json_retrieval_queries() -> None:
 
     result = await agent._analyze({"question": "学食について教えて", "history": []})
 
-    assert result == {
-        "retrieval_queries": ["食堂 メニュー", "カフェテリア 営業時間"],
-        "keywords": ["カフェテリア"],
-    }
+    assert result["retrieval_queries"] == ["食堂 メニュー", "カフェテリア 営業時間"]
+    assert result["keywords"] == ["カフェテリア"]
+    assert "route_type" not in result
+    assert "map_payload" not in result
     assert llm.complete_calls[0]["temperature"] == 0.2
     assert llm.complete_calls[0]["max_tokens"] == 300
 
@@ -443,10 +443,185 @@ async def test_analyze_prompt_allows_core_nouns_and_six_keywords() -> None:
     messages = agent._build_analyze_messages("サイバーフィジカルシステム研究室では、どんな出展がありますか？", [])
     system_prompt = messages[0]["content"]
 
+    original_prompt = (
+        "あなたは秋田県立大学 本荘キャンパスの案内AI「APU-Navi」の検索計画担当です。"
+        "質問と直近履歴から、学内ナレッジ検索に使う観点違いの検索クエリを2〜3本作ってください。"
+        "質問中の固有名詞・専門用語・レアな語（研究室名・人名・制度名・建物名など）を言い換えず keywords に入れてください。"
+        "加えて、質問が求める対象を表す中核名詞（出展、メンバー、学費、日程、部活など）を最大2語まで keywords に含めてください。"
+        "keywords は合計最大6語です。助詞・動詞・先生・場所・方法のような漠然語は含めないでください。"
+        "場所・行き方の質問（「〜はどこ」「〜への行き方」「どの部屋」）では、目的地の施設名・部屋番号（GI512、K321 のような英数字コード）・ゾーン名（G1ゾーン等）を言い換えずに keywords と retrieval_queries に含めてください。"
+        "例: 「サイバーフィジカルシステム研究室では、どんな出展がありますか？」なら keywords は [\"サイバーフィジカルシステム研究室\", \"出展\"] です。"
+        "出力はJSONのみで、形式は {\"retrieval_queries\": [\"...\", \"...\"], \"keywords\": [\"...\"], \"intent\": \"...\"} です。"
+    )
+    route_prompt = (
+        "route.type は移動・到達の意図（「〜への行き方」「〜に行きたい」「〜へはどう行く」など）があれば \"route\"、場所そのものだけを尋ねている（「〜はどこ」「どの部屋」など）場合は \"place\"、どちらでもなければ null にしてください。出発地が分からなくても移動の意図があれば \"route\" です。"
+        "route.origin は質問文または直近4ターン履歴から分かる場合のみユーザー表現のまま入れ、推測せず、分からない場合と place の場合は null にしてください。"
+        "route.destination は経路または場所の対象が分かる場合のみユーザー表現のまま入れ、推測せず、分からない場合は null にしてください。"
+        "上記JSON形式の末尾に、\"route\": {\"type\": \"route\" | \"place\" | null, \"origin\": \"...\" | null, \"destination\": \"...\" | null} を追加してください。"
+    )
+
+    assert system_prompt == original_prompt + route_prompt
     assert "質問が求める対象を表す中核名詞" in system_prompt
     assert "最大2語" in system_prompt
     assert "keywords は合計最大6語" in system_prompt
     assert "[\"サイバーフィジカルシステム研究室\", \"出展\"]" in system_prompt
+    assert '"route"' in system_prompt
+    assert "直近4ターン履歴" in system_prompt
+
+
+async def test_ask_origin_ends_turn_without_retrieval_or_generation() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries":["D414"],"keywords":["D414"],'
+            '"route":{"type":"route","origin":null,"destination":"D414"}}'
+        ]
+    )
+    store = FakeKnowledgeStore([])
+    agent = _agent(llm=llm, store=store)
+
+    events = await _collect(agent, "D414 に行きたい")
+
+    assert [event for event, _ in events] == ["status", "status", "token", "map", "done"]
+    assert [payload.get("step") for event, payload in events if event == "status"] == [
+        "analyze",
+        "generate",
+    ]
+    assert events[1][1]["text"] == "現在地を確認しています…"
+    assert events[2][1]["text"].startswith("いまいる場所をマップでタップ")
+    assert events[3][1] == {
+        "mode": "ask_origin",
+        "origin": None,
+        "destination": {"node": "d", "label": "大学院棟", "room": "D414", "floor": 4},
+        "prompt": "いまいる場所をマップでタップしてください",
+        "question": "D414 に行きたい",
+    }
+    assert events[-1][1]["sources"] == []
+    assert store.calls == []
+    assert llm.stream_calls == []
+
+
+async def test_route_map_is_emitted_after_tokens_and_before_done() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries":["食堂 D414"],"keywords":["食堂","D414"],'
+            '"route":{"type":"route","origin":"食堂","destination":"D414"}}',
+            '{"sufficient":true,"missing":"","web_queries":[]}',
+        ],
+        tokens=["経路回答"],
+    )
+    agent = _agent(llm=llm, store=FakeKnowledgeStore([_chunk()]))
+
+    events = await _collect(agent, "食堂から D414 への行き方は？")
+
+    assert events[-3] == ("token", {"text": "経路回答"})
+    assert events[-2][0] == "map"
+    assert events[-2][1]["mode"] == "route"
+    assert events[-2][1]["path"] == {
+        "nodes": ["cafeteria", "g1", "d"],
+        "edges": ["E6a", "E1"],
+    }
+    assert events[-1][0] == "done"
+
+
+async def test_place_map_resolves_room_without_changing_normal_flow() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries":["GI512"],"keywords":["GI512"],'
+            '"route":{"type":"place","origin":null,"destination":"GI512"}}',
+            '{"sufficient":true,"missing":"","web_queries":[]}',
+        ],
+        tokens=["場所回答"],
+    )
+    agent = _agent(llm=llm, store=FakeKnowledgeStore([_chunk()]))
+
+    events = await _collect(agent, "GI512 はどこ？")
+
+    assert events[-2] == (
+        "map",
+        {
+            "mode": "place",
+            "origin": None,
+            "destination": {"node": "g1", "label": "学部棟Ⅰ", "room": "GI512", "floor": 5},
+        },
+    )
+
+
+async def test_unresolved_or_null_route_never_emits_map() -> None:
+    event_streams = []
+    for analyze_payload in (
+        '{"retrieval_queries":["羽後本荘駅"],"keywords":["羽後本荘駅"],'
+        '"route":{"type":"route","origin":"羽後本荘駅","destination":"本荘キャンパス"}}',
+        '{"retrieval_queries":["学費"],"keywords":["学費"],'
+        '"route":{"type":null,"origin":null,"destination":null}}',
+    ):
+        llm = FakeLLMClient(
+            completions=[analyze_payload, '{"sufficient":true,"missing":"","web_queries":[]}'],
+            tokens=["従来回答"],
+        )
+        agent = _agent(llm=llm, store=FakeKnowledgeStore([_chunk()]))
+
+        events = await _collect(agent, "通常質問")
+        event_streams.append(events)
+
+        assert "map" not in [event for event, _ in events]
+        assert events[-2] == ("token", {"text": "従来回答"})
+        assert events[-1][0] == "done"
+
+    assert event_streams[0] == event_streams[1]
+
+
+async def test_map_free_stream_keeps_the_legacy_sse_bytes() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries":["学費"],"keywords":["学費"],'
+            '"route":{"type":null,"origin":null,"destination":null}}',
+            '{"sufficient":true,"missing":"","web_queries":[]}',
+        ],
+        tokens=["従来回答"],
+    )
+    agent = _agent(llm=llm, store=FakeKnowledgeStore([_chunk()]))
+
+    events = await _collect(agent, "学費を教えて")
+    stream = "".join(agent.format_sse(event, payload) for event, payload in events)
+
+    assert stream == (
+        'event: status\ndata: {"step":"analyze","text":"ご質問をじっくり読み解いています…"}\n\n'
+        'event: status\ndata: {"step":"retrieve","text":"キャンパスの資料を探しています…"}\n\n'
+        'event: status\ndata: {"step":"search","text":"学内資料をすみずみまで調べています…"}\n\n'
+        'event: status\ndata: {"step":"evaluate","text":"集めた情報をチェックしています…"}\n\n'
+        'event: status\ndata: {"step":"generate","text":"とっておきの回答をまとめています…"}\n\n'
+        'event: token\ndata: {"text":"従来回答"}\n\n'
+        'event: done\ndata: {"thread_id":"thread-1","message_id":"message-1",'
+        '"sources":[{"title":"食堂","url":"https://example.test/facility",'
+        '"type":"knowledge"}]}\n\n'
+    )
+
+
+async def test_history_derived_origin_is_marked_in_generation_prompt() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            '{"retrieval_queries":["体育館"],"keywords":["体育館"],'
+            '"route":{"type":"route","origin":"カフェテリア","destination":"体育館"}}',
+            '{"sufficient":true,"missing":"","web_queries":[]}',
+        ],
+        tokens=["回答"],
+    )
+    agent = _agent(llm=llm, store=FakeKnowledgeStore([_chunk()]))
+
+    events = await _collect(
+        agent,
+        "じゃあ体育館は？",
+        history=[{"role": "user", "content": "現在地はカフェテリアです。D414 に行きたい"}],
+    )
+
+    map_payload = next(payload for event, payload in events if event == "map")
+    assert map_payload["path"] == {
+        "nodes": ["cafeteria", "gym"],
+        "edges": ["E7"],
+    }
+    prompt = "\n".join(message["content"] for message in llm.stream_calls[0]["messages"])
+    assert "経路の出発地（直前の会話から継承）: カフェテリア（食堂）" in prompt
+    assert "回答の冒頭でその出発地を明示" in GENERATE_SYSTEM_PROMPT
 
 
 async def test_analyze_falls_back_to_raw_question_on_parse_failure() -> None:
@@ -455,18 +630,22 @@ async def test_analyze_falls_back_to_raw_question_on_parse_failure() -> None:
 
     result = await agent._analyze({"question": "サークルは？", "history": []})
 
-    assert result == {"retrieval_queries": ["サークルは？"], "keywords": []}
+    assert result["retrieval_queries"] == ["サークルは？"]
+    assert result["keywords"] == []
+    assert "route_type" not in result
+    assert "map_payload" not in result
 
 
 async def test_analyze_budget_preserves_history_and_truncates_current_question() -> None:
-    agent = _agent(llm_context_window=1000)
+    context_window = 1400
+    agent = _agent(llm_context_window=context_window)
     history = [
         {"role": "user", "content": "ANALYZE_HISTORY_USER 食堂の質問済み"},
         {"role": "assistant", "content": "ANALYZE_HISTORY_ASSISTANT 食堂の回答済み"},
     ]
 
     messages = agent._build_analyze_messages("CURRENT_QUESTION " + ("あ" * 2000), history)
-    prompt_budget = 1000 - 300 - PROMPT_MARGIN_TOKENS
+    prompt_budget = context_window - 300 - PROMPT_MARGIN_TOKENS
     combined = "\n".join(message["content"] for message in messages)
 
     assert _message_tokens(messages) <= prompt_budget

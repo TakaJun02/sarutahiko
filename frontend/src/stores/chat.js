@@ -43,6 +43,8 @@ export function createMessage(role, content = '', overrides = {}) {
     statusText: '',
     statusStep: '',
     sources: [],
+    map: null,
+    mapInteractive: false,
     ...overrides,
   }
   if (typeof message.revealedLength !== 'number') {
@@ -85,6 +87,11 @@ export function applyAssistantEvent(message, event) {
     message.content += event.data.text
     return
   }
+  if (event.event === 'map') {
+    message.finalMap = event.data
+    message.finalMapInteractive = event.data.mode === 'ask_origin'
+    return
+  }
   if (event.event === 'done') {
     message.pending = false
     message.streaming = true
@@ -99,8 +106,12 @@ export function applyAssistantEvent(message, event) {
     message.content = event.data.message || '回答生成中にエラーが発生しました。'
     message.revealedLength = message.content.length
     message.sources = []
+    message.map = null
+    message.mapInteractive = false
     delete message.doneReceived
     delete message.finalSources
+    delete message.finalMap
+    delete message.finalMapInteractive
   }
 }
 
@@ -132,8 +143,12 @@ function clampMessageReveal(message) {
 function finalizeAssistantMessage(message) {
   message.streaming = false
   message.sources = message.finalSources || []
+  message.map = message.finalMap || null
+  message.mapInteractive = Boolean(message.finalMapInteractive)
   delete message.doneReceived
   delete message.finalSources
+  delete message.finalMap
+  delete message.finalMapInteractive
 }
 
 function messageHasRevealWork(message) {
@@ -288,6 +303,8 @@ export const useChatStore = defineStore('chat', {
           pending: false,
           streaming: false,
           sources: message.sources || [],
+          map: message.map || null,
+          mapInteractive: false,
         }),
       )
       this.error = ''
@@ -312,6 +329,7 @@ export const useChatStore = defineStore('chat', {
         return
       }
 
+      this.deactivateMapCards()
       const userMessage = createMessage('user', messageText)
       const assistantDraft = createMessage('assistant', '', {
         pending: true,
@@ -345,12 +363,41 @@ export const useChatStore = defineStore('chat', {
         assistantMessage.content = this.error
         assistantMessage.revealedLength = assistantMessage.content.length
         assistantMessage.sources = []
+        assistantMessage.map = null
+        assistantMessage.mapInteractive = false
         delete assistantMessage.doneReceived
         delete assistantMessage.finalSources
+        delete assistantMessage.finalMap
+        delete assistantMessage.finalMapInteractive
         this.lastFailedMessage = messageText
       } finally {
         this.isSending = false
       }
+    },
+    deactivateMapCards() {
+      for (const message of this.messages) {
+        if (message.map?.mode === 'ask_origin') {
+          message.mapInteractive = false
+        }
+        message.finalMapInteractive = false
+      }
+    },
+    async selectMapOrigin(message, origin) {
+      if (
+        this.isSending
+        || !message?.mapInteractive
+        || message?.map?.mode !== 'ask_origin'
+        || !origin?.label
+      ) {
+        return
+      }
+      const question = String(message.map.question || '').trim()
+      if (!question) {
+        message.mapInteractive = false
+        return
+      }
+      message.mapInteractive = false
+      await this.sendMessage(`現在地は${origin.label}です。${question}`)
     },
     async retryLast() {
       const text = this.lastFailedMessage

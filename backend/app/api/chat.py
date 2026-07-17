@@ -31,16 +31,20 @@ async def chat(
 
     async def event_stream():
         answer_parts: list[str] = []
+        map_payload: dict | None = None
         try:
             async for event, data in agent.stream(question, user, ensured_thread_id, assistant_message_id, history=history):
                 if event == "token":
                     answer_parts.append(data["text"])
+                if event == "map":
+                    map_payload = data
                 if event == "done":
                     thread_service.add_message(
                         ensured_thread_id,
                         "assistant",
                         "".join(answer_parts),
                         sources=data.get("sources", []),
+                        map_payload=map_payload,
                         message_id=assistant_message_id,
                     )
                 yield agent.format_sse(event, data)

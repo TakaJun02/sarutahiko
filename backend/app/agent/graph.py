@@ -12,8 +12,15 @@ import httpx
 from langgraph.graph import END, StateGraph
 from openai import BadRequestError
 
+from app.agent.campus_map import (
+    ResolvedLocation,
+    build_ask_origin_map_payload,
+    build_place_map_payload,
+    build_route_map_payload,
+    resolve_location,
+)
 from app.models.auth import User
-from app.models.chat import DonePayload, Source, StatusPayload, TokenPayload
+from app.models.chat import DonePayload, MapPayload, Source, StatusPayload, TokenPayload
 from app.rag.lexical import generate_keyword_variants, normalize_text, strip_keyword_suffix
 from app.rag.models import KnowledgeChunk
 from app.search.models import WebSearchResult
@@ -71,6 +78,11 @@ FOLLOWUP_STATUS_TEXTS: dict[Step, str] = {
 
 THIRD_WEB_SEARCH_STATUS_TEXT = "もうひと粘り、手掛かりを探しています…"
 OFFICIAL_SEARCH_DOMAIN = "akita-pu.ac.jp"
+ASK_ORIGIN_STATUS_TEXT = "現在地を確認しています…"
+ASK_ORIGIN_RESPONSE = (
+    "いまいる場所をマップでタップして教えてください！"
+    "そこからの行き方をご案内します🗺️"
+)
 
 logger = logging.getLogger(__name__)
 trace_logger = logging.getLogger("agent.trace")
@@ -87,7 +99,7 @@ GENERATE_SYSTEM_PROMPT = """秋田県立大学 本荘キャンパスのオープ
 5. 学内ナレッジは大学公式サイトの最新転記です。Web検索結果と学内ナレッジが矛盾する場合は学内ナレッジを優先し、Webの古いページ（過去の役職者・旧年度情報など）に引きずられないでください。
 6. 盛り上げるのは言い回しだけです。事実（数字・固有名詞・日程）は誇張・改変しないでください。
 7. 残り日数・分数・開催中/開始間近のイベントは、時間コンテキストに記載された値だけを使い、自分で日付や残り時間を計算・推測しないでください。「まであと〇日」などのカウントダウンは毎回答に入れる必要はありません。挨拶・当日の案内・日程の質問など、時間の話題が回答に自然に絡むときだけ、回答の末尾に一言、わくわく感を添えて締めくくりとして添えてください。回答の冒頭には絶対に置かず、無関係な質問に無理に差し込まないでください。
-8. 場所や行き方を答えるときは、根拠に記載された棟・ゾーン・階・部屋番号（例: 学部棟Ⅰ G1ゾーン 5階 GI512）まで具体的に示してください。順路・曲がる方向・徒歩分数は根拠に記載がある場合のみ述べ、記載がない道順を創作しないでください。建物内の細かい道順が根拠にない場合は、棟・ゾーン・階・部屋番号まで案内した上で、棟内の案内表示や当日スタッフへの確認を補足してください（場所を特定できていればルール1の丸投げには当たりません）。"""
+8. 場所や行き方を答えるときは、根拠に記載された棟・ゾーン・階・部屋番号（例: 学部棟Ⅰ G1ゾーン 5階 GI512）まで具体的に示してください。順路・曲がる方向・徒歩分数は根拠に記載がある場合のみ述べ、記載がない道順を創作しないでください。建物内の細かい道順が根拠にない場合は、棟・ゾーン・階・部屋番号まで案内した上で、棟内の案内表示や当日スタッフへの確認を補足してください（場所を特定できていればルール1の丸投げには当たりません）。経路の出発地が直前の会話から引き継いだものである場合、回答の冒頭でその出発地を明示してください。"""
 
 
 def estimate_tokens(text: str) -> int:
@@ -133,6 +145,13 @@ class AgentState(TypedDict, total=False):
     same_file_expanded_file_ids: list[str]
     same_file_expanded_chunk_ids: list[str]
     sources: list[Source]
+    route_type: Literal["route", "place"] | None
+    route_origin_text: str | None
+    route_destination_text: str | None
+    route_origin: ResolvedLocation | None
+    route_destination: ResolvedLocation | None
+    route_origin_from_history: bool
+    map_payload: dict[str, Any] | None
 
 
 class _FallbackTextExtractor(HTMLParser):
@@ -247,6 +266,20 @@ class RealCampusAgent:
         yield "status", self._status("analyze", state)
         state.update(await self._analyze(state))
 
+        if self._should_ask_origin(state):
+            yield "status", StatusPayload(
+                step="generate",
+                text=ASK_ORIGIN_STATUS_TEXT,
+            ).model_dump()
+            yield "token", TokenPayload(text=ASK_ORIGIN_RESPONSE).model_dump()
+            yield "map", state["map_payload"]
+            yield "done", DonePayload(
+                thread_id=thread_id,
+                message_id=message_id,
+                sources=[],
+            ).model_dump()
+            return
+
         yield "status", self._status("retrieve", state)
         try:
             state.update(await self._retrieve(state))
@@ -344,6 +377,8 @@ class RealCampusAgent:
         async for token in self._stream_generation_with_retry(state, messages):
             yield "token", TokenPayload(text=token).model_dump()
 
+        if state.get("map_payload") is not None:
+            yield "map", state["map_payload"]
         yield "done", DonePayload(
             thread_id=thread_id,
             message_id=message_id,
@@ -414,8 +449,87 @@ class RealCampusAgent:
             fallback=[],
             limit=MAX_ANALYZE_KEYWORDS,
         )
-        self._trace("analyze", state, {"retrieval_queries": queries, "keywords": keywords})
-        return {"retrieval_queries": queries, "keywords": keywords}
+        route_data = payload.get("route") if payload and isinstance(payload.get("route"), dict) else {}
+        route_type = route_data.get("type") if route_data.get("type") in {"route", "place"} else None
+        origin_text = self._optional_string(route_data.get("origin"))
+        destination_text = self._optional_string(route_data.get("destination"))
+        origin = resolve_location(origin_text)
+        destination = resolve_location(destination_text)
+        origin_from_history = bool(
+            origin
+            and origin_text
+            and normalize_text(origin_text) not in normalize_text(question)
+        )
+        map_payload = self._build_map_payload(
+            route_type=route_type,
+            origin=origin,
+            destination=destination,
+            question=question,
+        )
+        self._trace(
+            "analyze",
+            state,
+            {
+                "retrieval_queries": queries,
+                "keywords": keywords,
+                "route": {
+                    "type": route_type,
+                    "origin": origin_text,
+                    "destination": destination_text,
+                    "origin_resolved": origin.node if origin else None,
+                    "destination_resolved": destination.node if destination else None,
+                },
+            },
+        )
+        result: dict[str, Any] = {
+            "retrieval_queries": queries,
+            "keywords": keywords,
+        }
+        if route_type is not None:
+            result.update(
+                {
+                    "route_type": route_type,
+                    "route_origin_text": origin_text,
+                    "route_destination_text": destination_text,
+                    "route_origin": origin,
+                    "route_destination": destination,
+                    "route_origin_from_history": origin_from_history,
+                    "map_payload": map_payload,
+                }
+            )
+        return result
+
+    @staticmethod
+    def _optional_string(value: Any) -> str | None:
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    @staticmethod
+    def _build_map_payload(
+        *,
+        route_type: str | None,
+        origin: ResolvedLocation | None,
+        destination: ResolvedLocation | None,
+        question: str,
+    ) -> dict[str, Any] | None:
+        if route_type == "route" and destination is not None and origin is None:
+            payload = build_ask_origin_map_payload(destination, question)
+        elif route_type == "route" and origin is not None and destination is not None:
+            payload = build_route_map_payload(origin, destination)
+        elif route_type == "place" and destination is not None:
+            payload = build_place_map_payload(destination)
+        else:
+            return None
+        MapPayload(**payload)
+        return payload
+
+    @staticmethod
+    def _should_ask_origin(state: AgentState) -> bool:
+        return bool(
+            state.get("route_type") == "route"
+            and state.get("route_destination") is not None
+            and state.get("route_origin") is None
+            and (state.get("map_payload") or {}).get("mode") == "ask_origin"
+        )
 
     async def _retrieve(self, state: AgentState, queries: Sequence[str] | None = None) -> dict:
         existing_results = state.get("knowledge_results") or []
@@ -748,6 +862,10 @@ class RealCampusAgent:
                     "場所・行き方の質問（「〜はどこ」「〜への行き方」「どの部屋」）では、目的地の施設名・部屋番号（GI512、K321 のような英数字コード）・ゾーン名（G1ゾーン等）を言い換えずに keywords と retrieval_queries に含めてください。"
                     "例: 「サイバーフィジカルシステム研究室では、どんな出展がありますか？」なら keywords は [\"サイバーフィジカルシステム研究室\", \"出展\"] です。"
                     "出力はJSONのみで、形式は {\"retrieval_queries\": [\"...\", \"...\"], \"keywords\": [\"...\"], \"intent\": \"...\"} です。"
+                    "route.type は移動・到達の意図（「〜への行き方」「〜に行きたい」「〜へはどう行く」など）があれば \"route\"、場所そのものだけを尋ねている（「〜はどこ」「どの部屋」など）場合は \"place\"、どちらでもなければ null にしてください。出発地が分からなくても移動の意図があれば \"route\" です。"
+                    "route.origin は質問文または直近4ターン履歴から分かる場合のみユーザー表現のまま入れ、推測せず、分からない場合と place の場合は null にしてください。"
+                    "route.destination は経路または場所の対象が分かる場合のみユーザー表現のまま入れ、推測せず、分からない場合は null にしてください。"
+                    "上記JSON形式の末尾に、\"route\": {\"type\": \"route\" | \"place\" | null, \"origin\": \"...\" | null, \"destination\": \"...\" | null} を追加してください。"
                 ),
             },
         ]
@@ -793,6 +911,7 @@ class RealCampusAgent:
         system_content = self._generation_system_content()
         user_content_factory = lambda context: (
                 f"質問: {state['question']}\n\n"
+                f"{self._generation_route_note(state)}"
                 "利用可能な根拠:\n"
                 f"{context}\n\n"
                 f"{self._generation_investigation_log_line(state)}"
@@ -1038,6 +1157,13 @@ class RealCampusAgent:
             empty_context.text,
         )
         return self._truncate_last_user_message(empty_messages, max_tokens), empty_context
+
+    @staticmethod
+    def _generation_route_note(state: AgentState) -> str:
+        origin = state.get("route_origin")
+        if origin is None or not state.get("route_origin_from_history"):
+            return ""
+        return f"経路の出発地（直前の会話から継承）: {origin.label}\n\n"
 
     @staticmethod
     def _compose_context_messages(

@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import LoadingSpinnerV5 from '../components/LoadingSpinnerV5.vue'
+import MapCard from '../components/MapCard.vue'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import ThreadSidebar from '../components/ThreadSidebar.vue'
 import { useViewportState } from '../composables/useAppViewport'
@@ -117,6 +118,19 @@ async function send() {
   } finally {
     await nextTick()
     inputRef.value?.focus()
+  }
+}
+
+async function selectMapOrigin(message, origin) {
+  if (chat.isSending) {
+    showBusyHint()
+    return
+  }
+  pendingScrollBehavior = 'smooth'
+  try {
+    await chat.selectMapOrigin(message, origin)
+  } catch (error) {
+    handleAuthError(error)
   }
 }
 
@@ -701,6 +715,12 @@ onBeforeUnmount(() => {
                   >
                     <div class="space-y-4">
                       <MarkdownRenderer v-if="message.content" :content="revealedMessageContent(message)" />
+                      <MapCard
+                        v-if="message.map"
+                        :payload="message.map"
+                        :interactive="message.mapInteractive"
+                        @origin-selected="selectMapOrigin(message, $event)"
+                      />
                       <div v-if="message.sources.length" class="border-t border-edge pt-3">
                         <button
                           type="button"
