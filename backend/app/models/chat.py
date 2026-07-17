@@ -37,6 +37,28 @@ class TokenPayload(BaseModel):
     text: str
 
 
+class MapLocationPayload(BaseModel):
+    node: str
+    label: str
+    room: str | None = None
+    floor: int | None = None
+
+
+class MapPathPayload(BaseModel):
+    nodes: list[str]
+    edges: list[str]
+
+
+class MapPayload(BaseModel):
+    mode: Literal["route", "place", "ask_origin"]
+    origin: MapLocationPayload | None = None
+    destination: MapLocationPayload | None = None
+    path: MapPathPayload | None = None
+    steps: list[str] | None = None
+    prompt: str | None = None
+    question: str | None = None
+
+
 class DonePayload(BaseModel):
     thread_id: str
     message_id: str

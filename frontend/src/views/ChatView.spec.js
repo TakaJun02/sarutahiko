@@ -111,4 +111,14 @@ describe('ChatView FR-25 smooth reveal', () => {
     )
     expect(normalizedSource).toContain(':content="revealedMessageContent(message)"')
   })
+
+  it('renders map metadata in the settled body before sources', () => {
+    expect(chatViewSource).toContain("import MapCard from '../components/MapCard.vue'")
+    const mapPosition = normalizedSource.indexOf('<MapCard v-if="message.map"')
+    const sourcesPosition = normalizedSource.indexOf('<div v-if="message.sources.length"')
+    expect(mapPosition).toBeGreaterThan(0)
+    expect(sourcesPosition).toBeGreaterThan(mapPosition)
+    expect(normalizedSource).toContain(':interactive="message.mapInteractive"')
+    expect(normalizedSource).toContain('@origin-selected="selectMapOrigin(message, $event)"')
+  })
 })

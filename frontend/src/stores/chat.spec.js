@@ -130,6 +130,80 @@ describe('chat store SSE helpers', () => {
     expect(message.finalSources).toBeUndefined()
   })
 
+  it('defers map metadata until smooth reveal completes', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '', { pending: true })
+    store.messages = [message]
+    const map = {
+      mode: 'ask_origin',
+      prompt: 'いまいる場所をマップでタップしてください',
+      question: 'D414 に行きたい',
+    }
+
+    applyAssistantEvent(message, { event: 'token', data: { text: '場所を教えてください' } })
+    applyAssistantEvent(message, { event: 'map', data: map })
+    applyAssistantEvent(message, {
+      event: 'done',
+      data: { thread_id: 'thread-1', message_id: 'message-1', sources: [] },
+    })
+
+    expect(message.map).toBeNull()
+    expect(message.mapInteractive).toBe(false)
+    expect(message.finalMap).toEqual(map)
+
+    message.revealedLength = message.content.length
+    store.advanceRevealFrame(0.016)
+
+    expect(message.map).toEqual(map)
+    expect(message.mapInteractive).toBe(true)
+    expect(message.finalMap).toBeUndefined()
+  })
+
+  it('sends the specified synthetic message and deactivates the ask-origin card', async () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '現在地を選んでください', {
+      map: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      mapInteractive: true,
+    })
+    store.messages = [message]
+    store.sendMessage = vi.fn(() => Promise.resolve())
+
+    await store.selectMapOrigin(message, {
+      node: 'cafeteria',
+      label: 'カフェテリア（食堂）',
+    })
+
+    expect(message.mapInteractive).toBe(false)
+    expect(store.sendMessage).toHaveBeenCalledWith(
+      '現在地はカフェテリア（食堂）です。D414 に行きたい',
+    )
+  })
+
+  it('prevents a pending ask-origin card from reactivating after another send', () => {
+    const store = useChatStore()
+    const previous = createMessage('assistant', '前の現在地確認', {
+      map: { mode: 'ask_origin', question: 'D404 に行きたい' },
+      mapInteractive: true,
+    })
+    const latest = createMessage('assistant', '新しい現在地確認', {
+      streaming: true,
+      revealedLength: 0,
+      doneReceived: true,
+      finalSources: [],
+      finalMap: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      finalMapInteractive: true,
+    })
+    store.messages = [previous, latest]
+
+    store.deactivateMapCards()
+    store.snapStreamingMessages()
+
+    expect(previous.mapInteractive).toBe(false)
+    expect(latest.revealedLength).toBe(latest.content.length)
+    expect(latest.map).toEqual({ mode: 'ask_origin', question: 'D414 に行きたい' })
+    expect(latest.mapInteractive).toBe(false)
+  })
+
   it('snaps revealed length on assistant error events', () => {
     const message = createMessage('assistant', '', { pending: true })
 
@@ -249,6 +323,10 @@ describe('chat store thread history actions', () => {
                 role: 'assistant',
                 content: '学生ホールにあります。',
                 sources: [{ title: '公式', url: 'https://example.test', type: 'knowledge' }],
+                map: {
+                  mode: 'place',
+                  destination: { node: 'g1', label: '学部棟Ⅰ', room: 'GI512', floor: 5 },
+                },
                 created_at: 't2',
               },
             ],
@@ -275,7 +353,42 @@ describe('chat store thread history actions', () => {
     expect(store.messages[1].sources).toEqual([
       { title: '公式', url: 'https://example.test', type: 'knowledge' },
     ])
+    expect(store.messages[1].map.mode).toBe('place')
+    expect(store.messages[1].mapInteractive).toBe(false)
     expect(store.messages.every((message) => message.revealedLength === message.content.length)).toBe(true)
+  })
+
+  it('restores an ask-origin card as inactive after history reload', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          createJsonResponse({
+            thread: { id: 'thread-ask', title: 'D414', created_at: 'c1', updated_at: 'u1' },
+            messages: [
+              {
+                id: 'm-ask',
+                role: 'assistant',
+                content: 'いまいる場所を教えてください。',
+                sources: [],
+                map: {
+                  mode: 'ask_origin',
+                  question: 'D414 に行きたい',
+                  destination: { node: 'd', label: '大学院棟', room: 'D414', floor: 4 },
+                },
+                created_at: 't1',
+              },
+            ],
+          }),
+        ),
+      ),
+    )
+
+    const store = useChatStore()
+    await store.openThread('thread-ask')
+
+    expect(store.messages[0].map.mode).toBe('ask_origin')
+    expect(store.messages[0].mapInteractive).toBe(false)
   })
 
   it('starts a new chat without dropping the sidebar list', () => {

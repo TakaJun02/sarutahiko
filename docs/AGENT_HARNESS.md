@@ -144,6 +144,28 @@
 受け入れ: EVAL_QUESTIONS.md §H（経路案内）の全問で、該当ナレッジが検索で当たり、
 棟・ゾーン・階・部屋番号まで含む回答が返ること。
 
+## V5-9. 経路マップカード判定（2026-07-17 追加。FR-26 / docs/MAP_CARD.md）
+
+グラフのノード・エッジ・ルーティングは変更せず、analyze の構造化出力と `stream()` のターン終端分岐に
+次を追加する。経路・階・徒歩分数は LLM に生成させず、`ROUTE_GUIDANCE.md` §7.2 の構造化データから
+純 Python の決定的計算で作る。
+
+1. **analyze 出力**: 従来の `intent` / `retrieval_queries` / `keywords` に、
+   `route: {type: route|place|null, origin: string|null, destination: string|null}` を追加する。
+   `origin` は質問文または直近4ターン履歴で明示された場合だけユーザー表現のまま返し、推測しない。
+2. **resolver**: analyze の地点表現は NFKC + casefold 正規化した辞書引きだけで、9ノードと部屋・階へ
+   解決する。部屋番号から棟・階を推測しない。
+3. **出発地不明のターン終端**: `type=route`、目的地解決済み、出発地未解決のときは retrieve / search /
+   evaluate / Web Search / LLM generate を実行しない。`status(generate, 現在地を確認しています…)` → 定型 `token` →
+   `map(mode=ask_origin)` → `done` の順で終了し、通常どおり履歴保存する。
+4. **カード付与**: 両端解決済みの route と目的地解決済みの place は従来フローを完走し、全 token の後・
+   `done` 直前に `map` を最大1回送る。解決不能・通常質問・学外アクセスは `map` を送らず、従来イベント列を維持する。
+5. **履歴由来の出発地**: 今回の質問文に出発地表現がなく直近履歴から継承した場合、generate にその事実を
+   明示し、回答冒頭で出発地を示すようルール8へ追記する。
+
+受け入れ: `EVAL_QUESTIONS.md` §I と `MAP_CARD.md` §9 の全項目。特に D404 の階を補完しないこと、
+総合受付→学部棟Ⅱが E5+E6c の前面通路系となること、通常質問・学外アクセスに `map` が混入しないこと。
+
 ## V5-6. テスト・受け入れ基準（v4 §V4-5 に追加）
 
 1. ユニット: リモート埋め込みバックエンド（プレフィックス分岐・フォールバック・バッチ）／
