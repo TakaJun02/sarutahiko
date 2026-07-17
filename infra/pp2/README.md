@@ -124,11 +124,11 @@ docker run --rm --entrypoint python3 vllm/vllm-openai:v0.25.0 \
 （`pp2-vllm:v0.25.0-ray`。`PP2_IMAGE` で上書き可）。
 
 ```bash
-docker build -t pp2-vllm:v0.25.0-ray - <<'EOF'
-FROM vllm/vllm-openai:v0.25.0
-RUN pip install --no-cache-dir "ray[default,cgraph]"
-EOF
+docker build -t pp2-vllm:v0.25.0-ray -f infra/pp2/Dockerfile.ray infra/pp2
 ```
+
+（Dockerfile は `infra/pp2/Dockerfile.ray`。ヒアドキュメントは端末貼り付けで終端 `EOF` に
+空白が付くと事故るため使わない — 2026-07-18 実施時の教訓）
 
 - digest 照合は**ベースイメージ**（`vllm/vllm-openai:v0.25.0`）で行う（派生イメージの digest は
   ビルドごとに変わるため比較対象にしない）。ray のバージョンは両筐体のビルドログで一致を確認する。
