@@ -35,6 +35,8 @@ class VLLMClient:
         self.config = config
 
     def _url(self, path: str) -> str:
+        if path.startswith(("http://", "https://")):
+            return path
         return f"{self.config.base_url.rstrip('/')}/{path.lstrip('/')}"
 
     def _request(self, path: str, payload: dict[str, Any] | None = None):
@@ -90,7 +92,12 @@ class VLLMClient:
         return available_models[0]
 
     def tokenize(self, model: str, prompt: str) -> int:
-        response = self.request_json("tokenize", {"model": model, "prompt": prompt})
+        # vLLM serves /tokenize at the server root, not under /v1.
+        base = self.config.base_url.rstrip("/")
+        root = base[: -len("/v1")] if base.endswith("/v1") else base
+        response = self.request_json(
+            f"{root}/tokenize", {"model": model, "prompt": prompt}
+        )
         count = response.get("count")
         if isinstance(count, int):
             return count
