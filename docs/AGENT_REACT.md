@@ -179,7 +179,9 @@ flowchart TD
      `stream()` が累積している `merged_state`（updates マージ済み＝例外時点の evidence を含む）を
      入力に、**generate ノード単独の縮退グラフ**を実行して通常の token→done 契約で回答する
      （writer 契約・status/SSE 語彙は本経路と同一）。`knowledge_results`・`web_results` がともに
-     空の場合は定型の「見つかりませんでした」回答を token 分割配信（ask_user と同じ 8 字分割）。
+     空の場合は定型回答を token 分割配信（ask_user と同じ 8 字分割）。定型文言（2026-07-18 検収時確定）:
+     「申し訳ありません。お探しの情報を見つけられませんでした。言い方を変えて、もう一度お試し
+     いただけますか？」（来場者向けトーン・次の行動を促す）。
      `agent.trace` に `fallback_generate`（reason=recursion_limit・evidence 件数）を記録。
      `recursion_limit=50` は不変。checkpointer 追加・周回カウンタ復活は不可。
      テスト容易性のため `recursion_limit` はインスタンス属性（既定 50）として注入可能にする。
