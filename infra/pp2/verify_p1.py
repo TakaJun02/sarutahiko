@@ -34,11 +34,14 @@ def run_stream_batch(
         unique_prompt = (
             f"Unique request marker {index}-{time.time_ns()}.\n" + prompt
         )
+        # ignore_eos forces the full output_tokens budget; without it the model
+        # can stop after a few tokens and the decode measurement is meaningless.
         return client.stream_chat(
             model=model,
             messages=[{"role": "user", "content": unique_prompt}],
             max_tokens=output_tokens,
             temperature=0.2,
+            extra={"ignore_eos": True},
         )
 
     started = time.monotonic()

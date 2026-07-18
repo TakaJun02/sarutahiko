@@ -153,6 +153,7 @@ class VLLMClient:
         messages: list[dict[str, str]],
         max_tokens: int,
         temperature: float,
+        extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload = {
             "model": model,
@@ -162,6 +163,8 @@ class VLLMClient:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if extra:
+            payload.update(extra)
         request = self._request("chat/completions", payload)
         started = time.monotonic()
         first_content_at: float | None = None
