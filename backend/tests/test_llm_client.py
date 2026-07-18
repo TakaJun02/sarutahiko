@@ -35,7 +35,7 @@ def _fake_openai_client(completions: FakeCompletions):
     return SimpleNamespace(chat=SimpleNamespace(completions=completions))
 
 
-async def test_gemma_model_does_not_send_qwen_chat_template_kwargs() -> None:
+async def test_chat_methods_do_not_send_model_specific_template_kwargs() -> None:
     completions = FakeCompletions()
     client = VLLMClient(
         base_url="http://vllm.test/v1",
@@ -43,21 +43,41 @@ async def test_gemma_model_does_not_send_qwen_chat_template_kwargs() -> None:
         client=_fake_openai_client(completions),
     )
 
-    await client.complete_chat(
-        [{"role": "user", "content": "hello"}],
-        enable_thinking=False,
-    )
+    await client.complete_chat([{"role": "user", "content": "hello"}])
     tokens = [
         token
         async for token in client.stream_chat(
             [{"role": "user", "content": "hello"}],
-            enable_thinking=False,
         )
     ]
 
     assert tokens == ["token"]
     assert "extra_body" not in completions.calls[0]
     assert "extra_body" not in completions.calls[1]
+
+
+async def test_decide_uses_openai_compatible_json_schema_response_format() -> None:
+    completions = FakeCompletions()
+    client = VLLMClient(
+        base_url="http://vllm.test/v1",
+        model="google/gemma-4-31B-it-qat-w4a16-ct",
+        client=_fake_openai_client(completions),
+    )
+    schema = {
+        "type": "object",
+        "properties": {"action": {"type": "string"}},
+        "required": ["action"],
+    }
+
+    result = await client.decide([{"role": "user", "content": "hello"}], schema)
+
+    assert result == '{"ok": true}'
+    assert completions.calls[0]["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "react_decision", "schema": schema},
+    }
+    assert completions.calls[0]["temperature"] == 0.2
+    assert completions.calls[0]["max_tokens"] == 300
 
 
 async def test_count_tokens_uses_vllm_tokenize_endpoint() -> None:

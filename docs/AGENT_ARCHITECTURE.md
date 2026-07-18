@@ -1,11 +1,10 @@
-# エージェント全体アーキテクチャ（ワークフローとツール）
+# エージェント全体アーキテクチャ（ReAct ワークフローとツール）
 
-- 版: v1.2（2026-07-18, Fable — **FR-33 LangGraph 実行一本化を反映**。§2 を「定義＝実行」の
-  単一図へ改稿し、旧 §2-2「定義の写し」・§2-3「乖離表」を廃止。ask_origin の sources と
-  followup retrieve の遷移を出荷済み挙動どおりに訂正）
-  - v1.1（2026-07-17, Fable — ノード/ツール/グラフ外処理を図中で区別。LangGraph は「定義のみ」で
-    実行は `stream()` の手動オーケストレーションである事実を明記）
-  - v1.0（2026-07-17, Fable 起草 — 利用者指示 FR-27-4）
+- 版: v2.0（2026-07-18, Fable — **FR-34 ReAct ハーネス v6 を反映して全面改稿**。
+  固定フロー（analyze→retrieve→search→evaluate→web_search）を **decide ループ＋ツール**へ刷新、
+  経路ドメインを campus_navigator サブエージェントへ切り出し。仕様と裁定の正は
+  `docs/AGENT_REACT.md` v1.0。旧 v1.2（FR-33 時点の固定フロー図）はコミット ecdae04 時点を参照）
+  - v1.2（2026-07-18, FR-33 定義＝実行一本化）/ v1.1・v1.0（2026-07-17）
 - 目的: AI エージェント（`backend/app/agent/graph.py` の `RealCampusAgent`）の**ワークフロー全体**と
   **各ノードで使用可能なツール**を一望できるようにする。
 - 実装詳細（プロンプト全文・定数・検収履歴）は `docs/AGENT_HARNESS.md` が正。
@@ -18,11 +17,14 @@ flowchart LR
     subgraph client["ブラウザ（Vue 3 SPA）"]
         UI["ChatView / MapCard<br/>SSE 受信・なめらか文字送り（FR-25）"]
     end
-    subgraph host["本機（RTX 3090 Ti）"]
+    subgraph host["本機 ibera（RTX 3090 Ti）"]
         BE["FastAPI backend<br/>/api/chat ほか"]
-        VLLM["vLLM 生成<br/>Gemma 4 12B (w4a16)"]
+        VLLM["vLLM 生成<br/>現行: Gemma 4 12B 単機<br/>検証済み: 31B PP=2（ibera+nubia）"]
         QD[("Qdrant<br/>campus_knowledge<br/>784+ チャンク")]
         DB[("SQLite<br/>users / threads / messages")]
+    end
+    subgraph nubia["第3GPUサーバー nubia（RTX 3090）"]
+        PP2["vLLM PP=2 後半層（rank1）<br/>※31B 運用時のみ・infra/pp2"]
     end
     subgraph gouin["第2GPUサーバー gouin"]
         EMB["vLLM 埋め込み<br/>Qwen3-Embedding-8B"]
@@ -30,122 +32,121 @@ flowchart LR
     TAVILY["Tavily Web Search API<br/>（サーキットブレーカー付き・FR-18-1）"]
 
     UI -- "POST /api/chat（SSE）" --> BE
-    BE -- "chat.completions<br/>（JSON 生成・ストリーミング）" --> VLLM
+    BE -- "chat.completions<br/>（guided JSON / ストリーミング）" --> VLLM
+    VLLM -. "Ray/NCCL（31B PP=2 時）" .-> PP2
     BE -- "/v1/embeddings" --> EMB
     BE -- "ベクトル検索 / 字句スキャン" --> QD
     BE -- "httpx" --> TAVILY
     BE -- "永続化" --> DB
 ```
 
-## 2. エージェントワークフロー（LangGraph 定義＝実行・FR-33）
+- 生成 LLM は **モデル非依存の 1 論理エンドポイント**（`VLLM_BASE_URL`）。現行本番は 12B 単機、
+  31B PP=2（16k 窓）は 2026-07-18 に PoC・実 LLM E2E とも合格済みで、切り替えは
+  エンドポイント差し替えのみ（構築・原理: `docs/PP2_MULTINODE_GUIDE.md`、運用: `infra/pp2/README.md`）。
+
+## 2. エージェントワークフロー（ReAct decide ループ・FR-34）
 
 1 リクエスト = 1 実行。compile 済み `StateGraph` を `stream()` が
-`astream(state, stream_mode=["updates","custom"], config={"recursion_limit": 50})` で実行する。
-各ノードは SSE 形の custom イベント（status / token / map）を `get_stream_writer()` で送出し、
-`stream()` は**薄いアダプタ**としてそれをそのまま転送、`updates` をマージ累積して
-終端で `done` を 1 回送出する（`docs/ARCHITECTURE.md` §3 の SSE 契約は不変）。
+`astream(state, stream_mode=["updates","custom"], config={"recursion_limit": 50})` で実行する
+（定義＝実行・FR-33 の原則は不変）。各ノードは SSE 形の custom イベント（status / token / map）を
+`get_stream_writer()` で送出し、`stream()` は薄いアダプタとして転送・`updates` をマージ累積して
+終端で `done` を 1 回送出する。
 
-### 2-0. 経緯（要約）
-
-- ハーネス v2〜FR-32: `langgraph==0.0.69` の実行時不具合（Q-006、2 回目 evaluate 後の分岐で停止）
-  により、実行は `stream()` の手動逐次制御・StateGraph 定義は宣言的ミラーとして併存していた
-  （当時の詳細は本書 v1.1 §2-0〜2-3 = コミット 02c4265 時点を参照）。
-- FR-33（2026-07-18, 利用者指示）: `langgraph==1.2.9` へ更新し**定義＝実行に一本化**
-  （PoC・裁定・受け入れ基準: `docs/LANGGRAPH_MIGRATION.md`、Q-006 追補）。
-  エイリアスノード（retrieve_followup / evaluate_after_web / web_search_second /
-  evaluate_after_second）と `_next_step_after` は廃止。
-- **graph.py の構造を変えるときは本節の図・§3 の表・`docs/LANGGRAPH_MIGRATION.md` を更新すること。**
+**v6 の本質**: どのツールをどの順で使うかを固定フローで決めず、**decide ノード（LLM・guided JSON）が
+毎ターン選択**する。探索の停止もカウンタではなく**コンテキスト予算**で決める。
 
 ### 2-1. ワークフロー（定義＝実行の唯一の図）
 
-凡例:
-**青の四角 = ワークフローノード**（`add_node` 名 = 実体メソッド。writer で SSE イベントを送出）／
-**黄の六角・破線枠 = ツール**（ノードから呼ばれる外部リソース・純関数。ノードではない）／
-**白のひし形 = conditional edge の判定関数**／
-**灰の角丸 = `stream()` アダプタの処理**（グラフ外は質問合成と done 送出のみ）。
+凡例: **青 = ワークフローノード**／**紫 = サブエージェント**／**黄の六角・破線 = ツール（外部リソース・純関数）**／
+**白ひし形 = conditional edge**／**灰角丸 = `stream()` アダプタ**。
 
 ```mermaid
 flowchart TD
-    Q(["ユーザー質問<br/>（origin_node があれば backend が<br/>『現在地は〇〇です。＋質問』を内部合成・FR-27）"]):::orch --> AN
+    Q(["ユーザー質問（origin_node 合成・履歴サニタイズは backend・FR-27）"]):::orch --> DE
 
-    AN["<b>analyze</b>（ノード）= _analyze<br/>検索計画（retrieval_queries / keywords）<br/>＋ route 意図（type / origin / destination）の JSON 抽出"]:::wfnode
+    DE["<b>decide</b>（ノード・LLM）<br/>guided JSON {thought, action, action_input}<br/>初回 status=analyze / 2回目以降 status=evaluate（thought 実況）<br/>不変条件: ツール0回の finish 無効・同一(action,input) 反復ガード・<br/>直前 clarification 時は ask_user をメニューから除外"]:::wfnode
 
-    AN --> RA{"_route_after_analyze<br/>（_should_ask_origin 判定・FR-26）"}:::router
-    RA -->|"ask_origin"| AO["<b>ask_origin</b>（ノード）= _ask_origin<br/>status[現在地確認文言] → token[定型文] → map(ask_origin) を送出<br/>検索・生成なし。sources は位置インデックス出典（FR-29）"]:::wfnode
+    DE --> RD{"_route_after_decide"}:::router
+    RD -->|"retrieve(queries)"| RT["<b>retrieve</b>（ノード）<br/>意味ベクトル検索＋兄弟チャンク展開"]:::wfnode
+    RD -->|"search(keywords)"| SE["<b>search</b>（ノード）<br/>決定的字句グレップ＋バリアント展開"]:::wfnode
+    RD -->|"web_search(queries)"| WS["<b>web_search</b>（ノード）<br/>ドメイン制限なし・CB 存続<br/>soft 予算超過時は raw_content 抑制"]:::wfnode
+    RD -->|"campus_navigator(request)"| NV["<b>campus_navigator</b>（サブエージェント）<br/>fast path（決定的・LLM 0回）→ 内部 decide ≤3手<br/>ask_origin は決定的バリデータが裁く"]:::subag
+    RD -->|"バリデーション不合格"| DE
+
+    RT -->|"観測（120 tok 級に圧縮）"| DE
+    SE -->|"観測"| DE
+    WS -->|"観測"| DE
+    NV --> RN{"_route_after_navigator"}:::router
+    RN -->|"route / place / not_navigable<br/>（観測として）"| DE
+    RN -->|"need_origin（turn_terminated）"| AO["<b>respond_need_origin</b>（ノード）<br/>status→token[定型文]→map(ask_origin)<br/>FR-26/27/29 契約完全一致"]:::wfnode
     AO --> DONE
 
-    RA -->|"通常"| RT["<b>retrieve</b>（ノード）= _retrieve<br/>ベクトル検索（失敗しても degraded 続行）"]:::wfnode
-    RT --> RR{"_route_after_retrieve"}:::router
-    RR -->|"初回"| SE["<b>search</b>（ノード）= _search<br/>字句グレップ：レア語・部屋番号（失敗しても degraded 続行）"]:::wfnode
-    RR -->|"followup<br/>（追いベクトル後は search を挟まない）"| EV
-    SE --> EV["<b>evaluate</b>（ノード）= _evaluate<br/>根拠は十分かの LLM 判定"]:::wfnode
-
-    EV --> RE{"_route_after_evaluate"}:::router
-    RE -->|"grep_keywords あり<br/>（≤ MAX_LOCAL_SEARCH_FOLLOWUPS=1）"| SE
-    RE -->|"followup クエリあり・未使用<br/>（≤ MAX_RETRIEVAL_FOLLOWUPS=1）"| RT
-    RE -->|"なお不足<br/>（Web 最大 3 ラウンド※）"| WS["<b>web_search</b>（ノード）= _web_search<br/>第1R: akita-pu.ac.jp 限定 / 第2R〜: 制限なし<br/>（失敗しても degraded 続行）"]:::wfnode
-    WS --> EV
-    RE -->|"sufficient / 手詰まり"| GE["<b>generate</b>（ノード）= _generate<br/>コンテキスト組立 → 実トークン予算検査 →<br/>token を 1 つずつ送出 → map_payload があれば map 送出<br/>（予算超過時は縮小コンテキストで 1 回だけ再構築）"]:::wfnode
-
+    RD -->|"ask_user(question)"| AU["<b>ask_user</b>（ノード・terminal）<br/>status→token[質問文]→done・sources 空<br/>clarification メタを保存（履歴サニタイズ対象）"]:::wfnode
+    AU --> DONE
+    RD -->|"finish(reason)"| GE["<b>generate</b>（ノード・v5 から無改修）<br/>コンテキスト組立→実トークン予算検査→<br/>token 逐次→map（あれば）→sources"]:::wfnode
     GE --> DONE(["done 送出（アダプタ）<br/>updates マージ state の sources・スレッド永続化"]):::orch
 
     subgraph TOOLS["ツール／外部リソース（ワークフローのノードではない）"]
-        VLLM{{"生成 vLLM（本機）<br/>Gemma 4 12B w4a16"}}:::tool
+        VLLM{{"生成 vLLM<br/>decide=guided JSON / generate=ストリーミング"}}:::tool
         EMB{{"埋め込み vLLM（gouin）<br/>Qwen3-Embedding-8B"}}:::tool
         QD[("Qdrant<br/>campus_knowledge")]:::tool
-        TAV{{"Tavily Web Search API<br/>＋ httpx 本文取得（CB・FR-18-1）"}}:::tool
-        CM{{"campus_map（純関数・LLM 不使用）<br/>resolve_location / ask_origin payload / Dijkstra"}}:::tool
+        TAV{{"Tavily API＋httpx 本文取得（CB）"}}:::tool
+        CM{{"campus_map（純関数・LLM 不使用）<br/>resolve_location / find_locations_in_text /<br/>Dijkstra / map payload 構築"}}:::tool
         LEX{{"app/rag/lexical.py<br/>正規化・バリアント展開（純コード）"}}:::tool
     end
 
-    AN -.->|"JSON 応答"| VLLM
-    AN -.->|"地名解決"| CM
-    AO -.->|"payload 生成"| CM
-    RT -.->|"クエリ埋め込み"| EMB
-    RT -.->|"類似検索"| QD
-    SE -.->|"字句スキャン"| QD
-    SE -.->|"表記ゆれ展開"| LEX
-    EV -.->|"JSON 応答"| VLLM
-    WS -.->|"検索＋本文取得"| TAV
-    GE -.->|"ストリーミング生成"| VLLM
-    GE -.->|"経路計算（map_payload は analyze で構築済み）"| CM
+    DE -.->|"guided JSON"| VLLM
+    RT -.-> EMB
+    RT -.-> QD
+    SE -.-> QD
+    SE -.-> LEX
+    WS -.-> TAV
+    NV -.->|"内部 decide（必要時のみ）"| VLLM
+    NV -.->|"解決・経路・payload"| CM
+    GE -.-> VLLM
 
     classDef wfnode fill:#1967d2,stroke:#0b47a1,color:#ffffff
+    classDef subag fill:#7b1fa2,stroke:#4a0072,color:#ffffff
     classDef tool fill:#fef7e0,stroke:#b58800,color:#5f4300,stroke-dasharray: 5 4
     classDef orch fill:#f1f3f4,stroke:#80868b,color:#3c4043
     classDef router fill:#ffffff,stroke:#5f6368,color:#3c4043
 ```
 
-- ※ Web ラウンド: 2 ラウンドまでは無条件に許可、第 3 ラウンドは未解決キーワードが残る場合のみ
-  （`MIN_WEB_ROUNDS_BEFORE_GIVE_UP=2` / `MAX_WEB_SEARCH_ROUNDS=3`）。第 1 ラウンドだけ
-  `include_domains: akita-pu.ac.jp`、第 2 ラウンド以降は制限なし（ラウンド番号で自動切替）。
-- Tavily がクォータ超過等（401/403/429/432/433）のときは Web ラウンド全体がスキップされ、
-  ナレッジのみで generate へ進む（FR-18-1 サーキットブレーカー）。
-- 例外耐性: retrieve / search / web_search は `_fault_tolerant_node` デコレータが失敗を握り、
-  従来と同一の state パッチ・`logger.warning` で degraded 続行する。
-- ノードを単体テストから直接呼ぶ場合、writer 不在（グラフ外実行）では SSE 送出は no-op になる
-  （`_write_stream_event` が RuntimeError を吸収）。
+### 2-2. 予算・停止条件（回数上限は存在しない）
+
+- 主予算 = **decide プロンプトのコンテキスト使用量**（`/tokenize` 実カウント、失敗時は文字数推定）。
+  実効窓（`VLLM_MAX_MODEL_LEN`、旧 `LLM_CONTEXT_WINDOW` フォールバック・デフォルト 16384）に対し
+  - **soft（70%）**: decide へ「まとめに入れ」注記＋web_search の raw_content 取得を抑制
+  - **hard（85%）または evidence が generate 実予算を充足**: メニューを `finish`（＋ask_user）へ縮退
+- 安全弁（チューニングノブではない）: 同一 `(action, action_input)` 反復ガード・`recursion_limit 50`。
+- decide transport 死亡時のフォールバック: ツール 0 回なら `retrieve(質問文)`、実行済みなら `finish`
+  （ターンを落とさない）。
+
+### 2-3. 例外耐性・trace
+
+- ツール実行ノードの失敗はエラー観測として decide に返り degraded 続行（ターンを落とさない）。
+- `agent.trace` に decide の thought / action / action_input / 予算状態、navigator の fast_path 成否・
+  内部軌跡、generate の採用チャンクを JSON Lines で記録（`AGENT_TRACE=0` で無効化）。
 
 ## 3. 各ステップの区分・役割・使用ツール
 
-「区分」列: **ノード** = LangGraph `add_node` に定義されたワークフローノード（FR-33 以降、実行も
-このグラフ）／**アダプタ** = `stream()` の処理（グラフ外は質問合成と done 送出のみ）。
-「使用ツール」列のものはすべてツール（外部リソース・純関数）であり、ワークフローのノードではない。
-
 | 区分 | ステップ | 役割 | 使用ツール / 外部リソース | LLM |
 |---|---|---|---|---|
-| ノード | analyze（`_analyze`） | 検索計画（クエリ 2〜3 本・keywords ≤6 語）と route 意図（type/origin/destination）の JSON 抽出。直近 4 ターン履歴（FR-18-5）を参照。route/place 解決時は map_payload もここで構築 | 生成 vLLM（JSON 応答）、campus_map リゾルバ（`resolve_location`: NFKC 正規化辞書引き — LLM 不使用） | ✔ |
-| ノード | ask_origin（`_ask_origin`） | 出発地不明の経路質問でターンを終端し、status[現在地確認文言]→token[定型文]→map(ask_origin) を送出（FR-26）。検索・生成なし。sources は位置インデックス出典（FR-29） | campus_map（`ask_origin_map_payload`） | — |
-| ノード | retrieve（`_retrieve`。初回→search へ・followup→直接 evaluate へ） | 意味ベクトル検索。followup は evaluate が提案した未使用クエリのみ実行 | 埋め込み vLLM（Qwen3-Embedding-8B・gouin）＋ Qdrant 類似検索 | — |
-| ノード | search（`_search`） | レアトークン（部屋番号 GI512 等・固有名詞）の決定的字句グレップ。表記ゆれはバリアント展開。grep 追いラウンドは evaluate の grep_keywords で再入 | Qdrant スキャン＋コード内正規化（`app/rag/lexical.py`）。LLM・埋め込み不使用 | — |
-| ノード | evaluate（`_evaluate`） | 集めた根拠の充足判定と不足時の追加手段提案（grep_keywords / followup_retrieval_queries / web_queries）。Web 後の再評価も同一ノードへ循環 | 生成 vLLM（JSON 応答） | ✔ |
-| ノード | web_search（`_web_search`） | Web 検索と本文取得。第 1 ラウンドのみ公式サイト限定、第 2 ラウンド以降は制限なし（ラウンド番号で自動切替・最大 3 周） | Tavily API（`include_domains: akita-pu.ac.jp`＝第 1 のみ、raw_content、サーキットブレーカー） | — |
-| ノード | generate（`_generate` = 組立→検査→送出を内包） | コンテキスト組立・出典 dedupe → 実トークン数で予算検査（超過時は縮小再構築）→ 回答を生成し token を 1 つずつ送出（予算超過エラー時は縮小コンテキストで 1 回だけリトライ・リトライ後 sources を反映）→ map_payload があれば map 送出（token 完了後・done 直前の順序をノード内で構造保証）。履歴由来の出発地は冒頭で明示（FR-26 §7-4） | 生成 vLLM（ストリーミング）、campus_map（Dijkstra・並行エッジの階選択・ステップ文テンプレート — **LLM に空間推論をさせない**、FR-11/26 原則） | ✔ |
-| アダプタ | done 送出（`stream()` 終端） | `updates` をマージ累積した state の sources で `done` を 1 回送出。スレッド永続化は API 層 | — | — |
+| ノード | decide（`_decide`） | 次アクションの選択（guided JSON）。予算計測・メニュー構成・バリデーション（0回finish 差し戻し・反復ガード）・SSE 実況（初回 analyze / 以降 evaluate=thought）を担う | 生成 vLLM（`decide()`: response_format json_schema）、`/tokenize` | ✔ |
+| ノード | retrieve（`_retrieve`） | 意味ベクトル検索（queries 1..3）。ヒットを evidence store（`knowledge_results`）へマージ・兄弟チャンク展開。観測はタイトル＋抜粋を 120 tok 級に圧縮 | 埋め込み vLLM（gouin）＋ Qdrant | — |
+| ノード | search（`_search`） | 決定的字句グレップ（keywords 1..6）。部屋番号・固有名詞向け。表記ゆれバリアント展開 | Qdrant スキャン＋ `app/rag/lexical.py` | — |
+| ノード | web_search（`_web_search`） | Tavily 検索＋本文取得（queries 1..3）。**ドメイン制限なし**。CB 開放時は「利用不可」観測。soft 超過時 raw_content 抑制 | Tavily API＋httpx | — |
+| サブエージェント | campus_navigator（`_campus_navigator` → `navigator.py`） | 学内の場所・経路解決。fast path（`find_locations_in_text`＋`resolve_location`・LLM 0回）→ 失敗時のみ内部 decide（resolve_place / find_route / ask_origin・≤3手）。戻りは route / place / need_origin / not_navigable の構造化 4 種。**最終文章は書かない** | campus_map（純関数）、生成 vLLM（内部 decide 時のみ） | （✔） |
+| ノード | respond_need_origin（`_respond_need_origin`） | need_origin のターン終端。status→token[定型文]→map(ask_origin)。sources は位置インデックス出典（FR-29）。`turn_terminated` フラグの条件エッジで generate を構造的に迂回 | campus_map（payload は navigator が構築済み） | — |
+| ノード | ask_user（`_ask_user`） | 自由文の聞き返しでターン終端（terminal）。token は 8 文字刻みで FR-25 文字送り互換。sources 空。clarification メタ保存 → 次ターンで ask_user をメニューから除外＋履歴に「（確認質問）」プレフィックス | — | — |
+| ノード | generate（`_generate`・v5 から無改修） | コンテキスト組立・出典 dedupe → 実トークン予算検査（超過時縮小再構築）→ token 逐次 → map_payload があれば map 送出（token 完了後・done 直前）。履歴由来出発地の冒頭明示（FR-26 §7-4） | 生成 vLLM（ストリーミング）、campus_map | ✔ |
+| アダプタ | done 送出（`stream()` 終端） | マージ state の sources で `done` を 1 回送出。ask_user の clarification メタを API 層へ受け渡し | — | — |
 
 ## 4. FR-26/27 マップタップの会話フロー（ターン境界）
 
 mid-run interrupt は不採用（裁定: `docs/MAP_CARD.md` §2-1）。エリシテーションはターン終端で行う。
+v6 では ask_origin の判断が campus_navigator 内へ移ったが、**ワイヤ上の契約は v5 と完全一致**
+（実 LLM E2E で確認済み・2026-07-18）。
 
 ```mermaid
 sequenceDiagram
@@ -156,20 +157,22 @@ sequenceDiagram
 
     U->>B: POST /api/chat「D404に行きたい」
     B->>A: 実行
-    A-->>F: status(analyze) → status(generate)
+    A-->>F: status(analyze) → status(analyze/navigator) → status(generate)
     A-->>F: token「マップでタップして…」＋ map(ask_origin) ＋ done
     Note over F: composer ロック（FR-27-1）<br/>タップ or キャンセルのみ受付
-    U->>F: ノードをタップ（例: カフェテリア）
-    F->>B: POST /api/chat {message: 元質問, origin_node: "cafeteria"}
-    Note over B: 「現在地はカフェテリア（食堂）です。<br/>D404に行きたい」を内部合成（FR-27-2）<br/>user メッセージに origin_select メタ保存
-    B->>A: 実行（通常フロー）
+    U->>F: ノードをタップ（例: 共通施設棟）
+    F->>B: POST /api/chat {message, origin_node: "k", thread_id}
+    Note over B: 「現在地は共通施設棟（総合受付）です。＋質問」を内部合成（FR-27-2）<br/>user メッセージに origin_select メタ保存
+    B->>A: 実行（decide → campus_navigator fast path → 経路解決）
     A-->>F: status × n → token 逐次 → map(route) → done
     Note over F: user 側は現在地チップ表示<br/>assistant 側は経路カード＋ステップ
 ```
 
 ## 5. SSE イベント（要約）
 
-`status`（各ステップ開始時・FR-2）→ `token`（回答本文の逐次配信・FR-3/25）→
+`status`（step 語彙 `{analyze, retrieve, search, web_search, evaluate, generate}` は v5 と不変。
+系列は ReAct 化により可変・evaluate の text は decide の thought 由来の実況）→
+`token`（回答本文の逐次配信・FR-3/25）→
 `map`（route / place / ask_origin。token 完了後・done 直前に最大 1 回・FR-26）→
 `done`（thread_id / message_id / sources）。エラー時は `error`。
-詳細スキーマは `docs/ARCHITECTURE.md` §3。
+詳細スキーマは `docs/ARCHITECTURE.md` §3。フロントは系列に依存せず step ごとの text を表示するのみ。

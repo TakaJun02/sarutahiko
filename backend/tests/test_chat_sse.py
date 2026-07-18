@@ -38,6 +38,22 @@ class MapRecordingAgent(RecordingAgent):
         yield "done", {"thread_id": thread_id, "message_id": message_id, "sources": []}
 
 
+class ClarificationAgent(RecordingAgent):
+    def __init__(self) -> None:
+        super().__init__()
+        self._metadata: dict[str, dict] = {}
+
+    async def stream(self, question, user, thread_id, message_id, history=None):
+        self.history = history
+        self._metadata[message_id] = {"kind": "clarification"}
+        yield "status", {"step": "evaluate", "text": "確認しています…"}
+        yield "token", {"text": "どちらの学科について知りたいですか？"}
+        yield "done", {"thread_id": thread_id, "message_id": message_id, "sources": []}
+
+    def consume_message_metadata(self, message_id: str):
+        return self._metadata.pop(message_id, None)
+
+
 def _events(stream_text: str) -> list[tuple[str, dict]]:
     parsed: list[tuple[str, dict]] = []
     for block in stream_text.strip().split("\n\n"):
@@ -178,6 +194,44 @@ async def test_chat_sanitizes_ask_origin_assistant_content_only_for_agent_histor
     )
     assert persisted_ask_message["content"] == original_content
     assert persisted_ask_message["map"]["mode"] == "ask_origin"
+
+
+@pytest.mark.asyncio
+async def test_chat_persists_and_sanitizes_clarification_metadata(app) -> None:
+    clarification_agent = ClarificationAgent()
+    app.state.agent = clarification_agent
+    question = "どちらの学科について知りたいですか？"
+
+    async with await _client(app) as client:
+        auth_headers = await _auth_headers(client)
+        first = await client.post(
+            "/api/chat",
+            json={"message": "研究について教えて", "thread_id": None},
+            headers=auth_headers,
+        )
+        thread_id = _events(first.text)[-1][1]["thread_id"]
+        history_response = await client.get(f"/api/threads/{thread_id}", headers=auth_headers)
+
+        recording_agent = RecordingAgent()
+        app.state.agent = recording_agent
+        second = await client.post(
+            "/api/chat",
+            json={"message": "知能メカトロニクス学科です", "thread_id": thread_id},
+            headers=auth_headers,
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    persisted = history_response.json()["messages"][-1]
+    assert persisted["content"] == question
+    assert persisted["metadata"] == {"kind": "clarification"}
+    assert recording_agent.history is not None
+    clarification = next(
+        message
+        for message in recording_agent.history
+        if (message.get("metadata") or {}).get("kind") == "clarification"
+    )
+    assert clarification["content"] == f"（確認質問）{question}"
 
 
 @pytest.mark.asyncio

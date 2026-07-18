@@ -33,3 +33,4 @@ dist/
 
 # playwright artifacts
 .playwright-mcp/
+infra/pp2/results/

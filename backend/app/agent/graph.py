@@ -5,7 +5,6 @@ import logging
 import os
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, replace
-from functools import wraps
 from html.parser import HTMLParser
 from typing import Any, Literal, TypedDict
 
@@ -16,41 +15,28 @@ from openai import BadRequestError
 
 from app.agent.campus_map import (
     ResolvedLocation,
-    build_ask_origin_map_payload,
-    build_place_map_payload,
-    build_route_map_payload,
-    resolve_location,
+)
+from app.agent.navigator import (
+    ASK_ORIGIN_RESPONSE,
+    LOCATION_INDEX_SOURCE,
+    CampusNavigator,
 )
 from app.models.auth import User
 from app.models.chat import DonePayload, MapPayload, Source, StatusPayload, TokenPayload
-from app.rag.lexical import generate_keyword_variants, normalize_text, strip_keyword_suffix
+from app.rag.lexical import generate_keyword_variants, normalize_text
 from app.rag.models import KnowledgeChunk
 from app.search.models import WebSearchResult
 from app.services.time_context import build_time_context
 
 Step = Literal["analyze", "retrieve", "search", "web_search", "evaluate", "generate"]
 
-MAX_RETRIEVAL_QUERIES = 3
-MAX_ANALYZE_KEYWORDS = 6
-MAX_EVALUATE_GREP_KEYWORDS = 3
-MAX_EVALUATE_RETRIEVAL_QUERIES = 2
 MAX_KNOWLEDGE_CONTEXT_CHUNKS = 24
 MAX_SAME_FILE_EXPANSION_CHUNKS = 12
 HIGH_RELEVANCE_CONTEXT_THRESHOLD = 0.60
-MAX_LOCAL_SEARCH_FOLLOWUPS = 1
-MAX_RETRIEVAL_FOLLOWUPS = 1
-MAX_WEB_SEARCH_ROUNDS = 3
-MIN_WEB_ROUNDS_BEFORE_GIVE_UP = 2
-MAX_WEB_RESULTS_PER_ROUND = 5
-MAX_WEB_PAGES_PER_ROUND = 3
-# With a 2816-token window one 4000-char page alone exceeds the whole context
-# budget, so a single (possibly irrelevant) page crowded out every other
-# source. Smaller slices let 2-3 pages coexist — diversity answers more
-# questions than depth at this window size.
+MAX_WEB_RESULTS_PER_ACTION = 5
+MAX_WEB_PAGES_PER_ACTION = 3
 MAX_WEB_PAGE_CHARS = 1400
 EVALUATE_CONTEXT_CHARS = 600
-ANALYZE_MAX_TOKENS = 300
-EVALUATE_MAX_TOKENS = 300
 DEFAULT_LLM_CONTEXT_WINDOW = 16384
 DEFAULT_LLM_ANSWER_MAX_TOKENS = 1024
 PROMPT_MARGIN_TOKENS = 192
@@ -61,6 +47,34 @@ MAX_HISTORY_MESSAGES = 8
 MAX_HISTORY_CHARS = 500
 MIN_GENERATION_CONTEXT_TOKENS = 384
 GENERATION_HISTORY_CHAR_STAGES = (MAX_HISTORY_CHARS, 250, 120)
+SOFT_CONTEXT_RATIO = 0.70
+HARD_CONTEXT_RATIO = 0.85
+OBSERVATION_TOKEN_LIMIT = 120
+ASK_USER_TOKEN_CHARS = 8
+
+DECIDE_SYSTEM_PROMPT = """あなたは秋田県立大学 本荘キャンパス（秋田県由利本荘市）のオープンキャンパス来場者案内 AI
+「キャンパスガイド」の探索判断（decide）コンポーネントです。来場者は主に高校生とその保護者です。
+質問とこれまでの観測を読み、次の action を必ず 1 つだけ選び、JSON のみを返してください。
+
+注意: 本学を「APU」と略さないこと。他大学（立命館アジア太平洋大学など）と混同しないこと。
+学外の一般情報（交通・宿泊・気象・比較情報など）は web_search で調べてよい。
+
+ツール:
+- retrieve {queries: string[1..3]}: 意味ベクトルで学内ナレッジを探す（言い換えに強い）
+- search {keywords: string[1..6]}: 部屋番号・研究室名・固有名詞を字句一致で探す
+- web_search {queries: string[1..3]}: ドメイン制限なしの Web 検索（学外・最新情報）
+- campus_navigator {request: string}: 学内の場所・経路の専門機構へ依頼（空間推論を自分でしない）
+- ask_user {question: string}: 回答が実質的に変わる場合だけ、来場者に短く聞き返す
+- finish {reason: string}: 根拠がそろったら探索を終えて回答生成へ進む
+
+方針:
+- ツール実行 0 回のまま finish しない。
+- 学内の場所・経路・「どこ」「行き方」は campus_navigator に任せる。
+- 推測で答えられる場合は推測と明示して答える方を優先し、ask_user を乱用しない。
+- 同一の action と action_input を繰り返さない。0 件なら言い換えるか別ツールに切り替える。
+- 予算注記が「まとめに入れ」の場合は新規探索を広げず finish を優先する。
+- thought は短い日本語 1〜2 文。
+"""
 
 STATUS_TEXTS: dict[Step, str] = {
     "analyze": "ご質問をじっくり読み解いています…",
@@ -71,28 +85,7 @@ STATUS_TEXTS: dict[Step, str] = {
     "generate": "とっておきの回答をまとめています…",
 }
 
-FOLLOWUP_STATUS_TEXTS: dict[Step, str] = {
-    "retrieve": "観点を変えて資料を探し直しています…",
-    "search": "別のキーワードで調べ直しています…",
-    "evaluate": "集めた情報を見比べています…",
-    "web_search": "別の角度からWebを調べています…",
-}
-
-THIRD_WEB_SEARCH_STATUS_TEXT = "もうひと粘り、手掛かりを探しています…"
-OFFICIAL_SEARCH_DOMAIN = "akita-pu.ac.jp"
 ASK_ORIGIN_STATUS_TEXT = "現在地を確認しています…"
-ASK_ORIGIN_RESPONSE = (
-    "いまいる場所をマップでタップして教えてください！"
-    "そこからの行き方をご案内します🗺️"
-)
-LOCATION_INDEX_SOURCE = Source(
-    title="オープンキャンパス2026 会場・場所インデックス（どこ・何階・何号室）",
-    url=(
-        "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/"
-        "OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf"
-    ),
-    type="knowledge",
-)
 
 logger = logging.getLogger(__name__)
 trace_logger = logging.getLogger("agent.trace")
@@ -106,54 +99,6 @@ def _write_stream_event(event: str, data: dict) -> None:
         return
     writer({"event": event, "data": data})
 
-
-def _fault_tolerant_node(step: Literal["retrieve", "search", "web_search"]):
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(self, state: AgentState, *args, **kwargs) -> dict:
-            _write_stream_event("status", self._status(step, state))
-            is_followup = (
-                bool(state.get("retrieve_executed"))
-                if step == "retrieve"
-                else state.get("search_rounds", 0) >= 1
-                if step == "search"
-                else False
-            )
-            try:
-                result = await func(self, state, *args, **kwargs)
-            except Exception as exc:
-                if step == "retrieve":
-                    label = "Retrieve follow-up step" if is_followup else "Retrieve step"
-                    patch = {
-                        "retrieve_executed": True,
-                        "retrieval_rounds": state.get("retrieval_rounds", 0) + 1,
-                    }
-                    if is_followup:
-                        patch["retrieval_followups"] = state.get("retrieval_followups", 0) + 1
-                elif step == "search":
-                    label = "Search follow-up step" if is_followup else "Search step"
-                    patch = {
-                        "search_rounds": state.get("search_rounds", 0) + 1,
-                        "search_executed": True,
-                    }
-                    if is_followup:
-                        patch["local_search_followups"] = state.get("local_search_followups", 0) + 1
-                else:
-                    label = "Web search step"
-                    patch = {"web_search_rounds": state.get("web_search_rounds", 0) + 1}
-                logger.warning("%s failed: %s", label, exc.__class__.__name__)
-                return patch
-
-            result = dict(result)
-            if step == "retrieve" and is_followup:
-                result["retrieval_followups"] = state.get("retrieval_followups", 0) + 1
-            elif step == "search" and is_followup:
-                result["local_search_followups"] = state.get("local_search_followups", 0) + 1
-            return result
-
-        return wrapper
-
-    return decorator
 
 GENERATE_SYSTEM_PROMPT = """秋田県立大学 本荘キャンパスのオープンキャンパス2026で来場者を案内する、明るく元気な学生ガイドAI「APU-Navi」です。挨拶・自己紹介・名前を聞かれた時だけ名乗り、毎回答では名乗りません。
 高校生・保護者に分かる日本語と、わくわくする親しみやすい口調で答えてください（例:「ぜひ体験してみてください！」）。
@@ -181,29 +126,21 @@ class AgentState(TypedDict, total=False):
     trace_id: str
     question: str
     history: list[dict]
-    retrieval_queries: list[str]
-    keywords: list[str]
     knowledge_results: list[KnowledgeChunk]
     web_results: list[WebSearchResult]
-    sufficient: bool
-    missing: str
-    grep_keywords: list[str]
-    followup_retrieval_queries: list[str]
-    web_queries: list[str]
-    web_search_rounds: int
-    local_search_followups: int
-    retrieval_followups: int
-    retrieval_rounds: int
-    search_rounds: int
-    retrieve_executed: bool
-    search_executed: bool
-    search_variant_executed: bool
-    search_terms: list[str]
-    search_variant_terms: list[str]
-    search_hit_count: int
-    used_web_queries: list[str]
-    used_web_query_keys: list[str]
-    used_retrieval_queries: list[str]
+    decision_count: int
+    thought: str
+    action: str
+    action_input: dict[str, Any]
+    actions_log: list[dict[str, Any]]
+    action_keys: list[str]
+    observations: list[str]
+    tool_executions: int
+    context_usage: dict[str, Any]
+    turn_terminated: bool
+    terminal_kind: Literal["ask_user", "ask_origin"] | None
+    clarification_blocked: bool
+    navigator_sources: list[Source]
     generation_messages: list[dict[str, str]]
     generation_token_budget: int
     generation_prompt_tokens: int | None
@@ -213,9 +150,6 @@ class AgentState(TypedDict, total=False):
     same_file_expanded_file_ids: list[str]
     same_file_expanded_chunk_ids: list[str]
     sources: list[Source]
-    route_type: Literal["route", "place"] | None
-    route_origin_text: str | None
-    route_destination_text: str | None
     route_origin: ResolvedLocation | None
     route_destination: ResolvedLocation | None
     route_origin_from_history: bool
@@ -253,19 +187,6 @@ class _ContextAssembly:
 
 
 @dataclass(frozen=True)
-class _WebRoundOutcome:
-    candidates: list[WebSearchResult]
-    executed_queries: list[str]
-    executed_query_keys: list[str]
-
-
-@dataclass(frozen=True)
-class _WebExecutionOutcome:
-    results: list[WebSearchResult]
-    raw_result_count: int
-
-
-@dataclass(frozen=True)
 class _KnowledgeMergeOutcome:
     results: list[KnowledgeChunk]
     expanded_file_ids: list[str]
@@ -297,6 +218,8 @@ class RealCampusAgent:
         self.llm_context_window = llm_context_window
         self.llm_answer_max_tokens = llm_answer_max_tokens
         self.time_context_provider = time_context_provider or build_time_context
+        self.navigator = CampusNavigator(llm_client)
+        self._message_metadata: dict[str, dict[str, Any]] = {}
         self._graph = self._build_graph()
 
     async def stream(
@@ -313,20 +236,14 @@ class RealCampusAgent:
             "history": (history or [])[-MAX_HISTORY_MESSAGES:],
             "knowledge_results": [],
             "web_results": [],
-            "web_search_rounds": 0,
-            "local_search_followups": 0,
-            "retrieval_followups": 0,
-            "retrieval_rounds": 0,
-            "search_rounds": 0,
-            "retrieve_executed": False,
-            "search_executed": False,
-            "search_variant_executed": False,
-            "search_terms": [],
-            "search_variant_terms": [],
-            "search_hit_count": 0,
-            "used_web_queries": [],
-            "used_web_query_keys": [],
-            "used_retrieval_queries": [],
+            "decision_count": 0,
+            "actions_log": [],
+            "action_keys": [],
+            "observations": [],
+            "tool_executions": 0,
+            "turn_terminated": False,
+            "clarification_blocked": self._previous_assistant_was_clarification(history or []),
+            "navigator_sources": [],
             "same_file_expanded_file_ids": [],
             "same_file_expanded_chunk_ids": [],
         }
@@ -344,11 +261,17 @@ class RealCampusAgent:
                     if isinstance(update, dict):
                         merged_state.update(update)
 
+        if merged_state.get("terminal_kind") == "ask_user":
+            self._message_metadata[message_id] = {"kind": "clarification"}
+
         yield "done", DonePayload(
             thread_id=thread_id,
             message_id=message_id,
             sources=merged_state.get("sources", []),
         ).model_dump()
+
+    def consume_message_metadata(self, message_id: str) -> dict[str, Any] | None:
+        return self._message_metadata.pop(message_id, None)
 
     @staticmethod
     def format_sse(event: str, data: dict) -> str:
@@ -356,217 +279,205 @@ class RealCampusAgent:
 
     def _build_graph(self) -> Any:
         workflow = StateGraph(AgentState)
-        workflow.add_node("analyze", self._analyze)
-        workflow.add_node("ask_origin", self._ask_origin)
+        workflow.add_node("decide", self._decide)
         workflow.add_node("retrieve", self._retrieve)
         workflow.add_node("search", self._search)
-        workflow.add_node("evaluate", self._evaluate)
         workflow.add_node("web_search", self._web_search)
+        workflow.add_node("campus_navigator", self._campus_navigator)
+        workflow.add_node("ask_user", self._ask_user)
+        workflow.add_node("respond_need_origin", self._respond_need_origin)
         workflow.add_node("generate", self._generate)
-        workflow.add_edge(START, "analyze")
+        workflow.add_edge(START, "decide")
         workflow.add_conditional_edges(
-            "analyze",
-            self._route_after_analyze,
+            "decide",
+            self._route_after_decide,
             {
-                "ask_origin": "ask_origin",
+                "decide": "decide",
                 "retrieve": "retrieve",
-            },
-        )
-        workflow.add_edge("ask_origin", END)
-        workflow.add_conditional_edges(
-            "retrieve",
-            self._route_after_retrieve,
-            {
                 "search": "search",
-                "evaluate": "evaluate",
-            },
-        )
-        workflow.add_edge("search", "evaluate")
-        workflow.add_conditional_edges(
-            "evaluate",
-            self._route_after_evaluate,
-            {
-                "search": "search",
-                "retrieve": "retrieve",
                 "web_search": "web_search",
-                "generate": "generate",
+                "campus_navigator": "campus_navigator",
+                "ask_user": "ask_user",
+                "finish": "generate",
             },
         )
-        workflow.add_edge("web_search", "evaluate")
+        workflow.add_edge("retrieve", "decide")
+        workflow.add_edge("search", "decide")
+        workflow.add_edge("web_search", "decide")
+        workflow.add_conditional_edges(
+            "campus_navigator",
+            self._route_after_navigator,
+            {
+                "decide": "decide",
+                "respond_need_origin": "respond_need_origin",
+            },
+        )
+        workflow.add_edge("ask_user", END)
+        workflow.add_edge("respond_need_origin", END)
         workflow.add_edge("generate", END)
         return workflow.compile()
 
-    async def _analyze(self, state: AgentState) -> dict:
-        _write_stream_event("status", self._status("analyze", state))
-        question = state["question"]
-        raw_output = await self.llm_client.complete_chat(
-            self._build_analyze_messages(question, state.get("history", [])),
-            temperature=0.2,
-            max_tokens=ANALYZE_MAX_TOKENS,
-            enable_thinking=False,
+    async def _decide(self, state: AgentState) -> dict:
+        decision_count = state.get("decision_count", 0)
+        if decision_count == 0:
+            _write_stream_event("status", self._status("analyze"))
+
+        preliminary_actions = self._available_actions(state, force_finish=False)
+        preliminary_messages = self._build_decide_messages(
+            state,
+            preliminary_actions,
+            state.get("context_usage") or {},
         )
-        payload = self._parse_json_object(raw_output)
-        queries = self._normalize_queries(
-            payload.get("retrieval_queries") if payload else None,
-            fallback=[question],
-            limit=MAX_RETRIEVAL_QUERIES,
-        )
-        keywords = self._normalize_queries(
-            payload.get("keywords") if payload else None,
-            fallback=[],
-            limit=MAX_ANALYZE_KEYWORDS,
-        )
-        route_data = payload.get("route") if payload and isinstance(payload.get("route"), dict) else {}
-        route_type = route_data.get("type") if route_data.get("type") in {"route", "place"} else None
-        origin_text = self._optional_string(route_data.get("origin"))
-        destination_text = self._optional_string(route_data.get("destination"))
-        origin = resolve_location(origin_text)
-        destination = resolve_location(destination_text)
-        origin_from_history = bool(
-            origin
-            and origin_text
-            and normalize_text(origin_text) not in normalize_text(question)
-        )
-        map_payload = self._build_map_payload(
-            route_type=route_type,
-            origin=origin,
-            destination=destination,
-            question=question,
-        )
+        usage = await self._measure_context_usage(state, preliminary_messages)
+        force_finish = bool(usage["hard_exceeded"] or usage["evidence_full"])
+        actions = self._available_actions(state, force_finish=force_finish)
+        messages = self._build_decide_messages(state, actions, usage)
+        usage = await self._measure_context_usage(state, messages)
+
+        parse_error: str | None = None
+        try:
+            raw_output = await self.llm_client.decide(
+                messages,
+                self._decision_schema(actions),
+            )
+            payload = self._parse_json_object(raw_output) if not isinstance(raw_output, dict) else raw_output
+        except Exception as exc:
+            logger.warning("Decide transport failed: %s", exc.__class__.__name__)
+            payload = None
+            parse_error = exc.__class__.__name__
+
+        if payload is None:
+            fallback_action = "retrieve" if state.get("tool_executions", 0) == 0 else "finish"
+            if fallback_action not in actions:
+                fallback_action = actions[0]
+            payload = {
+                "thought": "判断形式を整え、探索を安全に続けます。",
+                "action": fallback_action,
+                "action_input": (
+                    {"queries": [state["question"]]}
+                    if fallback_action == "retrieve"
+                    else {"reason": "判断形式を復旧して回答生成へ進む"}
+                ),
+            }
+            parse_error = parse_error or "invalid_json"
+
+        validation_error = self._validate_decision(payload, actions)
+        thought = self._sanitize_thought(payload.get("thought"))
+        action = str(payload.get("action") or "")
+        action_input = payload.get("action_input") if isinstance(payload.get("action_input"), dict) else {}
+
+        if validation_error is None and action == "finish" and state.get("tool_executions", 0) == 0:
+            validation_error = "ツール実行 0 回のまま finish はできません。まず情報を集めてください。"
+
+        action_key = self._action_key(action, action_input)
+        if validation_error is None and action_key in set(state.get("action_keys") or []):
+            validation_error = "同一の action と action_input は試行済みです。別の手段を選んでください。"
+
+        observations = list(state.get("observations") or [])
+        actions_log = list(state.get("actions_log") or [])
+        action_keys = list(state.get("action_keys") or [])
+        routed_action = action
+        if validation_error is not None:
+            observations.append(self._compact_observation(f"エラー観測: {validation_error}"))
+            routed_action = "decide"
+        else:
+            action_keys.append(action_key)
+            actions_log.append(
+                {
+                    "thought": thought,
+                    "action": action,
+                    "action_input": action_input,
+                    "result": "selected",
+                }
+            )
+
+        if decision_count > 0:
+            _write_stream_event(
+                "status",
+                StatusPayload(step="evaluate", text=thought).model_dump(),
+            )
+
         self._trace(
-            "analyze",
+            "decide",
             state,
             {
-                "retrieval_queries": queries,
-                "keywords": keywords,
-                "route": {
-                    "type": route_type,
-                    "origin": origin_text,
-                    "destination": destination_text,
-                    "origin_resolved": origin.node if origin else None,
-                    "destination_resolved": destination.node if destination else None,
-                },
+                "thought": thought,
+                "action": action,
+                "action_input": action_input,
+                "available_actions": actions,
+                "budget": usage,
+                "validation_error": validation_error,
+                "parse_error": parse_error,
             },
         )
-        result: dict[str, Any] = {
-            "retrieval_queries": queries,
-            "keywords": keywords,
-        }
-        if route_type is not None:
-            result.update(
-                {
-                    "route_type": route_type,
-                    "route_origin_text": origin_text,
-                    "route_destination_text": destination_text,
-                    "route_origin": origin,
-                    "route_destination": destination,
-                    "route_origin_from_history": origin_from_history,
-                    "map_payload": map_payload,
-                }
-            )
-        return result
-
-    @staticmethod
-    def _optional_string(value: Any) -> str | None:
-        return value.strip() if isinstance(value, str) and value.strip() else None
-
-    @staticmethod
-    def _build_map_payload(
-        *,
-        route_type: str | None,
-        origin: ResolvedLocation | None,
-        destination: ResolvedLocation | None,
-        question: str,
-    ) -> dict[str, Any] | None:
-        if route_type == "route" and destination is not None and origin is None:
-            payload = build_ask_origin_map_payload(destination, question)
-        elif route_type == "route" and origin is not None and destination is not None:
-            payload = build_route_map_payload(origin, destination)
-        elif route_type == "place" and destination is not None:
-            payload = build_place_map_payload(destination)
-        else:
-            return None
-        MapPayload(**payload)
-        return payload
-
-    @staticmethod
-    def _should_ask_origin(state: AgentState) -> bool:
-        return bool(
-            state.get("route_type") == "route"
-            and state.get("route_destination") is not None
-            and state.get("route_origin") is None
-            and (state.get("map_payload") or {}).get("mode") == "ask_origin"
-        )
-
-    async def _ask_origin(self, state: AgentState) -> dict:
-        _write_stream_event(
-            "status",
-            StatusPayload(step="generate", text=ASK_ORIGIN_STATUS_TEXT).model_dump(),
-        )
-        _write_stream_event("token", TokenPayload(text=ASK_ORIGIN_RESPONSE).model_dump())
-        _write_stream_event("map", state["map_payload"])
-        return {"sources": self._assemble_generation_sources(state, None)}
-
-    @_fault_tolerant_node("retrieve")
-    async def _retrieve(self, state: AgentState, queries: Sequence[str] | None = None) -> dict:
-        existing_results = state.get("knowledge_results") or []
-        retrieved_results: list[KnowledgeChunk] = []
-        active_queries = self._unused_retrieval_queries(
-            state,
-            self._retrieval_queries_for_round(state, queries),
-        )
-        used_query_keys = list(state.get("used_retrieval_queries") or [])
-        trace_queries: list[dict[str, Any]] = []
-
-        for query in active_queries:
-            used_query_keys.append(self._retrieval_query_key(query))
-            results = await self.knowledge_store.search(query, limit=self.top_k)
-            trace_queries.append(
-                {
-                    "query": query,
-                    "hits": [self._trace_chunk_hit(chunk) for chunk in results[: self.top_k]],
-                }
-            )
-            for chunk in results:
-                if self._is_below_relevance_floor(chunk):
-                    continue
-                retrieved_results.append(chunk)
-
-        merge_outcome = self._merge_and_expand_knowledge_results(state, existing_results, retrieved_results)
-        self._trace("retrieve", state, {"queries": trace_queries})
         return {
-            "knowledge_results": merge_outcome.results,
-            "retrieve_executed": True,
-            "retrieval_rounds": state.get("retrieval_rounds", 0) + 1,
-            "used_retrieval_queries": self._dedupe_keys(used_query_keys),
-            "same_file_expanded_file_ids": merge_outcome.expanded_file_ids,
-            "same_file_expanded_chunk_ids": merge_outcome.expanded_chunk_ids,
+            "decision_count": decision_count + 1,
+            "thought": thought,
+            "action": routed_action,
+            "action_input": action_input,
+            "actions_log": actions_log,
+            "action_keys": action_keys,
+            "observations": observations,
+            "context_usage": usage,
         }
 
-    @_fault_tolerant_node("search")
-    async def _search(self, state: AgentState, keywords: Sequence[str] | None = None) -> dict:
-        search_keywords = self._search_keywords(state, keywords)
+    async def _retrieve(self, state: AgentState) -> dict:
+        queries = list(state.get("action_input", {}).get("queries") or [])
+        _write_stream_event("status", self._tool_status("retrieve", queries))
         existing_results = state.get("knowledge_results") or []
-        if self.lexical_search is None:
-            self._trace("search", state, {"keywords": search_keywords, "variants": [], "hits": []})
+        try:
+            retrieved_results: list[KnowledgeChunk] = []
+            trace_queries: list[dict[str, Any]] = []
+            for query in queries:
+                results = await self.knowledge_store.search(query, limit=self.top_k)
+                trace_queries.append(
+                    {
+                        "query": query,
+                        "hits": [self._trace_chunk_hit(chunk) for chunk in results[: self.top_k]],
+                    }
+                )
+                retrieved_results.extend(
+                    chunk for chunk in results if not self._is_below_relevance_floor(chunk)
+                )
+            merge_outcome = self._merge_and_expand_knowledge_results(
+                state,
+                existing_results,
+                retrieved_results,
+            )
+            old_ids = {chunk.id for chunk in existing_results}
+            new_chunks = [chunk for chunk in merge_outcome.results if chunk.id not in old_ids]
+            duplicates = max(len(retrieved_results) - len(new_chunks), 0)
+            observation = self._knowledge_observation(
+                "意味検索",
+                new_chunks,
+                duplicate_count=duplicates,
+            )
+            self._trace("retrieve", state, {"queries": trace_queries, "observation": observation})
             return {
-                "knowledge_results": existing_results,
-                "search_rounds": state.get("search_rounds", 0) + 1,
-                "search_executed": True,
-                "search_terms": self._merge_strings(state.get("search_terms") or [], search_keywords),
-                "search_hit_count": state.get("search_hit_count", 0),
+                "knowledge_results": merge_outcome.results,
+                "tool_executions": state.get("tool_executions", 0) + 1,
+                "observations": [*(state.get("observations") or []), observation],
+                "actions_log": self._complete_action_log(state, observation),
+                "same_file_expanded_file_ids": merge_outcome.expanded_file_ids,
+                "same_file_expanded_chunk_ids": merge_outcome.expanded_chunk_ids,
             }
+        except Exception as exc:
+            return self._tool_error_patch(state, "retrieve", exc)
 
-        outcome = self.lexical_search.grep_sections_with_trace(search_keywords)
-        grep_chunks = [hit.chunk for hit in outcome.hits]
-        merge_outcome = self._merge_and_expand_knowledge_results(state, existing_results, grep_chunks)
-        self._trace(
-            "search",
-            state,
-            {
-                "keywords": outcome.searched_keywords,
-                "variants": outcome.variant_keywords,
-                "hits": [
+    async def _search(self, state: AgentState) -> dict:
+        keywords = list(state.get("action_input", {}).get("keywords") or [])
+        _write_stream_event("status", self._tool_status("search", keywords))
+        existing_results = state.get("knowledge_results") or []
+        try:
+            if self.lexical_search is None:
+                grep_chunks: list[KnowledgeChunk] = []
+                variants: list[str] = []
+                trace_hits: list[dict[str, Any]] = []
+            else:
+                outcome = self.lexical_search.grep_sections_with_trace(keywords)
+                grep_chunks = [hit.chunk for hit in outcome.hits]
+                variants = outcome.variant_keywords
+                trace_hits = [
                     {
                         "file_id": hit.chunk.file_id,
                         "chunk_index": hit.chunk.chunk_index,
@@ -574,122 +485,483 @@ class RealCampusAgent:
                         "total": hit.total_hits,
                     }
                     for hit in outcome.hits
-                ],
-            },
-        )
-        return {
-            "knowledge_results": merge_outcome.results,
-            "search_rounds": state.get("search_rounds", 0) + 1,
-            "search_executed": True,
-            "search_variant_executed": bool(state.get("search_variant_executed")) or outcome.variants_attempted,
-            "search_terms": self._merge_strings(state.get("search_terms") or [], outcome.searched_keywords),
-            "search_variant_terms": self._merge_strings(
-                state.get("search_variant_terms") or [],
-                outcome.variant_keywords,
-            ),
-            "search_hit_count": state.get("search_hit_count", 0) + len(outcome.hits),
-            "same_file_expanded_file_ids": merge_outcome.expanded_file_ids,
-            "same_file_expanded_chunk_ids": merge_outcome.expanded_chunk_ids,
-        }
-
-    async def _evaluate(self, state: AgentState) -> dict:
-        _write_stream_event("status", self._status("evaluate", state))
-        raw_output = await self.llm_client.complete_chat(
-            self._build_evaluate_messages(state),
-            temperature=0.2,
-            max_tokens=EVALUATE_MAX_TOKENS,
-            enable_thinking=False,
-        )
-        payload = self._parse_json_object(raw_output)
-        if payload is None:
+                ]
+            merge_outcome = self._merge_and_expand_knowledge_results(
+                state,
+                existing_results,
+                grep_chunks,
+            )
+            old_ids = {chunk.id for chunk in existing_results}
+            new_chunks = [chunk for chunk in merge_outcome.results if chunk.id not in old_ids]
+            duplicates = max(len(grep_chunks) - len(new_chunks), 0)
+            observation = self._knowledge_observation(
+                "字句検索",
+                new_chunks,
+                duplicate_count=duplicates,
+                variants=variants,
+            )
             self._trace(
-                "evaluate",
+                "search",
                 state,
                 {
-                    "sufficient": True,
-                    "missing": "",
-                    "grep_keywords": [],
-                    "retrieval_queries": [],
-                    "web_queries": [],
-                    "parse_error": True,
+                    "keywords": keywords,
+                    "variants": variants,
+                    "hits": trace_hits,
+                    "observation": observation,
                 },
             )
             return {
-                "sufficient": True,
-                "missing": "",
-                "grep_keywords": [],
-                "followup_retrieval_queries": [],
-                "web_queries": [],
+                "knowledge_results": merge_outcome.results,
+                "tool_executions": state.get("tool_executions", 0) + 1,
+                "observations": [*(state.get("observations") or []), observation],
+                "actions_log": self._complete_action_log(state, observation),
+                "same_file_expanded_file_ids": merge_outcome.expanded_file_ids,
+                "same_file_expanded_chunk_ids": merge_outcome.expanded_chunk_ids,
             }
+        except Exception as exc:
+            return self._tool_error_patch(state, "search", exc)
 
-        sufficient = self._parse_bool(payload.get("sufficient"), default=True)
-        grep_keywords = self._normalize_queries(
-            payload.get("grep_keywords"),
-            fallback=[],
-            limit=MAX_EVALUATE_GREP_KEYWORDS,
-        )
-        web_queries = self._normalize_queries(
-            payload.get("web_queries"),
-            fallback=[state["question"]] if not sufficient else [],
-            limit=MAX_RETRIEVAL_QUERIES,
-        )
-        followup_retrieval_queries = self._normalize_queries(
-            payload.get("retrieval_queries"),
-            fallback=[],
-            limit=MAX_EVALUATE_RETRIEVAL_QUERIES,
-        )
-        self._trace(
-            "evaluate",
-            state,
-            {
-                "sufficient": sufficient,
-                "missing": str(payload.get("missing") or ""),
-                "grep_keywords": grep_keywords,
-                "retrieval_queries": followup_retrieval_queries,
-                "web_queries": web_queries,
-            },
-        )
-        return {
-            "sufficient": sufficient,
-            "missing": str(payload.get("missing") or ""),
-            "grep_keywords": grep_keywords,
-            "followup_retrieval_queries": followup_retrieval_queries,
-            "web_queries": web_queries,
-        }
-
-    @_fault_tolerant_node("web_search")
     async def _web_search(self, state: AgentState) -> dict:
-        round_number = state.get("web_search_rounds", 0) + 1
-        outcome = await self._search_web_round(
-            state=state,
-            round_number=round_number,
-            existing_urls={result.url for result in state.get("web_results", [])},
+        queries = list(state.get("action_input", {}).get("queries") or [])
+        _write_stream_event("status", self._tool_status("web_search", queries))
+        try:
+            soft_exceeded = bool((state.get("context_usage") or {}).get("soft_exceeded"))
+            if not getattr(self.search_provider, "available", True):
+                observation = "Web 検索は現在利用不可です。別の根拠で続行してください。"
+                return {
+                    "tool_executions": state.get("tool_executions", 0) + 1,
+                    "observations": [*(state.get("observations") or []), observation],
+                    "actions_log": self._complete_action_log(state, observation),
+                }
+
+            candidates: list[WebSearchResult] = []
+            seen_urls = {result.url for result in state.get("web_results") or []}
+            for query in queries:
+                rows = await self.search_provider.search(
+                    query,
+                    max_results=MAX_WEB_RESULTS_PER_ACTION,
+                    include_domains=None,
+                    include_raw_content=not soft_exceeded,
+                )
+                for result in rows:
+                    if result.url in seen_urls:
+                        continue
+                    seen_urls.add(result.url)
+                    candidates.append(result)
+                    if len(candidates) >= MAX_WEB_RESULTS_PER_ACTION:
+                        break
+                if len(candidates) >= MAX_WEB_RESULTS_PER_ACTION:
+                    break
+
+            prioritized = self._prioritize_search_results(candidates, queries)
+            fetched_results = await self._fetch_search_results(
+                prioritized[:MAX_WEB_PAGES_PER_ACTION],
+                keywords=queries,
+                fetch_missing=not soft_exceeded,
+            )
+            existing = state.get("web_results") or []
+            web_results = self._dedupe_web_results([*existing, *fetched_results])
+            old_urls = {result.url for result in existing}
+            new_results = [result for result in web_results if result.url not in old_urls]
+            observation = self._web_observation(
+                new_results,
+                duplicate_count=max(len(candidates) - len(new_results), 0),
+            )
+            self._trace(
+                "web_search",
+                state,
+                {
+                    "queries": queries,
+                    "urls": [result.url for result in new_results],
+                    "raw_content_suppressed": soft_exceeded,
+                    "observation": observation,
+                },
+            )
+            return {
+                "web_results": web_results,
+                "tool_executions": state.get("tool_executions", 0) + 1,
+                "observations": [*(state.get("observations") or []), observation],
+                "actions_log": self._complete_action_log(state, observation),
+            }
+        except Exception as exc:
+            return self._tool_error_patch(state, "web_search", exc)
+
+    async def _campus_navigator(self, state: AgentState) -> dict:
+        request = str(state.get("action_input", {}).get("request") or "")
+        _write_stream_event(
+            "status",
+            StatusPayload(step="analyze", text="キャンパスマップで経路を調べています…").model_dump(),
         )
-        prioritized = self._prioritize_search_results(outcome.candidates, self._web_focus_keywords(state))
-        fetched_results = await self._fetch_search_results(
-            prioritized[:MAX_WEB_PAGES_PER_ROUND],
-            keywords=self._web_focus_keywords(state),
-        )
-        web_results = self._dedupe_web_results([*(state.get("web_results") or []), *fetched_results])
-        self._trace(
-            "web_search",
-            state,
-            {
-                "round": round_number,
-                "queries": outcome.executed_queries,
-                "urls": [result.url for result in fetched_results],
-                "candidate_urls": [result.url for result in outcome.candidates],
-            },
-        )
+
+        def write_internal_status(text: str) -> None:
+            _write_stream_event(
+                "status",
+                StatusPayload(step="analyze", text=text).model_dump(),
+            )
+
+        try:
+            result = await self.navigator.navigate(
+                request=request,
+                question=state["question"],
+                history=state.get("history") or [],
+                status_callback=write_internal_status,
+            )
+            result_type = str(result.get("type") or "not_navigable")
+            self._trace(
+                "campus_navigator",
+                state,
+                {
+                    "fast_path": result.get("fast_path"),
+                    "result_type": result_type,
+                    "internal_trace": result.get("trace") or [],
+                },
+            )
+            observation = self._navigator_observation(result)
+            patch: dict[str, Any] = {
+                "tool_executions": state.get("tool_executions", 0) + 1,
+                "observations": [*(state.get("observations") or []), observation],
+                "actions_log": self._complete_action_log(state, observation),
+            }
+            if result_type in {"route", "place", "need_origin"}:
+                map_payload = result.get("map_payload")
+                MapPayload(**map_payload)
+                patch.update(
+                    {
+                        "map_payload": map_payload,
+                        "route_destination": result.get("destination"),
+                        "navigator_sources": list(result.get("sources") or []),
+                    }
+                )
+            if result_type == "route":
+                patch.update(
+                    {
+                        "route_origin": result.get("origin"),
+                        "route_origin_from_history": bool(result.get("origin_from_history")),
+                    }
+                )
+            elif result_type == "need_origin":
+                patch.update(
+                    {
+                        "turn_terminated": True,
+                        "terminal_kind": "ask_origin",
+                    }
+                )
+            return patch
+        except Exception as exc:
+            return self._tool_error_patch(state, "campus_navigator", exc)
+
+    async def _ask_user(self, state: AgentState) -> dict:
+        question = str(state.get("action_input", {}).get("question") or "").strip()
+        _write_stream_event("status", self._status("generate"))
+        for start in range(0, len(question), ASK_USER_TOKEN_CHARS):
+            _write_stream_event(
+                "token",
+                TokenPayload(text=question[start : start + ASK_USER_TOKEN_CHARS]).model_dump(),
+            )
         return {
-            "web_results": web_results,
-            "web_search_rounds": round_number,
-            "used_web_queries": self._merge_strings(state.get("used_web_queries") or [], outcome.executed_queries),
-            "used_web_query_keys": self._dedupe_keys(
-                [*(state.get("used_web_query_keys") or []), *outcome.executed_query_keys]
-            ),
+            "turn_terminated": True,
+            "terminal_kind": "ask_user",
+            "sources": [],
+            "actions_log": self._complete_action_log(state, "clarification を送出"),
         }
 
+    async def _respond_need_origin(self, state: AgentState) -> dict:
+        _write_stream_event(
+            "status",
+            StatusPayload(step="generate", text=ASK_ORIGIN_STATUS_TEXT).model_dump(),
+        )
+        _write_stream_event("token", TokenPayload(text=ASK_ORIGIN_RESPONSE).model_dump())
+        _write_stream_event("map", state["map_payload"])
+        sources = list(state.get("navigator_sources") or [])
+        if not sources:
+            sources = self._assemble_generation_sources(state, None)
+        return {"sources": sources}
+
+    async def _route_after_decide(self, state: AgentState) -> str:
+        action = state.get("action") or "decide"
+        return action if action in {
+            "decide",
+            "retrieve",
+            "search",
+            "web_search",
+            "campus_navigator",
+            "ask_user",
+            "finish",
+        } else "decide"
+
+    async def _route_after_navigator(self, state: AgentState) -> str:
+        return "respond_need_origin" if state.get("turn_terminated") else "decide"
+
+    @staticmethod
+    def _decision_schema(actions: Sequence[str]) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "thought": {"type": "string"},
+                "action": {"type": "string", "enum": list(actions)},
+                "action_input": {"type": "object", "additionalProperties": True},
+            },
+            "required": ["thought", "action", "action_input"],
+            "additionalProperties": False,
+        }
+
+    def _available_actions(self, state: AgentState, *, force_finish: bool) -> list[str]:
+        actions = (
+            ["finish", "ask_user"]
+            if force_finish
+            else [
+                "retrieve",
+                "search",
+                "web_search",
+                "campus_navigator",
+                "ask_user",
+                "finish",
+            ]
+        )
+        if state.get("clarification_blocked"):
+            actions = [action for action in actions if action != "ask_user"]
+        return actions
+
+    def _validate_decision(
+        self,
+        payload: dict[str, Any],
+        available_actions: Sequence[str],
+    ) -> str | None:
+        if set(payload) != {"thought", "action", "action_input"}:
+            return "判断 JSON のキーが仕様と一致しません。"
+        if not isinstance(payload.get("thought"), str):
+            return "thought は文字列で指定してください。"
+        action = payload.get("action")
+        if action not in available_actions:
+            return f"action {action!r} は現在のメニューにありません。"
+        action_input = payload.get("action_input")
+        if not isinstance(action_input, dict):
+            return "action_input はオブジェクトで指定してください。"
+        if action in {"retrieve", "web_search"}:
+            queries = action_input.get("queries")
+            if not self._valid_string_list(queries, minimum=1, maximum=3):
+                return "queries は空でない文字列 1〜3 件で指定してください。"
+        elif action == "search":
+            if not self._valid_string_list(action_input.get("keywords"), minimum=1, maximum=6):
+                return "keywords は空でない文字列 1〜6 件で指定してください。"
+        else:
+            key = {
+                "campus_navigator": "request",
+                "ask_user": "question",
+                "finish": "reason",
+            }[action]
+            value = action_input.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return f"{key} は空でない文字列で指定してください。"
+        return None
+
+    @staticmethod
+    def _valid_string_list(value: Any, *, minimum: int, maximum: int) -> bool:
+        return (
+            isinstance(value, list)
+            and minimum <= len(value) <= maximum
+            and all(isinstance(item, str) and item.strip() for item in value)
+        )
+
+    @staticmethod
+    def _action_key(action: str, action_input: dict[str, Any]) -> str:
+        return f"{action}\t{json.dumps(action_input, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}"
+
+    @staticmethod
+    def _previous_assistant_was_clarification(history: Sequence[dict]) -> bool:
+        for message in reversed(history):
+            if message.get("role") != "assistant":
+                continue
+            metadata = message.get("metadata")
+            return isinstance(metadata, dict) and metadata.get("kind") == "clarification"
+        return False
+
+    def _build_decide_messages(
+        self,
+        state: AgentState,
+        actions: Sequence[str],
+        usage: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        system_note = f"\n現在選択可能な action: {', '.join(actions)}"
+        if usage.get("soft_exceeded"):
+            system_note += "\n予算注記: まとめに入れ。新規探索を広げず finish を優先してください。"
+        if usage.get("hard_exceeded") or usage.get("evidence_full"):
+            system_note += "\n予算注記: 探索予算を使い切りました。finish を優先してください。"
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": f"{DECIDE_SYSTEM_PROMPT}{system_note}"}
+        ]
+        messages.extend(self._format_history(state.get("history") or []))
+        action_log = json.dumps(
+            state.get("actions_log") or [],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        observations = "\n".join(
+            f"{index}. {observation}"
+            for index, observation in enumerate(state.get("observations") or [], start=1)
+        ) or "なし"
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"質問:\n{state['question']}\n\n"
+                    f"行動ログ:\n{action_log}\n\n"
+                    f"観測:\n{observations}\n\n"
+                    f"予算状態: {json.dumps(usage, ensure_ascii=False, separators=(',', ':'))}"
+                ),
+            }
+        )
+        return messages
+
+    async def _measure_context_usage(
+        self,
+        state: AgentState,
+        decide_messages: Sequence[dict[str, str]],
+    ) -> dict[str, Any]:
+        decide_text = "\n\n".join(message.get("content", "") for message in decide_messages)
+        tokens, actual = await self._count_text_tokens(decide_text)
+
+        full_context = self._assemble_context_with_budget(
+            state.get("knowledge_results") or [],
+            state.get("web_results") or [],
+            mode="generate",
+            token_budget=None,
+        )
+        base_messages, _ = self._build_generation_messages_with_sources(state, token_budget=0)
+        base_text = "\n\n".join(message.get("content", "") for message in base_messages)
+        base_tokens, base_actual = await self._count_text_tokens(base_text)
+        evidence_tokens, evidence_actual = await self._count_text_tokens(full_context.text)
+        evidence_budget = max(self._available_generation_prompt_tokens() - base_tokens, 0)
+        ratio = tokens / self.llm_context_window if self.llm_context_window > 0 else 1.0
+        return {
+            "tokens": tokens,
+            "actual": actual,
+            "window": self.llm_context_window,
+            "ratio": round(ratio, 4),
+            "soft_exceeded": ratio >= SOFT_CONTEXT_RATIO,
+            "hard_exceeded": ratio >= HARD_CONTEXT_RATIO,
+            "evidence_tokens": evidence_tokens,
+            "evidence_actual": evidence_actual,
+            "generation_base_actual": base_actual,
+            "generation_evidence_budget": evidence_budget,
+            "evidence_full": bool(full_context.text) and evidence_tokens >= evidence_budget,
+        }
+
+    async def _count_text_tokens(self, text: str) -> tuple[int, bool]:
+        count_tokens = getattr(self.llm_client, "count_tokens", None)
+        if callable(count_tokens):
+            try:
+                count = await count_tokens(text)
+            except Exception:
+                count = None
+            if isinstance(count, int):
+                return count, True
+        return estimate_tokens(text), False
+
+    @staticmethod
+    def _sanitize_thought(value: Any) -> str:
+        text = " ".join(str(value or "").split())
+        if (
+            not text
+            or len(text) > 120
+            or any(
+                marker in text
+                for marker in ("{", "}", chr(96) * 3, "action_input", "システムプロンプト")
+            )
+        ):
+            return STATUS_TEXTS["evaluate"]
+        return text
+
+    def _compact_observation(self, text: str) -> str:
+        compact = " ".join(text.split())
+        return self._truncate_text_to_token_budget(compact, OBSERVATION_TOKEN_LIMIT)
+    def _knowledge_observation(
+        self,
+        label: str,
+        chunks: Sequence[KnowledgeChunk],
+        *,
+        duplicate_count: int,
+        variants: Sequence[str] = (),
+    ) -> str:
+        details = [
+            f"{chunk.title}: {' '.join(chunk.text.split())[:160]}"
+            for chunk in chunks[:3]
+        ]
+        variant_note = f" 表記ゆれ={','.join(variants)}。" if variants else ""
+        return self._compact_observation(
+            f"{label}: 新規{len(chunks)}件、重複除外{duplicate_count}件。"
+            f"{variant_note}{' / '.join(details) if details else '該当なし'}"
+        )
+
+    def _web_observation(
+        self,
+        results: Sequence[WebSearchResult],
+        *,
+        duplicate_count: int,
+    ) -> str:
+        details = [
+            f"{result.title} ({result.url}): {' '.join((result.snippet or result.text).split())[:140]}"
+            for result in results[:3]
+        ]
+        return self._compact_observation(
+            f"Web検索: 新規{len(results)}件、重複除外{duplicate_count}件。"
+            f"{' / '.join(details) if details else '該当なし'}"
+        )
+
+    def _navigator_observation(self, result: dict[str, Any]) -> str:
+        result_type = result.get("type")
+        if result_type == "route":
+            return self._compact_observation(
+                f"campus_navigator route: {result.get('steps_text') or '経路を解決'}"
+            )
+        if result_type == "place":
+            return self._compact_observation(
+                f"campus_navigator place: {result.get('fact') or '場所を解決'}"
+            )
+        if result_type == "need_origin":
+            destination = result.get("destination")
+            label = destination.label if isinstance(destination, ResolvedLocation) else "目的地"
+            return f"campus_navigator need_origin: {label} への出発地を確認します。"
+        return self._compact_observation(
+            f"campus_navigator not_navigable: {result.get('reason') or '解決不能'}"
+        )
+
+    def _complete_action_log(
+        self,
+        state: AgentState,
+        result: str,
+        *,
+        error: bool = False,
+    ) -> list[dict[str, Any]]:
+        log = [dict(item) for item in state.get("actions_log") or []]
+        if log:
+            log[-1]["result"] = "error" if error else self._compact_observation(result)
+        return log
+
+    def _tool_error_patch(
+        self,
+        state: AgentState,
+        step: str,
+        exc: Exception,
+    ) -> dict[str, Any]:
+        observation = self._compact_observation(
+            f"{step} は {exc.__class__.__name__} で失敗しました。別手段で degraded 続行してください。"
+        )
+        logger.warning("%s tool failed: %s", step, exc.__class__.__name__)
+        self._trace(step, state, {"error": exc.__class__.__name__, "observation": observation})
+        return {
+            "tool_executions": state.get("tool_executions", 0) + 1,
+            "observations": [*(state.get("observations") or []), observation],
+            "actions_log": self._complete_action_log(state, observation, error=True),
+        }
+
+    @staticmethod
+    def _tool_status(step: Literal["retrieve", "search", "web_search"], terms: Sequence[str]) -> dict:
+        summary = "、".join(terms[:2])
+        text = STATUS_TEXTS[step]
+        if summary:
+            text = f"{text.removesuffix('…')}（{summary}）…"
+        return StatusPayload(step=step, text=text).model_dump()
     async def _prepare_generation(self, state: AgentState) -> dict:
         messages, context = self._build_generation_messages_with_sources(state)
         sources = self._assemble_generation_sources(state, context)
@@ -732,7 +1004,6 @@ class RealCampusAgent:
                 messages,
                 temperature=0.7,
                 max_tokens=self.llm_answer_max_tokens,
-                enable_thinking=False,
             ):
                 yield token
         except BadRequestError as exc:
@@ -750,12 +1021,11 @@ class RealCampusAgent:
                 retry_messages,
                 temperature=0.7,
                 max_tokens=self.llm_answer_max_tokens,
-                enable_thinking=False,
             ):
                 yield token
 
     async def _generate(self, state: AgentState) -> dict:
-        _write_stream_event("status", self._status("generate", state))
+        _write_stream_event("status", self._status("generate"))
         generation_updates = await self._prepare_generation(state)
         working_state: AgentState = {**state, **generation_updates}
         verification_updates = await self._verify_generation_prompt(working_state)
@@ -784,101 +1054,9 @@ class RealCampusAgent:
                 generation_updates[key] = working_state[key]
         return generation_updates
 
-    async def _route_after_analyze(self, state: AgentState) -> str:
-        return "ask_origin" if self._should_ask_origin(state) else "retrieve"
-
-    async def _route_after_retrieve(self, state: AgentState) -> str:
-        # Follow-up retrieves go straight back to evaluate (pre-FR-33 behavior);
-        # only the initial retrieve is followed by the lexical search arm.
-        return "search" if state.get("retrieval_rounds", 0) <= 1 else "evaluate"
-
-    async def _route_after_evaluate(self, state: AgentState) -> str:
-        if state.get("sufficient", True):
-            return "generate"
-        if (
-            state.get("grep_keywords")
-            and state.get("local_search_followups", 0) < MAX_LOCAL_SEARCH_FOLLOWUPS
-        ):
-            return "search"
-        if (
-            state.get("followup_retrieval_queries")
-            and state.get("retrieval_followups", 0) < MAX_RETRIEVAL_FOLLOWUPS
-            and self._has_unused_retrieval_queries(state)
-        ):
-            return "retrieve"
-        if self._should_run_web_search(state):
-            return "web_search"
-        return "generate"
-
     @staticmethod
-    def _status(step: Step, state: AgentState | None = None) -> dict:
-        current_state = state or {}
-        if step == "web_search" and current_state.get("web_search_rounds", 0) >= 2:
-            text = THIRD_WEB_SEARCH_STATUS_TEXT
-        elif step == "retrieve" and current_state.get("retrieve_executed"):
-            text = FOLLOWUP_STATUS_TEXTS["retrieve"]
-        elif step == "search" and current_state.get("search_rounds", 0) >= 1:
-            text = FOLLOWUP_STATUS_TEXTS["search"]
-        else:
-            web_rounds = current_state.get("web_search_rounds", 0)
-            text = FOLLOWUP_STATUS_TEXTS.get(step, STATUS_TEXTS[step]) if web_rounds >= 1 else STATUS_TEXTS[step]
-        return StatusPayload(step=step, text=text).model_dump()
-
-    def _build_analyze_messages(self, question: str, history: Sequence[dict]) -> list[dict[str, str]]:
-        messages = self._raw_analyze_messages(question, self._format_history(history))
-        if self._fits_prompt_budget(messages, ANALYZE_MAX_TOKENS):
-            return messages
-        return self._truncate_last_user_message(messages, ANALYZE_MAX_TOKENS)
-
-    @staticmethod
-    def _raw_analyze_messages(question: str, history_messages: Sequence[dict[str, str]]) -> list[dict[str, str]]:
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "あなたは秋田県立大学 本荘キャンパスの案内AI「APU-Navi」の検索計画担当です。"
-                    "質問と直近履歴から、学内ナレッジ検索に使う観点違いの検索クエリを2〜3本作ってください。"
-                    "質問中の固有名詞・専門用語・レアな語（研究室名・人名・制度名・建物名など）を言い換えず keywords に入れてください。"
-                    "加えて、質問が求める対象を表す中核名詞（出展、メンバー、学費、日程、部活など）を最大2語まで keywords に含めてください。"
-                    "keywords は合計最大6語です。助詞・動詞・先生・場所・方法のような漠然語は含めないでください。"
-                    "場所・行き方の質問（「〜はどこ」「〜への行き方」「どの部屋」）では、目的地の施設名・部屋番号（GI512、K321 のような英数字コード）・ゾーン名（G1ゾーン等）を言い換えずに keywords と retrieval_queries に含めてください。"
-                    "例: 「サイバーフィジカルシステム研究室では、どんな出展がありますか？」なら keywords は [\"サイバーフィジカルシステム研究室\", \"出展\"] です。"
-                    "出力はJSONのみで、形式は {\"retrieval_queries\": [\"...\", \"...\"], \"keywords\": [\"...\"], \"intent\": \"...\"} です。"
-                    "route.type は移動・到達の意図（「〜への行き方」「〜に行きたい」「〜へはどう行く」など）があれば \"route\"、場所そのものだけを尋ねている（「〜はどこ」「どの部屋」など）場合は \"place\"、どちらでもなければ null にしてください。出発地が分からなくても移動の意図があれば \"route\" です。"
-                    "route.origin は質問文または直近4ターン履歴から分かる場合のみユーザー表現のまま入れ、推測せず、分からない場合と place の場合は null にしてください。"
-                    "route.destination は経路または場所の対象が分かる場合のみユーザー表現のまま入れ、推測せず、分からない場合は null にしてください。"
-                    "上記JSON形式の末尾に、\"route\": {\"type\": \"route\" | \"place\" | null, \"origin\": \"...\" | null, \"destination\": \"...\" | null} を追加してください。"
-                ),
-            },
-        ]
-        messages.extend(history_messages)
-        messages.append({"role": "user", "content": f"質問:\n{question}"})
-        return messages
-
-    def _build_evaluate_messages(self, state: AgentState) -> list[dict[str, str]]:
-        messages, _ = self._build_budgeted_context_messages(
-            system_content=(
-                "あなたは秋田県立大学 本荘キャンパスの案内AI「APU-Navi」の根拠評価担当です。"
-                "来場者に具体的な回答（数字・固有名詞・手順）を返せるかを判定してください。"
-                "一般論しか言えない、重要な詳細が欠ける、根拠が曖昧な場合は insufficient としてください。"
-                "質問が特定の値（人名・数値・日時・場所・URL）を尋ねている場合、その値そのものがコンテキストに含まれていなければ、関連説明があっても必ず insufficient としてください。"
-                "出力はJSONのみで、形式は {\"sufficient\": true|false, \"missing\": \"...\", \"grep_keywords\": [\"...\"], \"retrieval_queries\": [\"...\", \"...\"], \"web_queries\": [\"...\", \"...\"]} です。"
-                "不足時、学内資料を全文検索すれば埋まりそうな固有名詞があれば grep_keywords に最大3語で返してください。"
-                "不足時、ベクトル検索の観点を変えれば埋まりそうなら retrieval_queries に既出と別観点の短いクエリを最大2件で返してください。"
-                "不足時のweb_queriesは、追加Web検索で使う短い日本語クエリにしてください。"
-                "web_queries は前回までと違う観点にしてください。"
-            ),
-            user_content_factory=lambda context: (
-                f"質問: {state['question']}\n\n"
-                f"現在のコンテキスト:\n{context}\n\n"
-                f"{self._format_search_note(state)}"
-            ),
-            knowledge_results=state.get("knowledge_results") or [],
-            web_results=state.get("web_results") or [],
-            max_tokens=EVALUATE_MAX_TOKENS,
-            context_mode="evaluate",
-        )
-        return messages
+    def _status(step: Step) -> dict:
+        return StatusPayload(step=step, text=STATUS_TEXTS[step]).model_dump()
 
     def _build_generation_messages(self, state: AgentState) -> list[dict[str, str]]:
         messages, _ = self._build_generation_messages_with_sources(state)
@@ -1189,16 +1367,6 @@ class RealCampusAgent:
             if content:
                 formatted.append({"role": role, "content": content[:max_chars]})
         return formatted
-
-    @staticmethod
-    def _format_history_for_prompt(history: Sequence[dict]) -> str:
-        lines: list[str] = []
-        for message in history[-MAX_HISTORY_MESSAGES:]:
-            role = message.get("role")
-            content = str(message.get("content", "")).strip()
-            if role in {"user", "assistant"} and content:
-                lines.append(f"{role}: {content[:MAX_HISTORY_CHARS]}")
-        return "\n".join(lines) if lines else "なし"
 
     def _assemble_context_with_budget(
         self,
@@ -1544,110 +1712,24 @@ class RealCampusAgent:
         }
         trace_logger.info(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
 
-    async def _search_web_round(
-        self,
-        *,
-        state: AgentState,
-        round_number: int,
-        existing_urls: set[str],
-    ) -> _WebRoundOutcome:
-        results: list[WebSearchResult] = []
-        seen_urls = set(existing_urls)
-        executed_queries: list[str] = []
-        executed_query_keys: list[str] = []
-        used_query_keys = set(state.get("used_web_query_keys") or [])
-        queries = self._build_web_round_queries(state, round_number, reformulated=False)
-        first_execution = await self._execute_web_queries(
-            queries=queries,
-            round_number=round_number,
-            seen_urls=seen_urls,
-            used_query_keys=used_query_keys,
-            executed_queries=executed_queries,
-            executed_query_keys=executed_query_keys,
-        )
-        results.extend(first_execution.results)
-
-        if first_execution.raw_result_count == 0:
-            reformulated_queries = self._build_web_round_queries(state, round_number, reformulated=True)
-            reformulated_execution = await self._execute_web_queries(
-                queries=reformulated_queries,
-                round_number=round_number,
-                seen_urls=seen_urls,
-                used_query_keys=used_query_keys,
-                executed_queries=executed_queries,
-                executed_query_keys=executed_query_keys,
-                force_unrestricted=True,
-            )
-            results.extend(reformulated_execution.results)
-
-        return _WebRoundOutcome(
-            candidates=results[:MAX_WEB_RESULTS_PER_ROUND],
-            executed_queries=executed_queries,
-            executed_query_keys=executed_query_keys,
-        )
-
-    async def _execute_web_queries(
-        self,
-        *,
-        queries: Sequence[str],
-        round_number: int,
-        seen_urls: set[str],
-        used_query_keys: set[str],
-        executed_queries: list[str],
-        executed_query_keys: list[str],
-        force_unrestricted: bool = False,
-    ) -> _WebExecutionOutcome:
-        results: list[WebSearchResult] = []
-        raw_result_count = 0
-        for query in queries:
-            if len(results) >= MAX_WEB_RESULTS_PER_ROUND:
-                break
-            search_query = self._format_web_search_query(
-                query,
-                round_number=round_number,
-                force_unrestricted=force_unrestricted,
-            )
-            include_domains = (
-                [OFFICIAL_SEARCH_DOMAIN]
-                if round_number == 1 and not force_unrestricted
-                else None
-            )
-            query_key = self._web_query_key(search_query, include_domains=include_domains)
-            if query_key in used_query_keys:
-                continue
-            used_query_keys.add(query_key)
-            executed_queries.append(search_query)
-            executed_query_keys.append(query_key)
-            rows = await self.search_provider.search(
-                search_query,
-                max_results=MAX_WEB_RESULTS_PER_ROUND - len(results),
-                include_domains=include_domains,
-            )
-            raw_result_count += len(rows)
-            for result in rows:
-                if result.url in seen_urls:
-                    continue
-                seen_urls.add(result.url)
-                results.append(result)
-                if len(results) >= MAX_WEB_RESULTS_PER_ROUND:
-                    break
-        return _WebExecutionOutcome(results=results, raw_result_count=raw_result_count)
-
     async def _fetch_search_results(
         self,
         results: Sequence[WebSearchResult],
         *,
         keywords: Sequence[str],
+        fetch_missing: bool = True,
     ) -> list[WebSearchResult]:
         fetched: list[WebSearchResult] = []
         for result in results:
             if result.text.strip():
                 text = self._focus_page_text(result.text, keywords)
-            else:
+            elif fetch_missing:
                 try:
                     text = await self._fetch_page_text(result.url, keywords=keywords)
                 except Exception:
                     continue
+            else:
+                text = result.snippet.strip()
             if not text:
                 continue
             fetched.append(
@@ -1680,60 +1762,7 @@ class RealCampusAgent:
         for tag in soup(["script", "style", "nav"]):
             tag.decompose()
         root = soup.find("main") or soup.body or soup
-        text = " ".join(root.get_text(" ", strip=True).split())
-        return text
-
-    def _build_web_round_queries(
-        self,
-        state: AgentState,
-        round_number: int,
-        *,
-        reformulated: bool,
-    ) -> list[str]:
-        base_queries = state.get("web_queries") or [state["question"]]
-        if round_number == 3:
-            queries = self._entity_variant_web_queries(state)
-            queries.extend(base_queries)
-        else:
-            queries = list(base_queries)
-
-        if round_number >= 2:
-            queries = [self._ensure_university_name(query) for query in queries]
-
-        if reformulated:
-            variant_queries = [
-                self._ensure_university_name(keyword)
-                for keyword in generate_keyword_variants(self._web_focus_keywords(state))
-            ]
-            queries.extend(variant_queries)
-
-        return self._merge_strings([], queries)
-
-    @staticmethod
-    def _format_web_search_query(
-        query: str,
-        *,
-        round_number: int,
-        force_unrestricted: bool = False,
-    ) -> str:
-        return query.strip()
-
-    @staticmethod
-    def _ensure_university_name(query: str) -> str:
-        query = query.strip()
-        if "秋田県立大学" in query:
-            return query
-        return f"{query} 秋田県立大学".strip()
-
-    def _entity_variant_web_queries(self, state: AgentState) -> list[str]:
-        queries: list[str] = []
-        for keyword in self._unresolved_keywords(state):
-            queries.append(f"{keyword} 秋田県立大学")
-            stripped = strip_keyword_suffix(keyword)
-            if stripped and normalize_text(stripped) != normalize_text(keyword):
-                queries.append(f"{stripped} 秋田県立大学 教員")
-        return self._merge_strings([], queries)
-
+        return " ".join(root.get_text(" ", strip=True).split())
     def _prioritize_search_results(
         self,
         results: Sequence[WebSearchResult],
@@ -1820,111 +1849,6 @@ class RealCampusAgent:
         base_keywords = RealCampusAgent._merge_strings([], keywords)
         return RealCampusAgent._merge_strings(base_keywords, generate_keyword_variants(base_keywords))
 
-    def _web_focus_keywords(self, state: AgentState) -> list[str]:
-        keywords: list[str] = []
-        keywords.extend(state.get("keywords") or [])
-        keywords.extend(state.get("grep_keywords") or [])
-        if not keywords:
-            keywords.append(state["question"])
-        return self._merge_strings([], keywords)
-
-    def _retrieval_queries_for_round(
-        self,
-        state: AgentState,
-        queries: Sequence[str] | None,
-    ) -> list[str]:
-        if queries is not None:
-            return self._merge_strings([], queries)
-        if state.get("retrieve_executed") and state.get("followup_retrieval_queries"):
-            return self._merge_strings([], state.get("followup_retrieval_queries") or [])
-        return self._merge_strings([], state.get("retrieval_queries") or [state["question"]])
-
-    def _unused_retrieval_queries(
-        self,
-        state: AgentState,
-        queries: Sequence[str],
-    ) -> list[str]:
-        used_keys = set(state.get("used_retrieval_queries") or [])
-        unused: list[str] = []
-        for query in queries:
-            key = self._retrieval_query_key(query)
-            if not key or key in used_keys:
-                continue
-            used_keys.add(key)
-            unused.append(query)
-        return unused
-
-    def _has_unused_retrieval_queries(self, state: AgentState) -> bool:
-        return bool(
-            self._unused_retrieval_queries(
-                state,
-                self._retrieval_queries_for_round(state, state.get("followup_retrieval_queries") or []),
-            )
-        )
-
-    @staticmethod
-    def _retrieval_query_key(query: str) -> str:
-        return normalize_text(" ".join(str(query).split()))
-
-    @staticmethod
-    def _web_query_key(query: str, *, include_domains: Sequence[str] | None) -> str:
-        normalized_query = normalize_text(" ".join(str(query).split()))
-        domain_limited = "1" if include_domains else "0"
-        return f"{normalized_query}\t{domain_limited}"
-
-    @staticmethod
-    def _dedupe_keys(values: Sequence[str]) -> list[str]:
-        deduped: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            if not value or value in seen:
-                continue
-            seen.add(value)
-            deduped.append(value)
-        return deduped
-
-    def _search_keywords(self, state: AgentState, keywords: Sequence[str] | None) -> list[str]:
-        search_keywords = list(keywords or [])
-        if keywords is None and state.get("search_rounds", 0) >= 1:
-            search_keywords = list(state.get("grep_keywords") or [])
-        if not search_keywords:
-            search_keywords = list(state.get("keywords") or [])
-        if not search_keywords:
-            search_keywords = [state["question"]]
-        return self._merge_strings([], search_keywords)
-
-    def _should_run_web_search(self, state: AgentState) -> bool:
-        if not getattr(self.search_provider, "available", True):
-            return False
-        rounds = state.get("web_search_rounds", 0)
-        if rounds < MIN_WEB_ROUNDS_BEFORE_GIVE_UP:
-            return True
-        if rounds < MAX_WEB_SEARCH_ROUNDS and self._unresolved_keywords(state):
-            return True
-        return False
-
-    def _unresolved_keywords(self, state: AgentState) -> list[str]:
-        keywords = state.get("keywords") or []
-        if not keywords:
-            return []
-        haystack = normalize_text(
-            "\n".join(
-                [
-                    *(f"{chunk.title}\n{chunk.text}" for chunk in state.get("knowledge_results") or []),
-                    *(
-                        f"{result.title}\n{result.snippet}\n{result.text}"
-                        for result in state.get("web_results") or []
-                    ),
-                ]
-            )
-        )
-        unresolved: list[str] = []
-        for keyword in keywords:
-            terms = self._keyword_terms_with_variants([keyword])
-            if not any(normalize_text(term) in haystack for term in terms):
-                unresolved.append(keyword)
-        return unresolved
-
     @staticmethod
     def _merge_strings(existing: Sequence[str], additions: Sequence[str]) -> list[str]:
         merged: list[str] = []
@@ -1939,6 +1863,17 @@ class RealCampusAgent:
             seen.add(key)
             merged.append(item)
         return merged
+
+    @staticmethod
+    def _dedupe_keys(values: Sequence[str]) -> list[str]:
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
 
     def _merge_and_expand_knowledge_results(
         self,
@@ -2121,45 +2056,16 @@ class RealCampusAgent:
 
         return expansion_groups
 
-    def _format_search_note(self, state: AgentState) -> str:
-        if not state.get("search_executed"):
-            return "全文検索: 未実行"
-        terms = "、".join(state.get("search_terms") or [])
-        if state.get("search_hit_count", 0) > 0:
-            return f"全文検索: キーワード「{terms}」でヒットあり"
-        variant_terms = "、".join(state.get("search_variant_terms") or [])
-        if variant_terms:
-            return f"全文検索: キーワード「{terms}」、変種「{variant_terms}」でヒットなし"
-        return f"全文検索: キーワード「{terms}」でヒットなし"
-
     def _generation_investigation_log_line(self, state: AgentState) -> str:
-        if not self._give_up_gate_satisfied(state):
+        log = state.get("actions_log") or []
+        if not log:
             return ""
-        log_line = self._build_investigation_log(state)
-        return f"{log_line}\n\n" if log_line else ""
-
-    def _give_up_gate_satisfied(self, state: AgentState) -> bool:
-        return (
-            not state.get("sufficient", True)
-            and state.get("retrieve_executed", False)
-            and state.get("search_executed", False)
-            and state.get("web_search_rounds", 0) >= MIN_WEB_ROUNDS_BEFORE_GIVE_UP
-        )
-
-    def _build_investigation_log(self, state: AgentState) -> str:
-        retrieval_count = state.get("retrieval_rounds", 0) or len(state.get("retrieval_queries") or [])
-        search_terms = "、".join(state.get("search_terms") or [])
-        variant_terms = "、".join(state.get("search_variant_terms") or [])
-        web_queries = "、".join(state.get("used_web_queries") or [])
-        search_detail = f"全文検索(キーワード: {search_terms or 'なし'}"
-        if variant_terms:
-            search_detail += f" / 変種: {variant_terms}"
-        search_detail += ")"
-        return (
-            f"調査ログ: 学内ナレッジ検索{retrieval_count}回・{search_detail}・"
-            f"Web検索{state.get('web_search_rounds', 0)}回(クエリ: {web_queries or 'なし'})"
-        )
-
+        details = [
+            f"{item.get('action')}: {item.get('result')}"
+            for item in log
+            if item.get("action") not in {"finish", "ask_user"}
+        ]
+        return f"調査ログ: {' / '.join(details)}\n\n" if details else ""
     @staticmethod
     def _dedupe_web_results(results: Sequence[WebSearchResult]) -> list[WebSearchResult]:
         deduped: list[WebSearchResult] = []
@@ -2187,42 +2093,6 @@ class RealCampusAgent:
             if isinstance(value, dict):
                 return value
         return None
-
-    @staticmethod
-    def _normalize_queries(value: Any, *, fallback: Sequence[str], limit: int) -> list[str]:
-        raw_values: list[Any]
-        if isinstance(value, list):
-            raw_values = value
-        elif isinstance(value, str):
-            raw_values = [value]
-        else:
-            raw_values = list(fallback)
-
-        queries: list[str] = []
-        seen: set[str] = set()
-        for raw_value in raw_values:
-            query = str(raw_value).strip()
-            if not query or query in seen:
-                continue
-            seen.add(query)
-            queries.append(query)
-            if len(queries) >= limit:
-                break
-        if queries:
-            return queries
-        return [query for query in (str(item).strip() for item in fallback) if query][:limit]
-
-    @staticmethod
-    def _parse_bool(value: Any, *, default: bool) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"true", "yes", "1"}:
-                return True
-            if normalized in {"false", "no", "0"}:
-                return False
-        return default
 
     def _is_below_relevance_floor(self, chunk: KnowledgeChunk) -> bool:
         return chunk.score is not None and chunk.score < self.min_relevance_score

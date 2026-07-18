@@ -63,6 +63,14 @@ class ResolvedLocation:
 
 
 @dataclass(frozen=True)
+class ResolvedLocationMatch:
+    start: int
+    end: int
+    expression: str
+    location: ResolvedLocation
+
+
+@dataclass(frozen=True)
 class CampusRoute:
     nodes: tuple[str, ...]
     edges: tuple[str, ...]
@@ -173,6 +181,62 @@ def resolve_location(expression: str | None) -> ResolvedLocation | None:
             resolved_name=place_name,
         )
     return None
+
+
+def find_locations_in_text(text: str | None) -> list[ResolvedLocationMatch]:
+    """Find known campus locations in free text without fuzzy inference."""
+    if not isinstance(text, str) or not text.strip():
+        return []
+    normalized = normalize_text(text)
+    candidates: list[tuple[int, int, str]] = []
+    for original in [
+        *_LOCATION_DATA["rooms"],
+        *_LOCATION_DATA["aliases"],
+        *_LOCATION_DATA["places"],
+    ]:
+        key = normalize_text(original)
+        if not key:
+            continue
+        start = 0
+        while True:
+            position = normalized.find(key, start)
+            if position < 0:
+                break
+            end = position + len(key)
+            if len(key) > 1 or _is_standalone_ascii_alias(normalized, position, end):
+                candidates.append((position, end, original))
+            start = position + max(len(key), 1)
+
+    selected: list[tuple[int, int, str]] = []
+    for start, end, original in sorted(
+        candidates,
+        key=lambda item: (item[0], -(item[1] - item[0]), item[2]),
+    ):
+        if any(start < chosen_end and end > chosen_start for chosen_start, chosen_end, _ in selected):
+            continue
+        selected.append((start, end, original))
+
+    matches: list[ResolvedLocationMatch] = []
+    for start, end, original in sorted(selected):
+        location = resolve_location(original)
+        if location is not None:
+            matches.append(
+                ResolvedLocationMatch(
+                    start=start,
+                    end=end,
+                    expression=original,
+                    location=location,
+                )
+            )
+    return matches
+
+
+def _is_standalone_ascii_alias(text: str, start: int, end: int) -> bool:
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+    return not (before.isascii() and before.isalnum()) and not (
+        after.isascii() and after.isalnum()
+    )
 
 
 def _location_candidate_keys(expression: str) -> list[str]:
