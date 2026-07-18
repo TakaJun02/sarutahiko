@@ -1,6 +1,7 @@
 # アーキテクチャ / 技術選定
 
-- 版: v0.6（2026-07-18, Fable 改訂 — **FR-35 生成 LLM の本番既定を 31B PP=2 へ切替**（利用者指示）。①backend を `network_mode: host` 化し `VLLM_BASE_URL=http://127.0.0.1:8000/v1` に統一 — PP=2（ホスト直）でも 12B（compose vllm の 127.0.0.1:8000 公開）でも**同一 URL** になり、切り戻しは「どちらのサーバーを立てるか＋`LLM_MODEL`」だけで済む ②compose backend の `depends_on` から vllm を除去（12B は明示起動時のみ）③`serve-31b.sh` をデタッチ起動・start/stop/status/logs 化・`max-num-seqs 8`。切替・切り戻し手順は `docs/PP2_MULTINODE_GUIDE.md` §6-9）
+- 版: v0.7（2026-07-18, Fable 改訂 — **FR-36 探索思考のライブステータス**（利用者指示・`docs/AGENT_STATUS_STREAMING.md`）。decide / navigator の LLM 判断をストリーミング化し、生成途中の thought を `status.partial: true` で逐次配信（§3 SSE に additive フィールド追加）。待ち時間主因の実測（decide 3.3〜5.1 秒/回）と guided JSON ストリーミングの成立検証も同文書に記録）
+- v0.6（2026-07-18, Fable 改訂 — **FR-35 生成 LLM の本番既定を 31B PP=2 へ切替**（利用者指示）。①backend を `network_mode: host` 化し `VLLM_BASE_URL=http://127.0.0.1:8000/v1` に統一 — PP=2（ホスト直）でも 12B（compose vllm の 127.0.0.1:8000 公開）でも**同一 URL** になり、切り戻しは「どちらのサーバーを立てるか＋`LLM_MODEL`」だけで済む ②compose backend の `depends_on` から vllm を除去（12B は明示起動時のみ）③`serve-31b.sh` をデタッチ起動・start/stop/status/logs 化・`max-num-seqs 8`。切替・切り戻し手順は `docs/PP2_MULTINODE_GUIDE.md` §6-9）
 - v0.5（2026-07-18, Fable 改訂 — **FR-34 ハーネス v6 ReAct 化**。①エージェント制御を decide ループ＋ツールへ刷新（`docs/AGENT_REACT.md` v1.0・`docs/AGENT_ARCHITECTURE.md` v2.0）②生成 LLM の **31B 復帰を PP=2（本機+nubia）で検証完了**（PoC・実 LLM E2E 全合格。原理と構築: `docs/PP2_MULTINODE_GUIDE.md`）。**本番既定はまだ 12B 単機**（PP=2 への切替はエンドポイント差し替えのみ・運用判断待ち）③コンテキスト窓 env を `VLLM_MAX_MODEL_LEN` に改名（旧 `LLM_CONTEXT_WINDOW` フォールバックあり））
 - v0.4（2026-07-13, Fable 改訂 — ブラッシュアップ対応。①スレッド一覧/名前変更/削除 API を追加（FR-7）②登録 API から属性 `role` を削除（FR-6 改訂・users テーブルは rebuild マイグレーション）③時間コンテキスト注入を新設（FR-8, §7））
 - v0.3（2026-07-12, Fable 改訂 — **利用者指示によるモデル構成変更**。①埋め込みを bge-m3(CPU) → **Qwen/Qwen3-Embedding-8B（第2GPUサーバー・vLLM serve）** に変更。②生成 LLM を Gemma4-31B → **より小パラメータの Gemma 4**（同時利用者数とコンテキスト長を優先）に変更。ハーネス v5 と同時）
@@ -93,7 +94,8 @@ GET    /api/health          ヘルスチェック（vLLM/Qdrant 疎通含む）
 ```
 event: status
 data: {"step": "analyze" | "retrieve" | "search" | "web_search" | "evaluate" | "generate",
-       "text": "学内ナレッジを検索しています…"}
+       "text": "学内ナレッジを検索しています…",
+       "partial": true | false}   // FR-36。true = 進行中思考の伸長断片（フェードなしで書き換え）
 
 event: token
 data: {"text": "秋田県立"}
@@ -115,6 +117,8 @@ data: {"message": "..."}
 ```
 
 - `status` は各ステップ開始時に必ず送る（FR-2）。`text` は日本語の短文で、フロントはそのまま表示する。
+  FR-36 で decide / navigator の思考中は `partial: true` の伸長系列（同一 step・text が単調伸長）を
+  逐次送り、確定時に `partial: false` で全文を送る（詳細: `docs/AGENT_STATUS_STREAMING.md` §2〜4）。
 - `token` 受信開始でフロントはローディング演出を終了し、本文の逐次描画に切り替える。
   表示は FR-25 の「なめらか文字送り」でペーシングする（`docs/RELEASE_PREP.md` §14。frontend のみの
   変更で、SSE スキーマ・backend は不変）。

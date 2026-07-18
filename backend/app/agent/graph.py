@@ -21,6 +21,7 @@ from app.agent.navigator import (
     LOCATION_INDEX_SOURCE,
     CampusNavigator,
 )
+from app.agent.thought_stream import THOUGHT_MARKERS, THOUGHT_TEXT_LIMIT, ThoughtStreamExtractor
 from app.models.auth import User
 from app.models.chat import DonePayload, MapPayload, Source, StatusPayload, TokenPayload
 from app.rag.lexical import generate_keyword_variants, normalize_text
@@ -193,6 +194,15 @@ class _KnowledgeMergeOutcome:
     expanded_chunk_ids: list[str]
 
 
+@dataclass
+class _ContextMeasurementCache:
+    base_tokens: int | None = None
+    base_actual: bool = False
+    evidence_tokens: int | None = None
+    evidence_actual: bool = False
+    evidence_has_text: bool = False
+
+
 class RealCampusAgent:
     def __init__(
         self,
@@ -319,28 +329,54 @@ class RealCampusAgent:
 
     async def _decide(self, state: AgentState) -> dict:
         decision_count = state.get("decision_count", 0)
+        decision_step: Literal["analyze", "evaluate"] = (
+            "analyze" if decision_count == 0 else "evaluate"
+        )
         if decision_count == 0:
             _write_stream_event("status", self._status("analyze"))
 
+        measurement_cache = _ContextMeasurementCache()
         preliminary_actions = self._available_actions(state, force_finish=False)
         preliminary_messages = self._build_decide_messages(
             state,
             preliminary_actions,
             state.get("context_usage") or {},
         )
-        usage = await self._measure_context_usage(state, preliminary_messages)
+        usage = await self._measure_context_usage(
+            state,
+            preliminary_messages,
+            measurement_cache=measurement_cache,
+        )
         force_finish = bool(usage["hard_exceeded"] or usage["evidence_full"])
         actions = self._available_actions(state, force_finish=force_finish)
         messages = self._build_decide_messages(state, actions, usage)
-        usage = await self._measure_context_usage(state, messages)
+        usage = await self._measure_context_usage(
+            state,
+            messages,
+            measurement_cache=measurement_cache,
+        )
 
         parse_error: str | None = None
         try:
-            raw_output = await self.llm_client.decide(
+            extractor = ThoughtStreamExtractor()
+            raw_parts: list[str] = []
+            async for fragment in self.llm_client.decide_stream(
                 messages,
                 self._decision_schema(actions),
-            )
-            payload = self._parse_json_object(raw_output) if not isinstance(raw_output, dict) else raw_output
+            ):
+                raw_parts.append(fragment)
+                partial_thought = extractor.feed(fragment)
+                if partial_thought is not None:
+                    _write_stream_event(
+                        "status",
+                        StatusPayload(
+                            step=decision_step,
+                            text=f"{partial_thought}…",
+                            partial=True,
+                        ).model_dump(),
+                    )
+            raw_output = "".join(raw_parts)
+            payload = self._parse_json_object(raw_output)
         except Exception as exc:
             logger.warning("Decide transport failed: %s", exc.__class__.__name__)
             payload = None
@@ -391,11 +427,10 @@ class RealCampusAgent:
                 }
             )
 
-        if decision_count > 0:
-            _write_stream_event(
-                "status",
-                StatusPayload(step="evaluate", text=thought).model_dump(),
-            )
+        _write_stream_event(
+            "status",
+            StatusPayload(step=decision_step, text=thought).model_dump(),
+        )
 
         self._trace(
             "decide",
@@ -593,10 +628,10 @@ class RealCampusAgent:
             StatusPayload(step="analyze", text="キャンパスマップで経路を調べています…").model_dump(),
         )
 
-        def write_internal_status(text: str) -> None:
+        def write_internal_status(text: str, partial: bool) -> None:
             _write_stream_event(
                 "status",
-                StatusPayload(step="analyze", text=text).model_dump(),
+                StatusPayload(step="analyze", text=text, partial=partial).model_dump(),
             )
 
         try:
@@ -817,20 +852,31 @@ class RealCampusAgent:
         self,
         state: AgentState,
         decide_messages: Sequence[dict[str, str]],
+        *,
+        measurement_cache: _ContextMeasurementCache | None = None,
     ) -> dict[str, Any]:
         decide_text = "\n\n".join(message.get("content", "") for message in decide_messages)
         tokens, actual = await self._count_text_tokens(decide_text)
 
-        full_context = self._assemble_context_with_budget(
-            state.get("knowledge_results") or [],
-            state.get("web_results") or [],
-            mode="generate",
-            token_budget=None,
-        )
-        base_messages, _ = self._build_generation_messages_with_sources(state, token_budget=0)
-        base_text = "\n\n".join(message.get("content", "") for message in base_messages)
-        base_tokens, base_actual = await self._count_text_tokens(base_text)
-        evidence_tokens, evidence_actual = await self._count_text_tokens(full_context.text)
+        cache = measurement_cache or _ContextMeasurementCache()
+        if cache.base_tokens is None or cache.evidence_tokens is None:
+            full_context = self._assemble_context_with_budget(
+                state.get("knowledge_results") or [],
+                state.get("web_results") or [],
+                mode="generate",
+                token_budget=None,
+            )
+            base_messages, _ = self._build_generation_messages_with_sources(state, token_budget=0)
+            base_text = "\n\n".join(message.get("content", "") for message in base_messages)
+            cache.base_tokens, cache.base_actual = await self._count_text_tokens(base_text)
+            cache.evidence_tokens, cache.evidence_actual = await self._count_text_tokens(
+                full_context.text
+            )
+            cache.evidence_has_text = bool(full_context.text)
+        base_tokens = cache.base_tokens
+        evidence_tokens = cache.evidence_tokens
+        assert base_tokens is not None
+        assert evidence_tokens is not None
         evidence_budget = max(self._available_generation_prompt_tokens() - base_tokens, 0)
         ratio = tokens / self.llm_context_window if self.llm_context_window > 0 else 1.0
         return {
@@ -841,10 +887,10 @@ class RealCampusAgent:
             "soft_exceeded": ratio >= SOFT_CONTEXT_RATIO,
             "hard_exceeded": ratio >= HARD_CONTEXT_RATIO,
             "evidence_tokens": evidence_tokens,
-            "evidence_actual": evidence_actual,
-            "generation_base_actual": base_actual,
+            "evidence_actual": cache.evidence_actual,
+            "generation_base_actual": cache.base_actual,
             "generation_evidence_budget": evidence_budget,
-            "evidence_full": bool(full_context.text) and evidence_tokens >= evidence_budget,
+            "evidence_full": cache.evidence_has_text and evidence_tokens >= evidence_budget,
         }
 
     async def _count_text_tokens(self, text: str) -> tuple[int, bool]:
@@ -861,15 +907,10 @@ class RealCampusAgent:
     @staticmethod
     def _sanitize_thought(value: Any) -> str:
         text = " ".join(str(value or "").split())
-        if (
-            not text
-            or len(text) > 120
-            or any(
-                marker in text
-                for marker in ("{", "}", chr(96) * 3, "action_input", "システムプロンプト")
-            )
-        ):
+        if not text or any(marker in text for marker in THOUGHT_MARKERS):
             return STATUS_TEXTS["evaluate"]
+        if len(text) > THOUGHT_TEXT_LIMIT:
+            return f"{text[:THOUGHT_TEXT_LIMIT]}…"
         return text
 
     def _compact_observation(self, text: str) -> str:

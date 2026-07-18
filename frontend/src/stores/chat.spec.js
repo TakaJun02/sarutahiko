@@ -45,14 +45,62 @@ describe('chat store SSE helpers', () => {
   })
 
   it('parses documented SSE event blocks', () => {
-    const parsed = parseSseBlock('event: status\ndata: {"step":"analyze","text":"質問を分析しています…"}')
+    const parsed = parseSseBlock('event: status\ndata: {"step":"analyze","text":"質問を分析しています…","partial":false}')
     expect(parsed).toEqual({
       event: 'status',
       data: {
         step: 'analyze',
         text: '質問を分析しています…',
+        partial: false,
       },
     })
+  })
+
+  it('initializes status streaming metadata', () => {
+    const message = createMessage('assistant')
+
+    expect(message.statusPartial).toBe(false)
+    expect(message.statusRunId).toBe(0)
+  })
+
+  it('keeps one run id for partial growth and finalization, then increments on switches', () => {
+    const message = createMessage('assistant', '', {
+      statusText: 'ご質問を読み解いています…',
+      statusStep: 'analyze',
+      statusRunId: 3,
+    })
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: { step: 'analyze', text: '学内資料を確認…', partial: true },
+    })
+    expect(message.statusRunId).toBe(4)
+    expect(message.statusPartial).toBe(true)
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: { step: 'analyze', text: '学内資料を確認しています…', partial: true },
+    })
+    expect(message.statusRunId).toBe(4)
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: { step: 'analyze', text: '学内資料を確認しています', partial: false },
+    })
+    expect(message.statusRunId).toBe(4)
+    expect(message.statusPartial).toBe(false)
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: { step: 'retrieve', text: '学内資料を確認しています…', partial: false },
+    })
+    expect(message.statusRunId).toBe(5)
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: { step: 'retrieve', text: '別の資料を探しています…', partial: false },
+    })
+    expect(message.statusRunId).toBe(6)
   })
 
   it('switches from pending status to streamed tokens and defers done metadata', () => {
@@ -70,6 +118,8 @@ describe('chat store SSE helpers', () => {
     expect(message.pending).toBe(true)
     expect(message.statusText).toBe('学内ナレッジを検索しています…')
     expect(message.statusStep).toBe('retrieve')
+    expect(message.statusPartial).toBe(false)
+    expect(message.statusRunId).toBe(1)
 
     applyAssistantEvent(message, {
       event: 'token',

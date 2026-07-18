@@ -53,18 +53,20 @@ class FakeLLMClient:
         self.stream_calls: list[dict] = []
         self.count_token_texts: list[str] = []
 
-    async def decide(self, messages, schema) -> str:
+    async def decide_stream(self, messages, schema):
         self.decide_calls.append({"messages": messages, "schema": schema})
         if self.completions:
-            return self.completions.pop(0)
-        return json.dumps(
-            {
-                "thought": "根拠を確認しました。",
-                "action": "finish",
-                "action_input": {"reason": "完了"},
-            },
-            ensure_ascii=False,
-        )
+            completion = self.completions.pop(0)
+        else:
+            completion = json.dumps(
+                {
+                    "thought": "根拠を確認しました。",
+                    "action": "finish",
+                    "action_input": {"reason": "完了"},
+                },
+                ensure_ascii=False,
+            )
+        yield completion
 
     async def count_tokens(self, text: str) -> int | None:
         self.count_token_texts.append(text)
@@ -621,6 +623,139 @@ async def test_invalid_action_input_is_observed_without_execution() -> None:
     assert "1〜3" in result["observations"][-1]
 
 
+@pytest.mark.parametrize(
+    ("decision_count", "expected_step"),
+    [(0, "analyze"), (1, "evaluate")],
+)
+async def test_decide_streams_monotonic_partial_series_and_final_status(
+    monkeypatch,
+    decision_count: int,
+    expected_step: str,
+) -> None:
+    class CharacterStreamingLLM(FakeLLMClient):
+        async def decide_stream(self, messages, schema):
+            self.decide_calls.append({"messages": messages, "schema": schema})
+            completion = self.completions.pop(0)
+            for char in completion:
+                yield char
+
+    llm = CharacterStreamingLLM(
+        completions=[
+            _decision(
+                "retrieve",
+                {"queries": ["食堂"]},
+                "学内資料から食堂の場所を確認します。",
+            )
+        ]
+    )
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "app.agent.graph._write_stream_event",
+        lambda event, data: events.append((event, data)),
+    )
+
+    await _agent(llm=llm)._decide(
+        {
+            "question": "食堂はどこ",
+            "history": [],
+            "knowledge_results": [],
+            "web_results": [],
+            "decision_count": decision_count,
+            "actions_log": [],
+            "action_keys": [],
+            "observations": [],
+            "tool_executions": decision_count,
+        }
+    )
+
+    partials = [data for _, data in events if data["partial"]]
+    final = [data for _, data in events if not data["partial"]][-1]
+    assert len(partials) > 1
+    assert all(payload["step"] == expected_step for payload in partials)
+    assert all(
+        later["text"].removesuffix("…").startswith(earlier["text"].removesuffix("…"))
+        for earlier, later in zip(partials, partials[1:])
+    )
+    assert final == {
+        "step": expected_step,
+        "text": "学内資料から食堂の場所を確認します。",
+        "partial": False,
+    }
+
+
+async def test_decide_transport_failure_replaces_partial_with_final_fallback_status(
+    monkeypatch,
+) -> None:
+    class FailingDecisionStreamLLM(FakeLLMClient):
+        async def decide_stream(self, messages, schema):
+            self.decide_calls.append({"messages": messages, "schema": schema})
+            yield '{"thought":"途中まで確認'
+            raise RuntimeError("transport failed")
+
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "app.agent.graph._write_stream_event",
+        lambda event, data: events.append((event, data)),
+    )
+
+    result = await _agent(llm=FailingDecisionStreamLLM())._decide(
+        {
+            "question": "食堂はどこ",
+            "history": [],
+            "knowledge_results": [],
+            "web_results": [],
+            "decision_count": 1,
+            "actions_log": [],
+            "action_keys": [],
+            "observations": [],
+            "tool_executions": 1,
+        }
+    )
+
+    statuses = [data for event, data in events if event == "status"]
+    assert statuses[0]["partial"] is True
+    assert statuses[-1] == {
+        "step": "evaluate",
+        "text": "判断形式を整え、探索を安全に続けます。",
+        "partial": False,
+    }
+    assert result["action"] == "finish"
+
+
+async def test_decide_validation_error_still_emits_final_status(monkeypatch) -> None:
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "app.agent.graph._write_stream_event",
+        lambda event, data: events.append((event, data)),
+    )
+    llm = FakeLLMClient(
+        completions=[
+            _decision("retrieve", {"queries": []}, "検索条件を確認します。")
+        ]
+    )
+
+    result = await _agent(llm=llm)._decide(
+        {
+            "question": "質問",
+            "history": [],
+            "knowledge_results": [],
+            "web_results": [],
+            "decision_count": 0,
+            "actions_log": [],
+            "action_keys": [],
+            "observations": [],
+            "tool_executions": 0,
+        }
+    )
+
+    assert result["action"] == "decide"
+    assert [data for event, data in events if event == "status"][-1] == {
+        "step": "analyze",
+        "text": "検索条件を確認します。",
+        "partial": False,
+    }
+
+
 async def test_thought_sanitizer_rejects_internal_json() -> None:
     assert RealCampusAgent._sanitize_thought('{"action":"retrieve"}') == (
         "集めた情報をチェックしています…"
@@ -628,6 +763,12 @@ async def test_thought_sanitizer_rejects_internal_json() -> None:
     assert RealCampusAgent._sanitize_thought("資料の根拠を確認します。") == (
         "資料の根拠を確認します。"
     )
+
+
+async def test_thought_sanitizer_truncates_long_text() -> None:
+    thought = "長" * 121
+
+    assert RealCampusAgent._sanitize_thought(thought) == f'{"長" * 120}…'
 
 
 async def test_normal_retrieve_finish_stream_is_contract_compatible() -> None:
@@ -644,7 +785,26 @@ async def test_normal_retrieve_finish_stream_is_contract_compatible() -> None:
 
     event_names = [event for event, _ in events]
     status_steps = [data["step"] for event, data in events if event == "status"]
-    assert status_steps == ["analyze", "retrieve", "evaluate", "generate"]
+    assert status_steps == [
+        "analyze",
+        "analyze",
+        "analyze",
+        "retrieve",
+        "evaluate",
+        "evaluate",
+        "generate",
+    ]
+    status_payloads = [data for event, data in events if event == "status"]
+    assert all("partial" in payload for payload in status_payloads)
+    assert [payload["partial"] for payload in status_payloads] == [
+        False,
+        True,
+        False,
+        False,
+        True,
+        False,
+        False,
+    ]
     assert event_names[-1] == "done"
     assert "".join(data["text"] for event, data in events if event == "token") == "食堂です。"
     assert events[-1][1]["sources"] == [
@@ -1034,6 +1194,28 @@ async def test_navigator_ask_origin_validator_rejects_unresolved_destination() -
     assert all("目的地を特定できない" in item["observation"] for item in result["trace"])
 
 
+async def test_navigator_streams_partial_thoughts_through_extended_callback() -> None:
+    llm = FakeLLMClient(
+        completions=[
+            _decision("ask_origin", {"destination": "不明会場"}, "目的地を確認します。"),
+            _decision("ask_origin", {"destination": "不明会場"}, "別名も確認します。"),
+            _decision("ask_origin", {"destination": "不明会場"}, "解決可否を判断します。"),
+        ]
+    )
+    statuses: list[tuple[str, bool]] = []
+
+    await _agent(llm=llm).navigator.navigate(
+        request="不明会場への経路",
+        question="そこに行きたい",
+        history=[],
+        status_callback=lambda text, partial: statuses.append((text, partial)),
+    )
+
+    assert any(partial for _, partial in statuses)
+    assert all(text.endswith("…") for text, partial in statuses if partial)
+    assert statuses[0] == ("キャンパスマップで候補を確認しています…", False)
+
+
 async def test_ask_user_is_terminal_and_records_clarification_metadata() -> None:
     llm = FakeLLMClient(
         completions=[
@@ -1048,6 +1230,8 @@ async def test_ask_user_is_terminal_and_records_clarification_metadata() -> None
     events = await _collect(agent, "おすすめを教えて")
 
     assert [data["step"] for event, data in events if event == "status"] == [
+        "analyze",
+        "analyze",
         "analyze",
         "generate",
     ]
@@ -1124,6 +1308,36 @@ async def test_context_thresholds_are_ratios_of_effective_window() -> None:
         "finish",
         "ask_user",
     ]
+
+
+async def test_second_context_measurement_reuses_generation_base_and_evidence_tokens() -> None:
+    llm = FakeLLMClient(
+        completions=[_decision("retrieve", {"queries": ["食堂"]})]
+    )
+    agent = _agent(llm=llm)
+
+    result = await agent._decide(
+        {
+            "question": "食堂について教えて",
+            "history": [],
+            "knowledge_results": [_chunk()],
+            "web_results": [],
+            "decision_count": 0,
+            "actions_log": [],
+            "action_keys": [],
+            "observations": [],
+            "tool_executions": 0,
+        }
+    )
+
+    full_context = agent._assemble_context_with_budget(
+        [_chunk()],
+        [],
+        mode="generate",
+        token_budget=None,
+    )
+    assert len(llm.count_token_texts) == 4
+    assert result["context_usage"]["evidence_tokens"] == estimate_tokens(full_context.text)
 
 
 async def test_token_counter_falls_back_to_estimator() -> None:

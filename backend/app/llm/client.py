@@ -87,6 +87,31 @@ class VLLMClient:
         message = getattr(choices[0], "message", None)
         return getattr(message, "content", None) or ""
 
+    async def decide_stream(
+        self,
+        messages: Sequence[ChatMessage],
+        schema: dict[str, Any],
+    ) -> AsyncIterator[str]:
+        request = self._chat_request(
+            messages=messages,
+            stream=True,
+            temperature=0.2,
+            max_tokens=300,
+        )
+        request["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "react_decision", "schema": schema},
+        }
+        stream = await self._client.chat.completions.create(**request)
+        async for chunk in stream:
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            text = getattr(delta, "content", None)
+            if text:
+                yield text
+
     async def count_tokens(self, text: str) -> int | None:
         try:
             async with self._create_tokenize_http_client() as client:

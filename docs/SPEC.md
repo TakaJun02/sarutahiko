@@ -412,6 +412,16 @@
   `max-num-seqs 8`（NFR-1 の同時利用目標に一致）。
 - 起動・切り戻し runbook: `docs/PP2_MULTINODE_GUIDE.md` §6-9（技術選定の記録: `ARCHITECTURE.md` v0.6）。
 
+### FR-36 探索思考のライブステータス（2026-07-18 追加・利用者指示、詳細: `docs/AGENT_STATUS_STREAMING.md`）
+- 「質問を分析しています…」が長い問題の解消。実測で待ち時間の主因は decide の LLM 呼び出し
+  （1 回 3.3〜5.1 秒・深い探索で最大 12 回）であり、status がノード境界でしか変わらないことが原因。
+- decide（navigator 内部 decide 含む）を**ストリーミング化**し、生成途中の `thought` を
+  status イベントで逐次配信（打鍵風のライブ実況）。guided JSON が thought 先頭で逐次届くことは
+  本番 31B PP=2 で実測検証済み。
+- SSE 契約は additive 変更のみ: `status` に `partial: boolean` を追加（イベント種別・step 語彙不変）。
+  フロントは部分更新をフェードなしのその場書き換えで表示（LoadingSpinnerV5 のキー方式変更）。
+- `_sanitize_thought` の 120 字超過は全置換をやめ切り詰めに変更（実況の情報量を保つ）。
+
 ## 4. 非機能要件
 
 - **NFR-1**: LLM 推論はローカル GPU 群上の vLLM のみを使用し、外部 LLM API に依存しない

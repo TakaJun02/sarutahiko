@@ -41,6 +41,7 @@ class Source(BaseModel):
 class StatusPayload(BaseModel):
     step: Literal["analyze", "retrieve", "search", "web_search", "evaluate", "generate"]
     text: str
+    partial: bool = False
 
 
 class TokenPayload(BaseModel):

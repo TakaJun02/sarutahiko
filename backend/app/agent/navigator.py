@@ -13,6 +13,7 @@ from app.agent.campus_map import (
     find_locations_in_text,
     resolve_location,
 )
+from app.agent.thought_stream import ThoughtStreamExtractor
 from app.models.chat import Source
 
 NAVIGATOR_MAX_STEPS = 3
@@ -65,7 +66,7 @@ class CampusNavigator:
         request: str,
         question: str,
         history: Sequence[dict],
-        status_callback: Callable[[str], None] | None = None,
+        status_callback: Callable[[str, bool], None] | None = None,
     ) -> dict[str, Any]:
         known_origin, origin_from_history = self._known_origin(question, history)
         fast_result = self._fast_path(
@@ -86,7 +87,7 @@ class CampusNavigator:
         trace: list[dict[str, Any]] = []
         for _ in range(NAVIGATOR_MAX_STEPS):
             if status_callback is not None:
-                status_callback("キャンパスマップで候補を確認しています…")
+                status_callback("キャンパスマップで候補を確認しています…", False)
             messages = self._build_messages(
                 request=request,
                 question=question,
@@ -94,7 +95,17 @@ class CampusNavigator:
                 known_origin=resolved_origin,
                 observations=observations,
             )
-            raw = await self.llm_client.decide(messages, navigator_decision_schema())
+            extractor = ThoughtStreamExtractor()
+            raw_parts: list[str] = []
+            async for fragment in self.llm_client.decide_stream(
+                messages,
+                navigator_decision_schema(),
+            ):
+                raw_parts.append(fragment)
+                partial_thought = extractor.feed(fragment)
+                if partial_thought is not None and status_callback is not None:
+                    status_callback(f"{partial_thought}…", True)
+            raw = "".join(raw_parts)
             decision = self._parse_decision(raw)
             if decision is None:
                 observations.append("JSON 判断を解釈できませんでした。別の内部ツールを選んでください。")

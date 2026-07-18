@@ -19,6 +19,10 @@ const props = defineProps({
     type: String,
     default: 'generate',
   },
+  statusRunId: {
+    type: Number,
+    default: 0,
+  },
   mode: {
     type: String,
     default: 'pending',
@@ -121,7 +125,7 @@ const isPending = computed(() => props.mode === 'pending')
         Without this the leave never resolves and the text stays at opacity 0.
       -->
       <Transition name="aurora-ring-v5-status" mode="out-in" type="transition">
-        <p v-if="isPending" :key="displayText" class="aurora-ring-v5__status" aria-live="polite">
+        <p v-if="isPending" :key="props.statusRunId" class="aurora-ring-v5__status" aria-live="polite">
           {{ displayText }}
         </p>
       </Transition>
