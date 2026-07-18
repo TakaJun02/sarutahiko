@@ -130,15 +130,13 @@ describe('ChatView FR-25 smooth reveal', () => {
 
 describe('ChatView FR-27 origin selection flow', () => {
   it('locks every composer entry point and switches the placeholder', () => {
+    expect(normalizedSource).toContain("'マップから現在地を選んでください'")
+    expect(normalizedSource).toContain(':disabled="chat.isOriginSelectionPending || chat.isClarificationPending" @keydown.enter="onEnter"')
     expect(normalizedSource).toContain(
-      "chat.isOriginSelectionPending ? 'マップから現在地を選んでください' : '質問を入力'",
-    )
-    expect(normalizedSource).toContain(':disabled="chat.isOriginSelectionPending" @keydown.enter="onEnter"')
-    expect(normalizedSource).toContain(
-      ':disabled="!draft.trim() || chat.isSending || chat.isOriginSelectionPending"',
+      ':disabled="!draft.trim() || chat.isSending || chat.isOriginSelectionPending || chat.isClarificationPending"',
     )
     expect(normalizedSource).toContain(
-      ':disabled="chat.isOriginSelectionPending || chat.isSending"',
+      ':disabled="chat.isOriginSelectionPending || chat.isClarificationPending || chat.isSending"',
     )
     expect(normalizedSource).toContain(
       'event.preventDefault() if (chat.isOriginSelectionPending) { return }',
@@ -158,5 +156,41 @@ describe('ChatView FR-27 origin selection flow', () => {
     expect(normalizedSource).toContain('class="current-location-chip"')
     expect(normalizedSource).toContain('<small>現在地:</small>')
     expect(normalizedSource).toContain('{{ message.map.origin?.label }}')
+  })
+})
+
+describe('ChatView FR-39 clarification form', () => {
+  it('renders the clarification card after markdown and before map cards', () => {
+    expect(chatViewSource).toContain("import ClarificationCard from '../components/ClarificationCard.vue'")
+    const markdownPosition = normalizedSource.indexOf('<MarkdownRenderer v-if="message.content"')
+    const clarificationPosition = normalizedSource.indexOf('<ClarificationCard v-if="message.clarificationActive"')
+    const mapPosition = normalizedSource.indexOf('<MapCard v-if="message.map"')
+
+    expect(markdownPosition).toBeGreaterThan(0)
+    expect(clarificationPosition).toBeGreaterThan(markdownPosition)
+    expect(mapPosition).toBeGreaterThan(clarificationPosition)
+    expect(normalizedSource).toContain('<Transition name="clarification-card">')
+    expect(normalizedSource).toContain(':initial-text="message.clarificationDraft || \'\'"')
+    expect(normalizedSource).toContain('@submit="submitClarificationAnswer(message, $event)"')
+    expect(normalizedSource).toContain('@cancel="cancelClarification(message)"')
+  })
+
+  it('locks composer and suggestions while clarification is pending', () => {
+    expect(normalizedSource).toContain("'上のフォームからお答えください'")
+    expect(normalizedSource).toContain('if (chat.isClarificationPending) { return }')
+    expect(normalizedSource).toContain(
+      "'composer-shell--origin-locked': chat.isOriginSelectionPending || chat.isClarificationPending",
+    )
+    expect(normalizedSource).toContain(
+      ':aria-disabled="chat.isOriginSelectionPending || chat.isClarificationPending"',
+    )
+    expect(normalizedSource).toContain(
+      'if (chat.isOriginSelectionPending || chat.isClarificationPending || chat.isSending) { return }',
+    )
+  })
+
+  it('uses the store clarification submit and cancel actions', () => {
+    expect(normalizedSource).toContain('await chat.submitClarificationAnswer(message, text)')
+    expect(normalizedSource).toContain('chat.cancelClarification(message)')
   })
 })

@@ -209,6 +209,37 @@ describe('chat store SSE helpers', () => {
     expect(message.finalMap).toBeUndefined()
   })
 
+  it('defers clarification activation until smooth reveal completes', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '', { pending: true })
+    store.messages = [message]
+
+    applyAssistantEvent(message, {
+      event: 'token',
+      data: { text: 'どの学科について知りたいですか？' },
+    })
+    applyAssistantEvent(message, {
+      event: 'done',
+      data: {
+        thread_id: 'thread-1',
+        message_id: 'message-1',
+        sources: [],
+        kind: 'clarification',
+      },
+    })
+
+    expect(message.finalClarification).toBe(true)
+    expect(message.clarificationActive).toBe(false)
+    expect(store.isClarificationPending).toBe(false)
+
+    message.revealedLength = message.content.length
+    store.advanceRevealFrame(0.016)
+
+    expect(message.clarificationActive).toBe(true)
+    expect(message.finalClarification).toBeUndefined()
+    expect(store.isClarificationPending).toBe(true)
+  })
+
   it('sends the original question with origin metadata and deactivates the ask-origin card', async () => {
     const store = useChatStore()
     const message = createMessage('assistant', '現在地を選んでください', {
@@ -248,6 +279,20 @@ describe('chat store SSE helpers', () => {
     expect(store.messages).toHaveLength(1)
   })
 
+  it('locks ordinary store sends while a clarification card is active', async () => {
+    const store = useChatStore()
+    store.messages = [createMessage('assistant', 'どの学科ですか？', {
+      clarificationActive: true,
+    })]
+    store.streamChatResponse = vi.fn()
+
+    await store.sendMessage('通常フォームからの回答')
+
+    expect(store.isClarificationPending).toBe(true)
+    expect(store.streamChatResponse).not.toHaveBeenCalled()
+    expect(store.messages).toHaveLength(1)
+  })
+
   it('cancels the active ask-origin card without sending', () => {
     const store = useChatStore()
     const message = createMessage('assistant', '現在地を選んでください', {
@@ -261,6 +306,84 @@ describe('chat store SSE helpers', () => {
     expect(message.mapInteractive).toBe(false)
     expect(message.mapCancelled).toBe(true)
     expect(store.isOriginSelectionPending).toBe(false)
+  })
+
+  it('submits a clarification answer through the guarded card path', async () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', 'どの学科ですか？', {
+      clarificationActive: true,
+    })
+    store.messages = [message]
+    store.sendMessage = vi.fn(() => Promise.resolve())
+
+    await store.submitClarificationAnswer(message, ' 情報工学科です ')
+
+    expect(message.clarificationActive).toBe(false)
+    expect(message.clarificationDraft).toBe('情報工学科です')
+    expect(store.isClarificationPending).toBe(false)
+    expect(store.sendMessage).toHaveBeenCalledWith('情報工学科です', {
+      clarificationCardClientId: message.clientId,
+    })
+  })
+
+  it('reactivates a clarification card after send failure and preserves retry metadata', async () => {
+    stubLocalStorage()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockRejectedValueOnce(new Error('network failure'))
+        .mockResolvedValueOnce(createSseResponse([
+          'event: token\ndata: {"text":"再試行に成功しました。"}',
+          'event: done\ndata: {"thread_id":"thread-1","message_id":"message-1","sources":[],"kind":null}',
+        ])),
+    )
+    const store = useChatStore()
+    const message = createMessage('assistant', 'どの学科ですか？', {
+      clarificationActive: true,
+    })
+    store.messages = [message]
+
+    await store.submitClarificationAnswer(message, '情報工学科です')
+
+    expect(message.clarificationActive).toBe(true)
+    expect(store.isClarificationPending).toBe(true)
+    expect(store.lastFailedRequest).toMatchObject({
+      message: '情報工学科です',
+      originNode: null,
+      clarificationCardClientId: message.clientId,
+    })
+
+    await store.retryLast()
+
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({
+      message: '情報工学科です',
+      thread_id: null,
+    })
+    expect(message.clarificationActive).toBe(false)
+    expect(store.isClarificationPending).toBe(false)
+  })
+
+  it('cancels the active clarification card and clears its failed request', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', 'どの学科ですか？', {
+      clarificationActive: true,
+    })
+    store.messages = [message]
+    store.error = '回答を受け取れませんでした'
+    store.lastFailedMessage = '情報工学科です'
+    store.lastFailedRequest = {
+      message: '情報工学科です',
+      clarificationCardClientId: message.clientId,
+    }
+
+    store.cancelClarification(message)
+
+    expect(message.clarificationActive).toBe(false)
+    expect(message.clarificationDraft).toBe('')
+    expect(store.isClarificationPending).toBe(false)
+    expect(store.error).toBe('')
+    expect(store.lastFailedMessage).toBe('')
+    expect(store.lastFailedRequest).toBeNull()
   })
 
   it('posts origin_node and creates a live origin-select chip without exposing synthetic copy', async () => {
@@ -381,6 +504,29 @@ describe('chat store SSE helpers', () => {
     expect(message.streaming).toBe(false)
     expect(message.content).toBe('回答生成中にエラーが発生しました。')
     expect(message.revealedLength).toBe(message.content.length)
+  })
+
+  it('cleans pending clarification flags on assistant error events', () => {
+    const message = createMessage('assistant', '', { pending: true })
+
+    applyAssistantEvent(message, {
+      event: 'done',
+      data: {
+        thread_id: 'thread-1',
+        message_id: 'message-1',
+        sources: [],
+        kind: 'clarification',
+      },
+    })
+    expect(message.finalClarification).toBe(true)
+
+    applyAssistantEvent(message, {
+      event: 'error',
+      data: { message: '回答生成中にエラーが発生しました。' },
+    })
+
+    expect(message.finalClarification).toBeUndefined()
+    expect(message.clarificationActive).toBe(false)
   })
 
   it('consumes complete SSE blocks and preserves incomplete buffers', () => {
@@ -552,6 +698,36 @@ describe('chat store thread history actions', () => {
     expect(store.messages[0].map.mode).toBe('ask_origin')
     expect(store.messages[0].mapInteractive).toBe(false)
     expect(store.isOriginSelectionPending).toBe(false)
+  })
+
+  it('restores a persisted clarification assistant message as inactive', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          createJsonResponse({
+            thread: { id: 'thread-clarify', title: '学科確認', created_at: 'c1', updated_at: 'u1' },
+            messages: [
+              {
+                id: 'm-clarify',
+                role: 'assistant',
+                content: 'どの学科について知りたいですか？',
+                sources: [],
+                metadata: { kind: 'clarification' },
+                created_at: 't1',
+              },
+            ],
+          }),
+        ),
+      ),
+    )
+
+    const store = useChatStore()
+    await store.openThread('thread-clarify')
+
+    expect(store.messages[0].content).toBe('どの学科について知りたいですか？')
+    expect(store.messages[0].clarificationActive).toBe(false)
+    expect(store.isClarificationPending).toBe(false)
   })
 
   it('restores a persisted origin-select user message for identical chip rendering', async () => {

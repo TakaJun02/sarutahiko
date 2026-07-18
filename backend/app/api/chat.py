@@ -86,6 +86,15 @@ async def chat(
                     consume_metadata = getattr(agent, "consume_message_metadata", None)
                     if callable(consume_metadata):
                         metadata = consume_metadata(assistant_message_id)
+                    if "kind" not in data:
+                        data = {
+                            **data,
+                            "kind": "clarification"
+                            if (metadata or {}).get("kind") == "clarification"
+                            else None,
+                        }
+                    if metadata is None and data.get("kind") == "clarification":
+                        metadata = {"kind": "clarification"}
                     thread_service.add_message(
                         ensured_thread_id,
                         "assistant",

@@ -114,8 +114,35 @@ async def test_chat_stream_uses_documented_sse_schema(app) -> None:
     assert status_events[0][1]["text"].endswith("…")
     assert any(event == "token" and payload["text"] for event, payload in events)
     assert events[-1][0] == "done"
-    assert set(events[-1][1]) == {"thread_id", "message_id", "sources"}
+    assert set(events[-1][1]) == {"thread_id", "message_id", "sources", "kind"}
+    assert events[-1][1]["kind"] is None
     assert events[-1][1]["sources"][0]["type"] == "web"
+
+
+@pytest.mark.asyncio
+async def test_mock_clarification_trigger_streams_clarification_done_kind(app) -> None:
+    async with await _client(app) as client:
+        auth_headers = await _auth_headers(client)
+        response = await client.post(
+            "/api/chat",
+            json={"message": "確認テスト", "thread_id": None},
+            headers=auth_headers,
+        )
+        thread_id = _events(response.text)[-1][1]["thread_id"]
+        history_response = await client.get(f"/api/threads/{thread_id}", headers=auth_headers)
+
+    events = _events(response.text)
+    assert [payload["step"] for event, payload in events if event == "status"] == [
+        "analyze",
+        "generate",
+    ]
+    assert "".join(payload["text"] for event, payload in events if event == "token") == (
+        "どの学科についてお調べしましょうか？ 気になっている学科名を教えてください。"
+    )
+    assert events[-1][0] == "done"
+    assert events[-1][1]["sources"] == []
+    assert events[-1][1]["kind"] == "clarification"
+    assert history_response.json()["messages"][-1]["metadata"] == {"kind": "clarification"}
 
 
 @pytest.mark.asyncio
@@ -239,6 +266,7 @@ async def test_chat_persists_and_sanitizes_clarification_metadata(app) -> None:
 
     assert first.status_code == 200
     assert second.status_code == 200
+    assert _events(first.text)[-1][1]["kind"] == "clarification"
     persisted = history_response.json()["messages"][-1]
     assert persisted["content"] == question
     assert persisted["metadata"] == {"kind": "clarification"}
@@ -382,7 +410,7 @@ async def test_chat_rejects_unknown_origin_node_before_creating_a_thread(app) ->
 
 
 @pytest.mark.asyncio
-async def test_omitting_origin_node_keeps_the_existing_sse_bytes(app) -> None:
+async def test_omitting_origin_node_keeps_done_kind_null_in_sse_bytes(app) -> None:
     recording_agent = RecordingAgent()
     app.state.agent = recording_agent
 
@@ -400,7 +428,7 @@ async def test_omitting_origin_node_keeps_the_existing_sse_bytes(app) -> None:
         "event: token\ndata: {\"text\":\"記録済み\"}\n\n"
         "event: done\ndata: "
         f"{{\"thread_id\":\"{done['thread_id']}\",\"message_id\":\"{done['message_id']}\","
-        "\"sources\":[]}\n\n"
+        "\"sources\":[],\"kind\":null}\n\n"
     )
     assert response.text == expected
     assert recording_agent.question == "通常の質問"

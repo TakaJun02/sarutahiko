@@ -456,6 +456,15 @@
      （重い精読ほど予算が減り自然に finish へ — FR-37 の予算停止哲学と整合）。
   4. status は additive（get_docs 用 step 追加・FE の未知 step 耐性を実装時確認）。
 
+### FR-39 確認質問（ask_user）の専用回答フォーム（2026-07-18 追加・利用者指示、詳細: `docs/UI_CLARIFICATION_FORM.md`）
+- エージェントの確認質問（ask_user）への回答を、通常 composer ではなく**質問直下の専用回答フォーム**で
+  受け付ける。受付中は composer をロックし、解除条件は ask_origin（FR-27, MAP_CARD.md §11-1）と同型の
+  3 つ（送信成功／キャンセル／スレッド切替・リロード）。elicitation の UI 文法を FR-27 と統一する。
+- SSE は additive のみ: `done` に `kind: "clarification" | null` を追加（詳細: ARCHITECTURE.md §3 v0.8）。
+  エージェント側のツール契約・decide プロンプト・履歴サニタイズは**不変**。
+- **意匠は GPT-5.6 Sol がデザインリード**（利用者指示）。「AI が作ったような」デザイン禁止・
+  Campus Signal 既存トークンのみで現行 UI と一体に見えること。確定意匠は詳細文書 §6 に転記。
+
 ## 4. 非機能要件
 
 - **NFR-1**: LLM 推論はローカル GPU 群上の vLLM のみを使用し、外部 LLM API に依存しない

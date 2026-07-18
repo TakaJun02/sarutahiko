@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import ClarificationCard from '../components/ClarificationCard.vue'
 import LoadingSpinnerV5 from '../components/LoadingSpinnerV5.vue'
 import MapCard from '../components/MapCard.vue'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
@@ -47,7 +48,11 @@ const expandedSourceKeys = ref(new Set())
 const activeGreeting = ref(EMPTY_GREETING_VARIANTS[0])
 const isAtBottom = ref(true)
 const composerPlaceholder = computed(() => (
-  chat.isOriginSelectionPending ? 'マップから現在地を選んでください' : '質問を入力'
+  chat.isOriginSelectionPending
+    ? 'マップから現在地を選んでください'
+    : chat.isClarificationPending
+      ? '上のフォームからお答えください'
+      : '質問を入力'
 ))
 
 const greetingNameParts = computed(() => splitGreetingName(auth.user?.name || ''))
@@ -111,6 +116,9 @@ async function send() {
   if (chat.isOriginSelectionPending) {
     return
   }
+  if (chat.isClarificationPending) {
+    return
+  }
   if (chat.isSending) {
     showBusyHint()
     return
@@ -147,12 +155,38 @@ function cancelMapOrigin(message) {
   })
 }
 
+async function submitClarificationAnswer(message, text) {
+  if (chat.isSending) {
+    showBusyHint()
+    return
+  }
+  pendingScrollBehavior = 'smooth'
+  try {
+    await chat.submitClarificationAnswer(message, text)
+  } catch (error) {
+    handleAuthError(error)
+  } finally {
+    await nextTick()
+    inputRef.value?.focus()
+  }
+}
+
+function cancelClarification(message) {
+  chat.cancelClarification(message)
+  nextTick(() => {
+    inputRef.value?.focus()
+  })
+}
+
 function onEnter(event) {
   if (event.isComposing || event.shiftKey) {
     return
   }
   event.preventDefault()
   if (chat.isOriginSelectionPending) {
+    return
+  }
+  if (chat.isClarificationPending) {
     return
   }
   if (chat.isSending) {
@@ -163,7 +197,7 @@ function onEnter(event) {
 }
 
 function applySuggestion(text) {
-  if (chat.isOriginSelectionPending || chat.isSending) {
+  if (chat.isOriginSelectionPending || chat.isClarificationPending || chat.isSending) {
     return
   }
   draft.value = text
@@ -493,7 +527,7 @@ watch(
 watch(
   () => chat.messages.map((message) => {
     const sourceKey = message.sources.map((source) => source.url).join(',')
-    return `${message.clientId || message.id}:${message.content.length}:${message.revealedLength}:${message.statusText}:${message.statusStep}:${sourceKey}`
+    return `${message.clientId || message.id}:${message.content.length}:${message.revealedLength}:${message.statusText}:${message.statusStep}:${message.doneReceived}:${message.mapInteractive}:${message.clarificationActive}:${sourceKey}`
   }).join('|'),
   () => {
     if (pendingScrollBehavior || isAtBottom.value) {
@@ -706,7 +740,7 @@ onBeforeUnmount(() => {
                 :key="suggestion.label"
                 type="button"
                 class="suggestion-card group inline-flex min-h-11 w-fit max-w-full items-center gap-3 rounded-full border border-edge-strong bg-ink-surface/65 px-4 py-2 text-left text-sm text-white/75 shadow-hairline transition duration-base ease-expressive hover:-translate-y-0.5 hover:bg-ink-raised hover:text-white active:translate-y-0 active:scale-[0.985]"
-                :disabled="chat.isOriginSelectionPending || chat.isSending"
+                :disabled="chat.isOriginSelectionPending || chat.isClarificationPending || chat.isSending"
                 :aria-label="`入力欄に「${suggestion.label}」を入力`"
                 @click="applySuggestion(suggestion.label)"
               >
@@ -736,6 +770,15 @@ onBeforeUnmount(() => {
                   >
                     <div class="space-y-4">
                       <MarkdownRenderer v-if="message.content" :content="revealedMessageContent(message)" />
+                      <Transition name="clarification-card">
+                        <ClarificationCard
+                          v-if="message.clarificationActive"
+                          :is-sending="chat.isSending"
+                          :initial-text="message.clarificationDraft || ''"
+                          @submit="submitClarificationAnswer(message, $event)"
+                          @cancel="cancelClarification(message)"
+                        />
+                      </Transition>
                       <MapCard
                         v-if="message.map"
                         :payload="message.map"
@@ -878,9 +921,9 @@ onBeforeUnmount(() => {
               class="composer-shell flex items-end gap-2 rounded-[1.6rem] p-2"
               :class="{
                 'composer-shell--streaming': chat.isSending,
-                'composer-shell--origin-locked': chat.isOriginSelectionPending,
+                'composer-shell--origin-locked': chat.isOriginSelectionPending || chat.isClarificationPending,
               }"
-              :aria-disabled="chat.isOriginSelectionPending"
+              :aria-disabled="chat.isOriginSelectionPending || chat.isClarificationPending"
             >
               <textarea
                 ref="inputRef"
@@ -888,13 +931,13 @@ onBeforeUnmount(() => {
                 rows="1"
                 class="max-h-[164px] min-h-11 flex-1 resize-none bg-transparent px-3 py-2.5 text-base leading-6 text-white outline-none placeholder:text-white/45 focus-visible:outline-none"
                 :placeholder="composerPlaceholder"
-                :disabled="chat.isOriginSelectionPending"
+                :disabled="chat.isOriginSelectionPending || chat.isClarificationPending"
                 @keydown.enter="onEnter"
               ></textarea>
               <button
                 type="submit"
                 class="grid h-11 w-11 shrink-0 place-items-center rounded-full text-[#11130f] transition duration-base ease-expressive enabled:bg-ink-paper enabled:hover:-translate-y-0.5 enabled:hover:bg-white enabled:active:translate-y-0 enabled:active:scale-[0.94] disabled:cursor-not-allowed disabled:bg-white/[0.07] disabled:text-white/25"
-                :disabled="!draft.trim() || chat.isSending || chat.isOriginSelectionPending"
+                :disabled="!draft.trim() || chat.isSending || chat.isOriginSelectionPending || chat.isClarificationPending"
                 aria-label="送信"
               >
                 <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none">

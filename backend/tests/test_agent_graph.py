@@ -967,7 +967,7 @@ async def test_recursion_limit_fallback_without_evidence_streams_not_found_respo
     assert llm.stream_calls == []
     assert events[-1] == (
         "done",
-        {"thread_id": "thread-1", "message_id": "message-1", "sources": []},
+        {"thread_id": "thread-1", "message_id": "message-1", "sources": [], "kind": None},
     )
     records = [
         json.loads(record.message)
@@ -1336,6 +1336,7 @@ async def test_campus_navigator_fast_path_need_origin_exact_sse() -> None:
     )
     assert events[-2][1]["mode"] == "ask_origin"
     assert events[-1][1]["sources"] == [LOCATION_INDEX_SOURCE.model_dump()]
+    assert events[-1][1]["kind"] is None
     assert len(llm.decide_calls) == 1
 
 
@@ -1537,6 +1538,7 @@ async def test_ask_user_is_terminal_and_records_clarification_metadata() -> None
         "参加したい学科は決まっていますか？"
     )
     assert events[-1][1]["sources"] == []
+    assert events[-1][1]["kind"] == "clarification"
     assert agent.consume_message_metadata("message-1") == {"kind": "clarification"}
 
 
@@ -1888,6 +1890,7 @@ async def test_map_free_stream_has_status_then_token_then_done() -> None:
     assert all(name == "status" for name in names[:first_token])
     assert "map" not in names
     assert names[-1] == "done"
+    assert events[-1][1]["kind"] is None
 
 
 async def test_agent_trace_contains_decide_budget_and_navigator_fast_path(

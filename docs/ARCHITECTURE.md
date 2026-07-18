@@ -1,6 +1,7 @@
 # アーキテクチャ / 技術選定
 
-- 版: v0.7（2026-07-18, Fable 改訂 — **FR-36 探索思考のライブステータス**（利用者指示・`docs/AGENT_STATUS_STREAMING.md`）。decide / navigator の LLM 判断をストリーミング化し、生成途中の thought を `status.partial: true` で逐次配信（§3 SSE に additive フィールド追加）。待ち時間主因の実測（decide 3.3〜5.1 秒/回）と guided JSON ストリーミングの成立検証も同文書に記録）
+- 版: v0.8（2026-07-18, Fable 改訂 — **FR-39 確認質問の専用回答フォーム**（利用者指示・`docs/UI_CLARIFICATION_FORM.md`）。§3 SSE の `done` に additive フィールド `kind: "clarification" | null` を追加。ask_user 終端をフロントへライブ通知し、専用回答フォーム＋composer ロック（FR-27 と同型の elicitation 文法）を駆動する。エージェント側ツール契約・履歴サニタイズは不変）
+- v0.7（2026-07-18, Fable 改訂 — **FR-36 探索思考のライブステータス**（利用者指示・`docs/AGENT_STATUS_STREAMING.md`）。decide / navigator の LLM 判断をストリーミング化し、生成途中の thought を `status.partial: true` で逐次配信（§3 SSE に additive フィールド追加）。待ち時間主因の実測（decide 3.3〜5.1 秒/回）と guided JSON ストリーミングの成立検証も同文書に記録）
 - v0.6（2026-07-18, Fable 改訂 — **FR-35 生成 LLM の本番既定を 31B PP=2 へ切替**（利用者指示）。①backend を `network_mode: host` 化し `VLLM_BASE_URL=http://127.0.0.1:8000/v1` に統一 — PP=2（ホスト直）でも 12B（compose vllm の 127.0.0.1:8000 公開）でも**同一 URL** になり、切り戻しは「どちらのサーバーを立てるか＋`LLM_MODEL`」だけで済む ②compose backend の `depends_on` から vllm を除去（12B は明示起動時のみ）③`serve-31b.sh` をデタッチ起動・start/stop/status/logs 化・`max-num-seqs 8`。切替・切り戻し手順は `docs/PP2_MULTINODE_GUIDE.md` §6-9）
 - v0.5（2026-07-18, Fable 改訂 — **FR-34 ハーネス v6 ReAct 化**。①エージェント制御を decide ループ＋ツールへ刷新（`docs/AGENT_REACT.md` v1.0・`docs/AGENT_ARCHITECTURE.md` v2.0）②生成 LLM の **31B 復帰を PP=2（本機+nubia）で検証完了**（PoC・実 LLM E2E 全合格。原理と構築: `docs/PP2_MULTINODE_GUIDE.md`）。**本番既定はまだ 12B 単機**（PP=2 への切替はエンドポイント差し替えのみ・運用判断待ち）③コンテキスト窓 env を `VLLM_MAX_MODEL_LEN` に改名（旧 `LLM_CONTEXT_WINDOW` フォールバックあり））
 - v0.4（2026-07-13, Fable 改訂 — ブラッシュアップ対応。①スレッド一覧/名前変更/削除 API を追加（FR-7）②登録 API から属性 `role` を削除（FR-6 改訂・users テーブルは rebuild マイグレーション）③時間コンテキスト注入を新設（FR-8, §7））
@@ -110,7 +111,8 @@ data: {"mode": "route" | "place" | "ask_origin",
 
 event: done
 data: {"thread_id": "...", "message_id": "...",
-       "sources": [{"title": "...", "url": "...", "type": "knowledge" | "web"}]}
+       "sources": [{"title": "...", "url": "...", "type": "knowledge" | "web"}],
+       "kind": "clarification" | null}   // FR-39。clarification = ask_user 終端（専用回答フォームを活性化）
 
 event: error
 data: {"message": "..."}
@@ -123,6 +125,9 @@ data: {"message": "..."}
   表示は FR-25 の「なめらか文字送り」でペーシングする（`docs/RELEASE_PREP.md` §14。frontend のみの
   変更で、SSE スキーマ・backend は不変）。
 - `done` の `sources` は回答末尾の出典表示に使う（FR-25 以降、表示は文字送り完了後）。
+- `done` の `kind: "clarification"` は ask_user 終端の合図（FR-39）。フロントは文字送り完了後に
+  専用回答フォームを活性化し composer をロックする（詳細: `docs/UI_CLARIFICATION_FORM.md`。
+  ask_origin 終端は従来どおり `map.mode: "ask_origin"` で合図し `kind` は null）。
 - `map` は FR-26 のマップカード（2026-07-17 追加、詳細: `docs/MAP_CARD.md`）。token 完了後・`done` 直前に
   最大 1 回。送らないケースのストリームは従来と完全同一（後方互換）。リクエスト body は不変
   （マップタップの現在地は合成メッセージとして通常の `message` で送る — MAP_CARD.md §7-3）。

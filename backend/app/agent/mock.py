@@ -15,6 +15,7 @@ class MockCampusAgent:
     def __init__(self, status_delay_seconds: float = 1.0, token_delay_seconds: float = 0.035) -> None:
         self.status_delay_seconds = status_delay_seconds
         self.token_delay_seconds = token_delay_seconds
+        self._message_metadata: dict[str, dict] = {}
 
     async def stream(
         self,
@@ -24,6 +25,11 @@ class MockCampusAgent:
         message_id: str,
         history: list[dict] | None = None,
     ) -> AsyncIterator[tuple[str, dict]]:
+        if "確認テスト" in question:
+            async for event in self._stream_clarification_test(thread_id, message_id):
+                yield event
+            return
+
         statuses = [
             StatusPayload(step="analyze", text="ご質問をじっくり読み解いています…"),
             StatusPayload(
@@ -64,6 +70,37 @@ class MockCampusAgent:
             )
         ]
         yield "done", DonePayload(thread_id=thread_id, message_id=message_id, sources=sources).model_dump()
+
+    async def _stream_clarification_test(
+        self,
+        thread_id: str,
+        message_id: str,
+    ) -> AsyncIterator[tuple[str, dict]]:
+        statuses = [
+            StatusPayload(step="analyze", text="ご質問を確認しています…"),
+            StatusPayload(step="generate", text="確認したいことをまとめています…"),
+        ]
+        for status in statuses:
+            yield "status", status.model_dump()
+            if self.status_delay_seconds > 0:
+                await asyncio.sleep(self.status_delay_seconds)
+
+        question = "どの学科についてお調べしましょうか？ 気になっている学科名を教えてください。"
+        for token in self._chunk_answer(question):
+            yield "token", TokenPayload(text=token).model_dump()
+            if self.token_delay_seconds > 0:
+                await asyncio.sleep(self.token_delay_seconds)
+
+        self._message_metadata[message_id] = {"kind": "clarification"}
+        yield "done", DonePayload(
+            thread_id=thread_id,
+            message_id=message_id,
+            sources=[],
+            kind="clarification",
+        ).model_dump()
+
+    def consume_message_metadata(self, message_id: str) -> dict | None:
+        return self._message_metadata.pop(message_id, None)
 
     @staticmethod
     def format_sse(event: str, data: dict) -> str:

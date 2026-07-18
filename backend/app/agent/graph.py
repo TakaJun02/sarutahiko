@@ -330,13 +330,16 @@ class RealCampusAgent:
                             if isinstance(update, dict):
                                 merged_state.update(update)
 
+        done_kind: Literal["clarification"] | None = None
         if merged_state.get("terminal_kind") == "ask_user":
+            done_kind = "clarification"
             self._message_metadata[message_id] = {"kind": "clarification"}
 
         yield "done", DonePayload(
             thread_id=thread_id,
             message_id=message_id,
             sources=merged_state.get("sources", []),
+            kind=done_kind,
         ).model_dump()
 
     def consume_message_metadata(self, message_id: str) -> dict[str, Any] | None:

@@ -47,6 +47,7 @@ export function createMessage(role, content = '', overrides = {}) {
     sources: [],
     map: null,
     mapInteractive: false,
+    clarificationActive: false,
     ...overrides,
   }
   if (typeof message.revealedLength !== 'number') {
@@ -113,6 +114,7 @@ export function applyAssistantEvent(message, event) {
     message.id = event.data.message_id || message.id
     message.doneReceived = true
     message.finalSources = event.data.sources || []
+    message.finalClarification = event.data.kind === 'clarification'
     return event.data.thread_id
   }
   if (event.event === 'error') {
@@ -123,10 +125,12 @@ export function applyAssistantEvent(message, event) {
     message.sources = []
     message.map = null
     message.mapInteractive = false
+    message.clarificationActive = false
     delete message.doneReceived
     delete message.finalSources
     delete message.finalMap
     delete message.finalMapInteractive
+    delete message.finalClarification
   }
 }
 
@@ -160,10 +164,12 @@ function finalizeAssistantMessage(message) {
   message.sources = message.finalSources || []
   message.map = message.finalMap || null
   message.mapInteractive = Boolean(message.finalMapInteractive)
+  message.clarificationActive = Boolean(message.finalClarification)
   delete message.doneReceived
   delete message.finalSources
   delete message.finalMap
   delete message.finalMapInteractive
+  delete message.finalClarification
 }
 
 function messageHasRevealWork(message) {
@@ -266,6 +272,9 @@ export const useChatStore = defineStore('chat', {
     isOriginSelectionPending: (state) => state.messages.some(
       (message) => message.map?.mode === 'ask_origin' && message.mapInteractive,
     ),
+    isClarificationPending: (state) => state.messages.some(
+      (message) => message.clarificationActive,
+    ),
   },
   actions: {
     reset() {
@@ -328,6 +337,7 @@ export const useChatStore = defineStore('chat', {
           sources: message.sources || [],
           map: message.map || null,
           mapInteractive: false,
+          clarificationActive: false,
         }),
       )
       this.error = ''
@@ -352,10 +362,12 @@ export const useChatStore = defineStore('chat', {
       const messageText = text.trim()
       const originNode = options.originNode || null
       const originLabel = options.originLabel || ''
+      const clarificationCardClientId = options.clarificationCardClientId || null
       if (
         !messageText
         || this.isSending
         || (this.isOriginSelectionPending && !originNode)
+        || (this.isClarificationPending && !clarificationCardClientId)
       ) {
         return
       }
@@ -402,16 +414,19 @@ export const useChatStore = defineStore('chat', {
         assistantMessage.sources = []
         assistantMessage.map = null
         assistantMessage.mapInteractive = false
+        assistantMessage.clarificationActive = false
         delete assistantMessage.doneReceived
         delete assistantMessage.finalSources
         delete assistantMessage.finalMap
         delete assistantMessage.finalMapInteractive
+        delete assistantMessage.finalClarification
         this.lastFailedMessage = messageText
         this.lastFailedRequest = {
           message: messageText,
           originNode,
           originLabel,
           originCardClientId: options.originCardClientId || null,
+          clarificationCardClientId,
         }
         if (originNode && options.originCardClientId) {
           const originCard = this.messages.find(
@@ -419,6 +434,14 @@ export const useChatStore = defineStore('chat', {
           )
           if (originCard?.map?.mode === 'ask_origin') {
             originCard.mapInteractive = true
+          }
+        }
+        if (clarificationCardClientId) {
+          const clarificationCard = this.messages.find(
+            (message) => message.clientId === clarificationCardClientId,
+          )
+          if (clarificationCard) {
+            clarificationCard.clarificationActive = true
           }
         }
       } finally {
@@ -431,6 +454,8 @@ export const useChatStore = defineStore('chat', {
           message.mapInteractive = false
         }
         message.finalMapInteractive = false
+        message.clarificationActive = false
+        message.finalClarification = false
       }
     },
     async selectMapOrigin(message, origin) {
@@ -456,6 +481,36 @@ export const useChatStore = defineStore('chat', {
         originLabel: origin.label,
         originCardClientId: message.clientId,
       })
+    },
+    async submitClarificationAnswer(message, text) {
+      const answer = String(text || '').trim()
+      if (
+        this.isSending
+        || !message?.clarificationActive
+        || !answer
+      ) {
+        return
+      }
+      message.clarificationActive = false
+      message.clarificationDraft = answer
+      await this.sendMessage(answer, {
+        clarificationCardClientId: message.clientId,
+      })
+    },
+    cancelClarification(message) {
+      if (
+        !message?.clarificationActive
+        || this.isSending
+      ) {
+        return
+      }
+      message.clarificationActive = false
+      message.clarificationDraft = ''
+      if (this.lastFailedRequest?.clarificationCardClientId === message.clientId) {
+        this.error = ''
+        this.lastFailedMessage = ''
+        this.lastFailedRequest = null
+      }
     },
     cancelMapOrigin(message) {
       if (
@@ -491,6 +546,7 @@ export const useChatStore = defineStore('chat', {
         originNode: request.originNode,
         originLabel: request.originLabel,
         originCardClientId: request.originCardClientId,
+        clarificationCardClientId: request.clarificationCardClientId,
       })
     },
     async streamChatResponse(text, assistantMessage, { originNode = null } = {}) {

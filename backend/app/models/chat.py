@@ -74,6 +74,7 @@ class DonePayload(BaseModel):
     thread_id: str
     message_id: str
     sources: list[Source]
+    kind: Literal["clarification"] | None = None
 
 
 class ErrorPayload(BaseModel):
