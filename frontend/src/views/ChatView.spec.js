@@ -105,6 +105,10 @@ describe('ChatView FR-24 scrolling', () => {
 })
 
 describe('ChatView FR-25 smooth reveal', () => {
+  it('passes the status run id to the loading spinner', () => {
+    expect(normalizedSource).toContain(':status-run-id="message.statusRunId"')
+  })
+
   it('passes only the revealed slice to MarkdownRenderer', () => {
     expect(normalizedSource).toContain(
       'function revealedMessageContent(message) { return message.content.slice(0, message.revealedLength ?? message.content.length) }',

@@ -46,7 +46,7 @@ class ClarificationAgent(RecordingAgent):
     async def stream(self, question, user, thread_id, message_id, history=None):
         self.history = history
         self._metadata[message_id] = {"kind": "clarification"}
-        yield "status", {"step": "evaluate", "text": "確認しています…"}
+        yield "status", {"step": "evaluate", "text": "確認しています…", "partial": False}
         yield "token", {"text": "どちらの学科について知りたいですか？"}
         yield "done", {"thread_id": thread_id, "message_id": message_id, "sources": []}
 
@@ -92,9 +92,26 @@ async def test_chat_stream_uses_documented_sse_schema(app) -> None:
         body = response.text
 
     events = _events(body)
-    assert [event for event, _ in events[:4]] == ["status", "status", "status", "status"]
-    assert [payload["step"] for _, payload in events[:4]] == ["analyze", "retrieve", "search", "generate"]
-    assert events[0][1]["text"].endswith("…")
+    status_events = [(event, payload) for event, payload in events if event == "status"]
+    assert [payload["step"] for _, payload in status_events] == [
+        "analyze",
+        "analyze",
+        "analyze",
+        "analyze",
+        "retrieve",
+        "search",
+        "generate",
+    ]
+    assert [payload["partial"] for _, payload in status_events] == [
+        False,
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+    ]
+    assert status_events[0][1]["text"].endswith("…")
     assert any(event == "token" and payload["text"] for event, payload in events)
     assert events[-1][0] == "done"
     assert set(events[-1][1]) == {"thread_id", "message_id", "sources"}

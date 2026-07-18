@@ -42,6 +42,8 @@ export function createMessage(role, content = '', overrides = {}) {
     streaming: false,
     statusText: '',
     statusStep: '',
+    statusPartial: false,
+    statusRunId: 0,
     sources: [],
     map: null,
     mapInteractive: false,
@@ -75,8 +77,21 @@ export function parseSseBlock(block) {
 
 export function applyAssistantEvent(message, event) {
   if (event.event === 'status') {
-    message.statusText = event.data.text
-    message.statusStep = event.data.step
+    const incomingText = String(event.data.text || '')
+    const incomingStep = String(event.data.step || '')
+    const currentText = String(message.statusText || '')
+    const currentStep = String(message.statusStep || '')
+    const withoutTrailingEllipsis = (text) => text.endsWith('…') ? text.slice(0, -1) : text
+    const extendsCurrentRun = (
+      incomingStep === currentStep
+      && withoutTrailingEllipsis(incomingText).startsWith(withoutTrailingEllipsis(currentText))
+    )
+    if (!extendsCurrentRun) {
+      message.statusRunId = (message.statusRunId || 0) + 1
+    }
+    message.statusText = incomingText
+    message.statusStep = incomingStep
+    message.statusPartial = event.data.partial === true
     message.pending = true
     message.streaming = false
     return

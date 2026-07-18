@@ -171,7 +171,9 @@ sequenceDiagram
 ## 5. SSE イベント（要約）
 
 `status`（step 語彙 `{analyze, retrieve, search, web_search, evaluate, generate}` は v5 と不変。
-系列は ReAct 化により可変・evaluate の text は decide の thought 由来の実況）→
+系列は ReAct 化により可変・evaluate の text は decide の thought 由来の実況。FR-36 で `partial`
+フィールドを追加し、decide / navigator の思考中は生成途中の thought を partial:true で逐次配信 —
+`docs/AGENT_STATUS_STREAMING.md`）→
 `token`（回答本文の逐次配信・FR-3/25）→
 `map`（route / place / ask_origin。token 完了後・done 直前に最大 1 回・FR-26）→
 `done`（thread_id / message_id / sources）。エラー時は `error`。

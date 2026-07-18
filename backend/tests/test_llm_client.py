@@ -80,6 +80,37 @@ async def test_decide_uses_openai_compatible_json_schema_response_format() -> No
     assert completions.calls[0]["max_tokens"] == 300
 
 
+async def test_decide_stream_uses_streaming_json_schema_request() -> None:
+    completions = FakeCompletions()
+    client = VLLMClient(
+        base_url="http://vllm.test/v1",
+        model="google/gemma-4-31B-it-qat-w4a16-ct",
+        client=_fake_openai_client(completions),
+    )
+    schema = {
+        "type": "object",
+        "properties": {"thought": {"type": "string"}},
+        "required": ["thought"],
+    }
+
+    fragments = [
+        fragment
+        async for fragment in client.decide_stream(
+            [{"role": "user", "content": "hello"}],
+            schema,
+        )
+    ]
+
+    assert fragments == ["token"]
+    assert completions.calls[0]["stream"] is True
+    assert completions.calls[0]["temperature"] == 0.2
+    assert completions.calls[0]["max_tokens"] == 300
+    assert completions.calls[0]["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "react_decision", "schema": schema},
+    }
+
+
 async def test_count_tokens_uses_vllm_tokenize_endpoint() -> None:
     requests: list[httpx.Request] = []
 

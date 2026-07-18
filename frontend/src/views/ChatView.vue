@@ -732,6 +732,7 @@ onBeforeUnmount(() => {
                     :mode="message.pending ? 'pending' : 'settled'"
                     :text="message.statusText || 'お待ちください…'"
                     :status-step="message.statusStep || 'generate'"
+                    :status-run-id="message.statusRunId"
                   >
                     <div class="space-y-4">
                       <MarkdownRenderer v-if="message.content" :content="revealedMessageContent(message)" />

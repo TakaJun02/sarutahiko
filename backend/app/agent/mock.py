@@ -26,6 +26,20 @@ class MockCampusAgent:
     ) -> AsyncIterator[tuple[str, dict]]:
         statuses = [
             StatusPayload(step="analyze", text="ご質問をじっくり読み解いています…"),
+            StatusPayload(
+                step="analyze",
+                text="ご質問のポイントを整理しています…",
+                partial=True,
+            ),
+            StatusPayload(
+                step="analyze",
+                text="ご質問のポイントを整理しています。必要な資料を見極めています…",
+                partial=True,
+            ),
+            StatusPayload(
+                step="analyze",
+                text="ご質問のポイントを整理しています。必要な資料を見極めています。",
+            ),
             StatusPayload(step="retrieve", text="キャンパスの資料を探しています…"),
             StatusPayload(step="search", text="学内資料をすみずみまで調べています…"),
             StatusPayload(step="generate", text="とっておきの回答をまとめています…"),
