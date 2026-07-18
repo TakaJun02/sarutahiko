@@ -1,6 +1,6 @@
 # Derived image for the FR-34 PP=2 PoC: the official v0.25.0 image does not
 # bundle ray (see README.md §1-3). Build on BOTH hosts with:
 #   docker build -t pp2-vllm:v0.25.0-ray -f infra/pp2/Dockerfile.ray infra/pp2
-# TODO(v1.0): pin the ray version validated by the PoC (2026-07-18: ray 2.56.0).
+# ray is pinned to the version the 2026-07-18 PoC validated (P1-P4 passed).
 FROM vllm/vllm-openai:v0.25.0
-RUN pip install --no-cache-dir "ray[default,cgraph]"
+RUN pip install --no-cache-dir "ray[default,cgraph]==2.56.0"
