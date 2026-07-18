@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 AgentMode = Literal["mock", "real"]
-DEFAULT_LLM_MODEL = "google/gemma-4-12B-it-qat-w4a16-ct"
+DEFAULT_LLM_MODEL = "google/gemma-4-31B-it-qat-w4a16-ct"
 DEFAULT_LLM_CONTEXT_WINDOW = 16384
 DEFAULT_LLM_ANSWER_MAX_TOKENS = 1024
 DEFAULT_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-8B"
@@ -66,7 +66,12 @@ def load_settings() -> Settings:
         mock_token_delay_seconds=token_delay,
         vllm_base_url=os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"),
         llm_model=os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL),
-        llm_context_window=int(os.getenv("LLM_CONTEXT_WINDOW", str(DEFAULT_LLM_CONTEXT_WINDOW))),
+        llm_context_window=int(
+            os.getenv(
+                "VLLM_MAX_MODEL_LEN",
+                os.getenv("LLM_CONTEXT_WINDOW", str(DEFAULT_LLM_CONTEXT_WINDOW)),
+            )
+        ),
         llm_answer_max_tokens=int(os.getenv("LLM_ANSWER_MAX_TOKENS", str(DEFAULT_LLM_ANSWER_MAX_TOKENS))),
         qdrant_url=os.getenv("QDRANT_URL", "http://127.0.0.1:6333"),
         qdrant_collection=os.getenv("QDRANT_COLLECTION", "campus_knowledge"),

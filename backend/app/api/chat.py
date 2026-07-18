@@ -15,6 +15,7 @@ from app.services.threads import ThreadService
 router = APIRouter(tags=["chat"])
 
 ASK_ORIGIN_HISTORY_SUMMARY = "（現在地の選択をお願いしました）"
+CLARIFICATION_HISTORY_PREFIX = "（確認質問）"
 
 
 def _sanitize_agent_history(messages: list[dict]) -> list[dict]:
@@ -28,6 +29,15 @@ def _sanitize_agent_history(messages: list[dict]) -> list[dict]:
             and map_payload.get("mode") == "ask_origin"
         ):
             agent_message["content"] = ASK_ORIGIN_HISTORY_SUMMARY
+        metadata = message.get("metadata")
+        if (
+            message.get("role") == "assistant"
+            and isinstance(metadata, dict)
+            and metadata.get("kind") == "clarification"
+        ):
+            agent_message["content"] = (
+                f"{CLARIFICATION_HISTORY_PREFIX}{str(message.get('content') or '').strip()}"
+            )
         sanitized.append(agent_message)
     return sanitized
 
@@ -72,12 +82,17 @@ async def chat(
                 if event == "map":
                     map_payload = data
                 if event == "done":
+                    metadata = None
+                    consume_metadata = getattr(agent, "consume_message_metadata", None)
+                    if callable(consume_metadata):
+                        metadata = consume_metadata(assistant_message_id)
                     thread_service.add_message(
                         ensured_thread_id,
                         "assistant",
                         "".join(answer_parts),
                         sources=data.get("sources", []),
                         map_payload=map_payload,
+                        metadata=metadata,
                         message_id=assistant_message_id,
                     )
                 yield agent.format_sse(event, data)

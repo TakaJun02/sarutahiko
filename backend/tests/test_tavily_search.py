@@ -69,6 +69,25 @@ async def test_tavily_maps_response_results_and_raw_content() -> None:
     assert results[0].text == "本文全体"
 
 
+async def test_tavily_can_suppress_raw_content_for_soft_budget() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    provider = _provider(handler)
+
+    await provider.search(
+        "秋田県立大学",
+        include_raw_content=False,
+    )
+
+    payload = json.loads(requests[0].content.decode())
+    assert payload["include_raw_content"] is False
+    assert "include_domains" not in payload
+
+
 async def test_tavily_opens_circuit_after_432_and_skips_requests_during_cooldown(caplog) -> None:
     factory_calls = 0
 
