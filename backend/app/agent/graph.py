@@ -10,6 +10,7 @@ from typing import Any, Literal, TypedDict
 
 import httpx
 from langgraph.config import get_stream_writer
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from openai import BadRequestError
 
@@ -29,7 +30,7 @@ from app.rag.models import KnowledgeChunk
 from app.search.models import WebSearchResult
 from app.services.time_context import build_time_context
 
-Step = Literal["analyze", "retrieve", "search", "web_search", "evaluate", "generate"]
+Step = Literal["analyze", "retrieve", "search", "get_docs", "web_search", "evaluate", "generate"]
 
 MAX_KNOWLEDGE_CONTEXT_CHUNKS = 24
 MAX_SAME_FILE_EXPANSION_CHUNKS = 12
@@ -50,8 +51,19 @@ MIN_GENERATION_CONTEXT_TOKENS = 384
 GENERATION_HISTORY_CHAR_STAGES = (MAX_HISTORY_CHARS, 250, 120)
 SOFT_CONTEXT_RATIO = 0.70
 HARD_CONTEXT_RATIO = 0.85
-OBSERVATION_TOKEN_LIMIT = 120
+DEFAULT_RECURSION_LIMIT = 50
+OBSERVATION_TOKEN_LIMIT = 500
+OBSERVATION_CHUNK_EXCERPT_CHARS = 400
+OBSERVATION_EXCERPT_RADIUS_CHARS = 200
+GET_DOCS_OBSERVATION_TOKEN_LIMIT = 1500
 ASK_USER_TOKEN_CHARS = 8
+DUPLICATE_EVIDENCE_NOTE = (
+    "除外分の全文は evidence 取得済みで、回答生成時にそのまま参照される（再取得不要）。"
+)
+FALLBACK_NOT_FOUND_RESPONSE = (
+    "申し訳ありません。お探しの情報を見つけられませんでした。"
+    "言い方を変えて、もう一度お試しいただけますか？"
+)
 
 DECIDE_SYSTEM_PROMPT = """あなたは秋田県立大学 本荘キャンパス（秋田県由利本荘市）のオープンキャンパス来場者案内 AI
 「キャンパスガイド」の探索判断（decide）コンポーネントです。来場者は主に高校生とその保護者です。
@@ -63,6 +75,7 @@ DECIDE_SYSTEM_PROMPT = """あなたは秋田県立大学 本荘キャンパス�
 ツール:
 - retrieve {queries: string[1..3]}: 意味ベクトルで学内ナレッジを探す（言い換えに強い）
 - search {keywords: string[1..6]}: 部屋番号・研究室名・固有名詞を字句一致で探す
+- get_docs {file_ids: string[1..2]}: 観測に出た file_id の資料全体を読み込む（全文が必要な時だけ）
 - web_search {queries: string[1..3]}: ドメイン制限なしの Web 検索（学外・最新情報）
 - campus_navigator {request: string}: 学内の場所・経路の専門機構へ依頼（空間推論を自分でしない）
 - ask_user {question: string}: 回答が実質的に変わる場合だけ、来場者に短く聞き返す
@@ -73,6 +86,7 @@ DECIDE_SYSTEM_PROMPT = """あなたは秋田県立大学 本荘キャンパス�
 - 学内の場所・経路・「どこ」「行き方」は campus_navigator に任せる。
 - 推測で答えられる場合は推測と明示して答える方を優先し、ask_user を乱用しない。
 - 同一の action と action_input を繰り返さない。0 件なら言い換えるか別ツールに切り替える。
+- 観測の truncated=true は断片の続きがあることを示す。続き・全体が必要なら get_docs(file_ids) で全文を取得できる。
 - 予算注記が「まとめに入れ」の場合は新規探索を広げず finish を優先する。
 - thought は短い日本語 1〜2 文。
 """
@@ -81,6 +95,7 @@ STATUS_TEXTS: dict[Step, str] = {
     "analyze": "ご質問をじっくり読み解いています…",
     "retrieve": "キャンパスの資料を探しています…",
     "search": "学内資料をすみずみまで調べています…",
+    "get_docs": "資料全体を読み込んでいます…",
     "evaluate": "集めた情報をチェックしています…",
     "web_search": "Webで最新情報を探検しています…",
     "generate": "とっておきの回答をまとめています…",
@@ -136,6 +151,7 @@ class AgentState(TypedDict, total=False):
     actions_log: list[dict[str, Any]]
     action_keys: list[str]
     observations: list[str]
+    known_file_ids: list[str]
     tool_executions: int
     context_usage: dict[str, Any]
     turn_terminated: bool
@@ -194,6 +210,12 @@ class _KnowledgeMergeOutcome:
     expanded_chunk_ids: list[str]
 
 
+@dataclass(frozen=True)
+class _KnowledgeDuplicateSummary:
+    count: int
+    file_ids: list[str]
+
+
 @dataclass
 class _ContextMeasurementCache:
     base_tokens: int | None = None
@@ -217,6 +239,7 @@ class RealCampusAgent:
         llm_context_window: int = DEFAULT_LLM_CONTEXT_WINDOW,
         llm_answer_max_tokens: int = DEFAULT_LLM_ANSWER_MAX_TOKENS,
         time_context_provider: Callable[[], str] | None = None,
+        recursion_limit: int = DEFAULT_RECURSION_LIMIT,
     ) -> None:
         self.llm_client = llm_client
         self.knowledge_store = knowledge_store
@@ -228,9 +251,11 @@ class RealCampusAgent:
         self.llm_context_window = llm_context_window
         self.llm_answer_max_tokens = llm_answer_max_tokens
         self.time_context_provider = time_context_provider or build_time_context
+        self.recursion_limit = recursion_limit
         self.navigator = CampusNavigator(llm_client)
         self._message_metadata: dict[str, dict[str, Any]] = {}
         self._graph = self._build_graph()
+        self._fallback_graph = self._build_fallback_graph()
 
     async def stream(
         self,
@@ -250,6 +275,7 @@ class RealCampusAgent:
             "actions_log": [],
             "action_keys": [],
             "observations": [],
+            "known_file_ids": [],
             "tool_executions": 0,
             "turn_terminated": False,
             "clarification_blocked": self._previous_assistant_was_clarification(history or []),
@@ -258,18 +284,51 @@ class RealCampusAgent:
             "same_file_expanded_chunk_ids": [],
         }
         merged_state = dict(state)
-        async for mode, payload in self._graph.astream(
-            state,
-            stream_mode=["updates", "custom"],
-            config={"recursion_limit": 50},
-        ):
-            if mode == "custom":
-                yield payload["event"], payload["data"]
-                continue
-            if mode == "updates":
-                for update in payload.values():
-                    if isinstance(update, dict):
-                        merged_state.update(update)
+        try:
+            async for mode, payload in self._graph.astream(
+                state,
+                stream_mode=["updates", "custom"],
+                config={"recursion_limit": self.recursion_limit},
+            ):
+                if mode == "custom":
+                    yield payload["event"], payload["data"]
+                    continue
+                if mode == "updates":
+                    for update in payload.values():
+                        if isinstance(update, dict):
+                            merged_state.update(update)
+        except GraphRecursionError:
+            knowledge_count = len(merged_state.get("knowledge_results") or [])
+            web_count = len(merged_state.get("web_results") or [])
+            self._trace(
+                "fallback_generate",
+                merged_state,
+                {
+                    "reason": "recursion_limit",
+                    "evidence_count": knowledge_count + web_count,
+                    "knowledge_count": knowledge_count,
+                    "web_count": web_count,
+                },
+            )
+            if knowledge_count == 0 and web_count == 0:
+                yield "status", self._status("generate")
+                for start in range(0, len(FALLBACK_NOT_FOUND_RESPONSE), ASK_USER_TOKEN_CHARS):
+                    yield "token", TokenPayload(
+                        text=FALLBACK_NOT_FOUND_RESPONSE[start : start + ASK_USER_TOKEN_CHARS]
+                    ).model_dump()
+                merged_state["sources"] = []
+            else:
+                async for mode, payload in self._fallback_graph.astream(
+                    merged_state,
+                    stream_mode=["updates", "custom"],
+                ):
+                    if mode == "custom":
+                        yield payload["event"], payload["data"]
+                        continue
+                    if mode == "updates":
+                        for update in payload.values():
+                            if isinstance(update, dict):
+                                merged_state.update(update)
 
         if merged_state.get("terminal_kind") == "ask_user":
             self._message_metadata[message_id] = {"kind": "clarification"}
@@ -292,6 +351,7 @@ class RealCampusAgent:
         workflow.add_node("decide", self._decide)
         workflow.add_node("retrieve", self._retrieve)
         workflow.add_node("search", self._search)
+        workflow.add_node("get_docs", self._get_docs)
         workflow.add_node("web_search", self._web_search)
         workflow.add_node("campus_navigator", self._campus_navigator)
         workflow.add_node("ask_user", self._ask_user)
@@ -305,6 +365,7 @@ class RealCampusAgent:
                 "decide": "decide",
                 "retrieve": "retrieve",
                 "search": "search",
+                "get_docs": "get_docs",
                 "web_search": "web_search",
                 "campus_navigator": "campus_navigator",
                 "ask_user": "ask_user",
@@ -313,6 +374,7 @@ class RealCampusAgent:
         )
         workflow.add_edge("retrieve", "decide")
         workflow.add_edge("search", "decide")
+        workflow.add_edge("get_docs", "decide")
         workflow.add_edge("web_search", "decide")
         workflow.add_conditional_edges(
             "campus_navigator",
@@ -324,6 +386,13 @@ class RealCampusAgent:
         )
         workflow.add_edge("ask_user", END)
         workflow.add_edge("respond_need_origin", END)
+        workflow.add_edge("generate", END)
+        return workflow.compile()
+
+    def _build_fallback_graph(self) -> Any:
+        workflow = StateGraph(AgentState)
+        workflow.add_node("generate", self._generate)
+        workflow.add_edge(START, "generate")
         workflow.add_edge("generate", END)
         return workflow.compile()
 
@@ -405,6 +474,18 @@ class RealCampusAgent:
         if validation_error is None and action == "finish" and state.get("tool_executions", 0) == 0:
             validation_error = "ツール実行 0 回のまま finish はできません。まず情報を集めてください。"
 
+        if validation_error is None and action == "get_docs":
+            requested_file_ids = list(action_input.get("file_ids") or [])
+            known_file_ids = self._known_file_ids(state)
+            known_set = set(known_file_ids)
+            unknown_file_ids = [file_id for file_id in requested_file_ids if file_id not in known_set]
+            if unknown_file_ids:
+                known_label = ", ".join(known_file_ids) if known_file_ids else "なし"
+                validation_error = (
+                    f"未知の file_id です: {', '.join(unknown_file_ids)}。"
+                    f"既知 file_id: {known_label}。"
+                )
+
         action_key = self._action_key(action, action_input)
         if validation_error is None and action_key in set(state.get("action_keys") or []):
             validation_error = "同一の action と action_input は試行済みです。別の手段を選んでください。"
@@ -481,11 +562,16 @@ class RealCampusAgent:
             )
             old_ids = {chunk.id for chunk in existing_results}
             new_chunks = [chunk for chunk in merge_outcome.results if chunk.id not in old_ids]
-            duplicates = max(len(retrieved_results) - len(new_chunks), 0)
+            duplicate_summary = self._knowledge_duplicate_summary(
+                existing_results,
+                retrieved_results,
+            )
             observation = self._knowledge_observation(
                 "意味検索",
                 new_chunks,
-                duplicate_count=duplicates,
+                duplicate_count=duplicate_summary.count,
+                duplicate_file_ids=duplicate_summary.file_ids,
+                terms=queries,
             )
             self._trace("retrieve", state, {"queries": trace_queries, "observation": observation})
             return {
@@ -493,6 +579,10 @@ class RealCampusAgent:
                 "tool_executions": state.get("tool_executions", 0) + 1,
                 "observations": [*(state.get("observations") or []), observation],
                 "actions_log": self._complete_action_log(state, observation),
+                "known_file_ids": self._merge_known_file_ids(
+                    state,
+                    self._knowledge_observation_file_ids(new_chunks, duplicate_summary.file_ids),
+                ),
                 "same_file_expanded_file_ids": merge_outcome.expanded_file_ids,
                 "same_file_expanded_chunk_ids": merge_outcome.expanded_chunk_ids,
             }
@@ -528,11 +618,16 @@ class RealCampusAgent:
             )
             old_ids = {chunk.id for chunk in existing_results}
             new_chunks = [chunk for chunk in merge_outcome.results if chunk.id not in old_ids]
-            duplicates = max(len(grep_chunks) - len(new_chunks), 0)
+            duplicate_summary = self._knowledge_duplicate_summary(
+                existing_results,
+                grep_chunks,
+            )
             observation = self._knowledge_observation(
                 "字句検索",
                 new_chunks,
-                duplicate_count=duplicates,
+                duplicate_count=duplicate_summary.count,
+                duplicate_file_ids=duplicate_summary.file_ids,
+                terms=[*keywords, *variants],
                 variants=variants,
             )
             self._trace(
@@ -550,11 +645,77 @@ class RealCampusAgent:
                 "tool_executions": state.get("tool_executions", 0) + 1,
                 "observations": [*(state.get("observations") or []), observation],
                 "actions_log": self._complete_action_log(state, observation),
+                "known_file_ids": self._merge_known_file_ids(
+                    state,
+                    self._knowledge_observation_file_ids(new_chunks, duplicate_summary.file_ids),
+                ),
                 "same_file_expanded_file_ids": merge_outcome.expanded_file_ids,
                 "same_file_expanded_chunk_ids": merge_outcome.expanded_chunk_ids,
             }
         except Exception as exc:
             return self._tool_error_patch(state, "search", exc)
+
+    async def _get_docs(self, state: AgentState) -> dict:
+        file_ids = list(state.get("action_input", {}).get("file_ids") or [])
+        _write_stream_event("status", self._tool_status("get_docs", file_ids))
+        known_file_ids = self._known_file_ids(state)
+        unknown_file_ids = [file_id for file_id in file_ids if file_id not in set(known_file_ids)]
+        if unknown_file_ids:
+            known_label = ", ".join(known_file_ids) if known_file_ids else "なし"
+            observation = self._compact_observation(
+                f"エラー観測: 未知の file_id です: {', '.join(unknown_file_ids)}。"
+                f"既知 file_id: {known_label}。"
+            )
+            self._trace(
+                "get_docs",
+                state,
+                {
+                    "file_ids": file_ids,
+                    "unknown_file_ids": unknown_file_ids,
+                    "observation": observation,
+                },
+            )
+            return {
+                "observations": [*(state.get("observations") or []), observation],
+                "actions_log": self._complete_action_log(state, observation, error=True),
+            }
+
+        try:
+            chunks = await self._fetch_file_chunks(file_ids)
+            existing_results = state.get("knowledge_results") or []
+            old_ids = {chunk.id for chunk in existing_results}
+            merged_results = self._merge_knowledge_results(existing_results, chunks)
+            observation, result_meta = self._get_docs_observation(file_ids, chunks)
+            chunks_added = len([chunk for chunk in chunks if chunk.id not in old_ids])
+            self._trace(
+                "get_docs",
+                state,
+                {
+                    "file_ids": file_ids,
+                    "chunks_added": chunks_added,
+                    "total_chunks": len(chunks),
+                    "observation_tokens": estimate_tokens(observation),
+                },
+            )
+            fetched_file_ids = self._dedupe_keys(chunk.file_id or "" for chunk in chunks)
+            return {
+                "knowledge_results": merged_results,
+                "tool_executions": state.get("tool_executions", 0) + 1,
+                "observations": [*(state.get("observations") or []), observation],
+                "actions_log": self._complete_action_log(state, result_meta),
+                "known_file_ids": self._merge_known_file_ids(state, file_ids),
+                "same_file_expanded_file_ids": self._dedupe_keys(
+                    [*(state.get("same_file_expanded_file_ids") or []), *fetched_file_ids]
+                ),
+                "same_file_expanded_chunk_ids": self._dedupe_keys(
+                    [
+                        *(state.get("same_file_expanded_chunk_ids") or []),
+                        *(chunk.id for chunk in chunks),
+                    ]
+                ),
+            }
+        except Exception as exc:
+            return self._tool_error_patch(state, "get_docs", exc)
 
     async def _web_search(self, state: AgentState) -> dict:
         queries = list(state.get("action_input", {}).get("queries") or [])
@@ -571,6 +732,7 @@ class RealCampusAgent:
 
             candidates: list[WebSearchResult] = []
             seen_urls = {result.url for result in state.get("web_results") or []}
+            duplicate_count = 0
             for query in queries:
                 rows = await self.search_provider.search(
                     query,
@@ -580,6 +742,7 @@ class RealCampusAgent:
                 )
                 for result in rows:
                     if result.url in seen_urls:
+                        duplicate_count += 1
                         continue
                     seen_urls.add(result.url)
                     candidates.append(result)
@@ -600,7 +763,7 @@ class RealCampusAgent:
             new_results = [result for result in web_results if result.url not in old_urls]
             observation = self._web_observation(
                 new_results,
-                duplicate_count=max(len(candidates) - len(new_results), 0),
+                duplicate_count=duplicate_count + max(len(fetched_results) - len(new_results), 0),
             )
             self._trace(
                 "web_search",
@@ -719,6 +882,7 @@ class RealCampusAgent:
             "retrieve",
             "search",
             "web_search",
+            "get_docs",
             "campus_navigator",
             "ask_user",
             "finish",
@@ -747,6 +911,11 @@ class RealCampusAgent:
             else [
                 "retrieve",
                 "search",
+                *(
+                    ["get_docs"]
+                    if self._known_file_ids(state)
+                    else []
+                ),
                 "web_search",
                 "campus_navigator",
                 "ask_user",
@@ -779,6 +948,9 @@ class RealCampusAgent:
         elif action == "search":
             if not self._valid_string_list(action_input.get("keywords"), minimum=1, maximum=6):
                 return "keywords は空でない文字列 1〜6 件で指定してください。"
+        elif action == "get_docs":
+            if not self._valid_string_list(action_input.get("file_ids"), minimum=1, maximum=2):
+                return "file_ids は空でない文字列 1〜2 件で指定してください。"
         else:
             key = {
                 "campus_navigator": "request",
@@ -916,22 +1088,204 @@ class RealCampusAgent:
     def _compact_observation(self, text: str) -> str:
         compact = " ".join(text.split())
         return self._truncate_text_to_token_budget(compact, OBSERVATION_TOKEN_LIMIT)
+
     def _knowledge_observation(
         self,
         label: str,
         chunks: Sequence[KnowledgeChunk],
         *,
         duplicate_count: int,
+        duplicate_file_ids: Sequence[str] = (),
+        terms: Sequence[str] = (),
         variants: Sequence[str] = (),
     ) -> str:
+        file_totals = self._file_chunk_totals(
+            chunk.file_id for chunk in chunks[:3] if chunk.file_id
+        )
         details = [
-            f"{chunk.title}: {' '.join(chunk.text.split())[:160]}"
+            self._knowledge_observation_detail(
+                chunk,
+                terms=terms,
+                file_total=file_totals.get(chunk.file_id or ""),
+            )
             for chunk in chunks[:3]
         ]
         variant_note = f" 表記ゆれ={','.join(variants)}。" if variants else ""
+        duplicate_note = (
+            f" {self._duplicate_evidence_note(duplicate_file_ids)}"
+            if duplicate_count > 0
+            else ""
+        )
         return self._compact_observation(
             f"{label}: 新規{len(chunks)}件、重複除外{duplicate_count}件。"
-            f"{variant_note}{' / '.join(details) if details else '該当なし'}"
+            f"{duplicate_note}{variant_note}{' / '.join(details) if details else '該当なし'}"
+        )
+
+    def _knowledge_observation_detail(
+        self,
+        chunk: KnowledgeChunk,
+        *,
+        terms: Sequence[str],
+        file_total: int | None,
+    ) -> str:
+        keywords = chunk.grep_keywords or tuple(terms)
+        excerpt, truncated = self._observation_excerpt(chunk.text, keywords)
+        file_id = chunk.file_id or "unknown"
+        chunk_position = self._chunk_position_label(chunk, file_total=file_total)
+        return (
+            f"file_id={file_id} chunk={chunk_position} truncated={str(truncated).lower()} "
+            f"{chunk.title}: {excerpt}"
+        )
+
+    @staticmethod
+    def _observation_excerpt(text: str, keywords: Sequence[str]) -> tuple[str, bool]:
+        compact_text = " ".join(text.split())
+        if len(compact_text) <= OBSERVATION_CHUNK_EXCERPT_CHARS:
+            return compact_text, False
+
+        keyword_terms = RealCampusAgent._keyword_terms_with_variants(keywords)
+        normalized_text, original_offsets = RealCampusAgent._normalize_with_original_offsets(compact_text)
+        positions = [
+            RealCampusAgent._normalized_match_center_offset(
+                original_offsets,
+                position,
+                len(normalize_text(keyword)),
+            )
+            for keyword in keyword_terms
+            if (position := normalized_text.find(normalize_text(keyword))) != -1
+        ]
+        if positions:
+            center = min(positions)
+            start = max(center - OBSERVATION_EXCERPT_RADIUS_CHARS, 0)
+            end = min(start + OBSERVATION_CHUNK_EXCERPT_CHARS, len(compact_text))
+            start = max(end - OBSERVATION_CHUNK_EXCERPT_CHARS, 0)
+        else:
+            start = 0
+            end = min(OBSERVATION_CHUNK_EXCERPT_CHARS, len(compact_text))
+
+        truncated = start > 0 or end < len(compact_text)
+        prefix = "…" if start > 0 else ""
+        suffix = "…" if end < len(compact_text) else ""
+        return f"{prefix}{compact_text[start:end]}{suffix}", truncated
+
+    @staticmethod
+    def _normalize_with_original_offsets(text: str) -> tuple[str, list[int]]:
+        normalized_parts: list[str] = []
+        original_offsets: list[int] = []
+        for original_index, char in enumerate(text):
+            normalized_char = normalize_text(char)
+            normalized_parts.append(normalized_char)
+            original_offsets.extend([original_index] * len(normalized_char))
+        return "".join(normalized_parts), original_offsets
+
+    @staticmethod
+    def _normalized_match_center_offset(
+        original_offsets: Sequence[int],
+        normalized_position: int,
+        normalized_length: int,
+    ) -> int:
+        if not original_offsets:
+            return 0
+        start = original_offsets[min(normalized_position, len(original_offsets) - 1)]
+        end_position = min(
+            normalized_position + max(normalized_length, 1) - 1,
+            len(original_offsets) - 1,
+        )
+        end = original_offsets[end_position]
+        return (start + end) // 2
+
+    def _file_chunk_totals(self, file_ids: Sequence[str]) -> dict[str, int]:
+        target_file_ids = set(file_ids)
+        if not target_file_ids:
+            return {}
+
+        load_sections = getattr(self.lexical_search, "_load_sections", None)
+        if not callable(load_sections):
+            return {}
+
+        totals: dict[str, int] = {}
+        for section in load_sections():
+            chunk = getattr(section, "chunk", None)
+            file_id = getattr(chunk, "file_id", None)
+            if file_id not in target_file_ids:
+                continue
+            totals[file_id] = totals.get(file_id, 0) + 1
+        return totals
+
+    @staticmethod
+    def _chunk_position_label(chunk: KnowledgeChunk, *, file_total: int | None) -> str:
+        if chunk.chunk_index is None:
+            return "?/?"
+        index = chunk.chunk_index + 1
+        if file_total is None:
+            return f"{index}/?"
+        return f"{index}/{file_total}"
+
+    @staticmethod
+    def _duplicate_evidence_note(file_ids: Sequence[str]) -> str:
+        file_id_note = f" file_id={','.join(file_ids)}。" if file_ids else ""
+        return f"{DUPLICATE_EVIDENCE_NOTE}{file_id_note}"
+
+    async def _fetch_file_chunks(self, file_ids: Sequence[str]) -> list[KnowledgeChunk]:
+        fetch = getattr(self.knowledge_store, "get_file_chunks", None)
+        if not callable(fetch):
+            raise RuntimeError("knowledge_store does not support get_file_chunks")
+        chunks = await fetch(file_ids)
+        return self._sort_file_chunks(file_ids, chunks)
+
+    @staticmethod
+    def _sort_file_chunks(
+        file_ids: Sequence[str],
+        chunks: Sequence[KnowledgeChunk],
+    ) -> list[KnowledgeChunk]:
+        file_order = {file_id: index for index, file_id in enumerate(file_ids)}
+        return sorted(
+            chunks,
+            key=lambda chunk: (
+                file_order.get(chunk.file_id or "", len(file_order)),
+                chunk.chunk_index is None,
+                chunk.chunk_index if chunk.chunk_index is not None else 0,
+                chunk.id,
+            ),
+        )
+
+    def _get_docs_observation(
+        self,
+        file_ids: Sequence[str],
+        chunks: Sequence[KnowledgeChunk],
+    ) -> tuple[str, str]:
+        chunks_by_file: dict[str, list[KnowledgeChunk]] = {file_id: [] for file_id in file_ids}
+        for chunk in chunks:
+            if chunk.file_id in chunks_by_file:
+                chunks_by_file[chunk.file_id].append(chunk)
+
+        meta_lines = [
+            f"file {file_id}: 全 {len(chunks_by_file[file_id])} チャンクを evidence に取得済み（回答生成時に全文参照）"
+            for file_id in file_ids
+        ]
+        body_parts: list[str] = []
+        file_totals = {file_id: len(file_chunks) for file_id, file_chunks in chunks_by_file.items()}
+        for file_id in file_ids:
+            for chunk in chunks_by_file[file_id]:
+                body_parts.append(
+                    f"[file_id={file_id} chunk={self._chunk_position_label(chunk, file_total=file_totals[file_id])}] "
+                    f"{chunk.title}: {' '.join(chunk.text.split())}"
+                )
+
+        body_text = "\n".join(body_parts) if body_parts else "該当チャンクなし"
+        meta_prefix = "get_docs: " + " / ".join(meta_lines)
+        body_budget = max(
+            GET_DOCS_OBSERVATION_TOKEN_LIMIT
+            - estimate_tokens(f"{meta_prefix} truncated=true。本文先頭: "),
+            0,
+        )
+        truncated = estimate_tokens(body_text) > body_budget
+        body_excerpt = self._truncate_text_to_token_budget(body_text, body_budget)
+        result_meta = f"{meta_prefix} truncated={str(truncated).lower()}"
+        observation = f"{result_meta}。本文先頭: {body_excerpt}"
+        return (
+            self._truncate_text_to_token_budget(observation, GET_DOCS_OBSERVATION_TOKEN_LIMIT),
+            result_meta,
         )
 
     def _web_observation(
@@ -944,9 +1298,10 @@ class RealCampusAgent:
             f"{result.title} ({result.url}): {' '.join((result.snippet or result.text).split())[:140]}"
             for result in results[:3]
         ]
+        duplicate_note = f" {DUPLICATE_EVIDENCE_NOTE}" if duplicate_count > 0 else ""
         return self._compact_observation(
             f"Web検索: 新規{len(results)}件、重複除外{duplicate_count}件。"
-            f"{' / '.join(details) if details else '該当なし'}"
+            f"{duplicate_note}{' / '.join(details) if details else '該当なし'}"
         )
 
     def _navigator_observation(self, result: dict[str, Any]) -> str:
@@ -997,7 +1352,10 @@ class RealCampusAgent:
         }
 
     @staticmethod
-    def _tool_status(step: Literal["retrieve", "search", "web_search"], terms: Sequence[str]) -> dict:
+    def _tool_status(
+        step: Literal["retrieve", "search", "get_docs", "web_search"],
+        terms: Sequence[str],
+    ) -> dict:
         summary = "、".join(terms[:2])
         text = STATUS_TEXTS[step]
         if summary:
@@ -1904,6 +2262,48 @@ class RealCampusAgent:
             seen.add(key)
             merged.append(item)
         return merged
+
+    def _knowledge_duplicate_summary(
+        self,
+        existing_results: Sequence[KnowledgeChunk],
+        new_results: Sequence[KnowledgeChunk],
+    ) -> _KnowledgeDuplicateSummary:
+        seen_ids = {chunk.id for chunk in existing_results}
+        duplicate_count = 0
+        duplicate_file_ids: list[str] = []
+        for chunk in new_results:
+            if chunk.id in seen_ids:
+                duplicate_count += 1
+                if chunk.file_id:
+                    duplicate_file_ids.append(chunk.file_id)
+                continue
+            seen_ids.add(chunk.id)
+        return _KnowledgeDuplicateSummary(
+            count=duplicate_count,
+            file_ids=self._dedupe_keys(duplicate_file_ids),
+        )
+
+    def _knowledge_observation_file_ids(
+        self,
+        chunks: Sequence[KnowledgeChunk],
+        duplicate_file_ids: Sequence[str],
+    ) -> list[str]:
+        return self._dedupe_keys(
+            [
+                *(chunk.file_id or "" for chunk in chunks[:3]),
+                *duplicate_file_ids,
+            ]
+        )
+
+    def _known_file_ids(self, state: AgentState) -> list[str]:
+        return self._dedupe_keys(state.get("known_file_ids") or [])
+
+    def _merge_known_file_ids(
+        self,
+        state: AgentState,
+        additions: Sequence[str],
+    ) -> list[str]:
+        return self._dedupe_keys([*self._known_file_ids(state), *additions])
 
     @staticmethod
     def _dedupe_keys(values: Sequence[str]) -> list[str]:

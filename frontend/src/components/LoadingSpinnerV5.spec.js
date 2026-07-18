@@ -10,4 +10,8 @@ describe('LoadingSpinnerV5 live status runs', () => {
     expect(source).toContain(':key="props.statusRunId"')
     expect(source).not.toContain(':key="displayText"')
   })
+
+  it('falls back to the generate theme for additive backend status steps', () => {
+    expect(source).toContain('STEP_THEMES[props.statusStep] || STEP_THEMES.generate')
+  })
 })

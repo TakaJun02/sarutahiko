@@ -123,12 +123,13 @@ flowchart TD
   （FR-33 の `_fault_tolerant_node` と同等の耐性。ターンを落とさない）。
 - 同一 `(action, action_input)` の再発行は実行せず「同一の試行済みアクション」観測を返す（§2-4 安全弁）。
 
-### 2-2. メインのツールメニュー（6 種）
+### 2-2. メインのツールメニュー（6 種 → **7 種**・2026-07-18 FR-38 で get_docs 追加）
 
 | action | action_input | 動作 | 戻り（観測） | terminal |
 |---|---|---|---|---|
-| retrieve | `{queries: string[] (1..3)}` | 意味ベクトル検索。gouin 埋め込み → Qdrant 類似検索。ヒットは evidence store（`knowledge_results`）へマージ | 新規ヒットのタイトル＋短い抜粋、件数、重複除外数 | — |
+| retrieve | `{queries: string[] (1..3)}` | 意味ベクトル検索。gouin 埋め込み → Qdrant 類似検索。ヒットは evidence store（`knowledge_results`）へマージ | 新規ヒットのタイトル＋断片、件数、重複除外数（FR-38: ヒット中心断片・file_id/chunk 位置/truncated 明示 — §2-5） | — |
 | search | `{keywords: string[] (1..6)}` | 決定的字句グレップ（`app/rag/lexical.py` の正規化・バリアント展開）。部屋番号・固有名詞向け | 同上 | — |
+| get_docs | `{file_ids: string[] (1..2)}` | **FR-38 新設（§2-5）**: file_id 単位の全チャンク取得（Qdrant・LLM 呼び出しなし）。chunk_index 順に evidence へマージ（兄弟展開の上位互換） | 本文先頭 ~1,500 tok（超過時 truncated 明示）＋「全 N チャンク取得済み（回答生成時に全文参照）」メタ | — |
 | web_search | `{queries: string[] (1..3)}` | Tavily 検索＋本文取得。**ドメイン制限なし**。CB 開放時は「Web 検索は現在利用不可」観測 | 新規ヒットのタイトル・URL・抜粋。soft 閾値超過後は raw_content 取得を抑制 | — |
 | campus_navigator | `{request: string}` | 経路サブエージェント呼び出し（§3）。履歴・解決済み事実はハーネスが機械的に添付 | `route`/`place`: 構造化結果の要約（steps_text 等）。`not_navigable`: 理由 | need_origin 時のみターン終端 |
 | ask_user | `{question: string}` | ユーザーへの自由文の聞き返しでターン終端。status → token（question を分割送出・FR-25 の文字送り互換）→ done。sources 空。thread 保存時に clarification メタを付与（FR-27 の教訓: 履歴整形で崩さない） | —（terminal） | ✔ |
@@ -166,11 +167,59 @@ flowchart TD
 - **安全弁**（チューニングノブではない・事故対策）:
   1. 同一 `(action, action_input)` 反復ガード（§2-1）。
   2. グラフの `recursion_limit`（FR-33 の 50 を踏襲）。
+- **2026-07-18 FR-37 改訂（本番 recursion_limit 到達事故対応。背景: `SPEC.md` FR-37）**:
+  1. 観測 1 件の上限を 120→**500 トークン**、チャンク抜粋を先頭 160→**400 字**（上位 3 件は不変）
+     へ緩和。狙いは (a) 「抜粋が肝心の箇所の手前で切れる→途切れていると誤認して同義再検索」の
+     空転根絶、(b) 観測が予算を実際に消費することで hard 停止が recursion_limit より先に効くこと
+     （観測は行動ログ result と観測一覧に二重掲載 → 1 周最大 ~1,000 tok → 最悪 12〜14 周で hard）。
+     `_web_observation` は共通上限（`OBSERVATION_TOKEN_LIMIT`）経由で同時に緩和される。
+  2. 重複除外が発生した観測には「除外分の全文は evidence 取得済みで、回答生成時にそのまま
+     参照される（再取得不要）」注記を付す（「見えない続き」を探し続ける誤認の遮断）。
+  3. **GraphRecursionError フォールバック**: `astream` が `GraphRecursionError` を送出した場合、
+     `stream()` が累積している `merged_state`（updates マージ済み＝例外時点の evidence を含む）を
+     入力に、**generate ノード単独の縮退グラフ**を実行して通常の token→done 契約で回答する
+     （writer 契約・status/SSE 語彙は本経路と同一）。`knowledge_results`・`web_results` がともに
+     空の場合は定型回答を token 分割配信（ask_user と同じ 8 字分割）。定型文言（2026-07-18 検収時確定）:
+     「申し訳ありません。お探しの情報を見つけられませんでした。言い方を変えて、もう一度お試し
+     いただけますか？」（来場者向けトーン・次の行動を促す）。
+     `agent.trace` に `fallback_generate`（reason=recursion_limit・evidence 件数）を記録。
+     `recursion_limit=50` は不変。checkpointer 追加・周回カウンタ復活は不可。
+     テスト容易性のため `recursion_limit` はインスタンス属性（既定 50）として注入可能にする。
 - **廃止する定数・state**: `MAX_LOCAL_SEARCH_FOLLOWUPS` / `MAX_RETRIEVAL_FOLLOWUPS` /
   `MAX_WEB_SEARCH_ROUNDS` / `MIN_WEB_ROUNDS_BEFORE_GIVE_UP`、周回カウンタ類
   （`web_search_rounds` / `local_search_followups` / `retrieval_followups` 等）。
   新 state（案・命名は実装裁量）: `actions_log` / `observations` / `context_usage` /
   `turn_terminated`。evidence store は既存 `knowledge_results` / `web_results` を続用する。
+
+### 2-5. FR-38 改訂: 断片観測の truncated 明示と get_docs 全文取得ツール（2026-07-18 利用者発案・承認）
+
+背景: 必要情報の散らばり範囲はクエリで動的に変わる（例: 「〇〇さんの出展内容」は人名の前後に固まるが、
+「〇〇研究室の学生メンバー全員」はヒットした 1 ファイル全体が必要）。固定断片では列挙系を原理的に
+拾えず、decide からは「ファイル全体が evidence に入ったか」も見えない。**LLM 抽出の別呼び出しは
+行わない** — 全文を読む LLM は次周の decide 自身（追加 LLM 呼び出しゼロ・~10ms の Qdrant 取得のみ）。
+
+1. **断片観測（FR-37 の「先頭 400 字」を置換）**:
+   - search: 最初のキーワードマッチ位置**中心 ±200 字**（計 ~400 字）。
+   - retrieve: クエリ語がチャンク内に字句出現すればその位置中心 ±200 字、なければ従来どおり先頭 400 字。
+   - 観測の各ヒットに **file_id・chunk 位置（可能なら i/N・実装裁量）・truncated: true/false** を明示する
+     （file_id が観測に出ないと decide は get_docs を発行できない）。
+   - 重複除外注記（FR-37 §2-4）には対象 file_id を含める。
+   - decide システムプロンプトへ追記: 「truncated=true は断片の続きがあることを示す。続き・全体が
+     必要なら get_docs(file_ids) で全文を取得できる」。
+2. **get_docs ツール（メニュー 7 種目・§2-2 表）**:
+   - `{file_ids: string[] (1..2)}` → 対象ファイルの全チャンクを chunk_index 順に取得し evidence
+     （`knowledge_results`）へマージ。既存の兄弟チャンク展開（`same_file_expanded_*` state）と整合させ、
+     get_docs 済みファイルの再展開は不要化。
+   - 観測 = 本文先頭 **~1,500 トークン**（専用上限・超過時は truncated と「全文は evidence 済み」を明示）
+     ＋ 決定的メタデータ「file X: 全 N チャンクを evidence に取得済み（回答生成時に全文参照）」。
+     小ファイルは全文が decide に見え、その場で列挙を確信して finish できる。
+   - **行動ログ result はメタデータのみ**（~1.5k 本文の二重掲載はしない。§2-4 予算消費は観測一覧側で発生）。
+3. **ガード**: file_ids は**過去の観測に現れた file_id のみ有効**（未知 ID はエラー観測＋既知 ID 一覧）。
+   メニューへの get_docs 提示は既知 file_id が 1 件以上あるときのみ。同一 file_ids の再発行は反復ガード
+   対象。観測は予算計測に乗る（重い精読ほど予算が減り自然に finish へ向かう — §2-4 の哲学と整合）。
+4. **SSE/status**: additive に get_docs 用 step を追加（実況文は「資料全体を読み込んでいます…」級）。
+   FE の未知 step 耐性を実装時に確認し、不足なら FE 側マッピング追加＋Vitest。イベント種別は不変。
+5. **trace**: `get_docs` イベント（file_ids・chunks_added・total_chunks・観測トークン数）。
 
 ## 3. 経路案内サブエージェント（campus_navigator）
 
@@ -283,10 +332,10 @@ flowchart TD
 |---|---|---|
 | soft 閾値 | **11,468 トークン**（= 16,384 の 70%） | P1: 実効窓 16,384 実測。decide プロンプトは 340〜450 tok 級で余裕大 |
 | hard 閾値 | **13,926 トークン**（= 同 85%）または evidence ⊇ generate 実予算 | 同上 |
-| 観測 1 件の上限 | 120 トークン級（タイトル＋2 行要約） | P3: この粒度で選択・回復とも良好 |
+| 観測 1 件の上限 | ~~120 トークン級（タイトル＋2 行要約）~~ → **2026-07-18 FR-37 改訂: 500 トークン（抜粋 400 字×3 件）** | P3 では良好としたが、本番で「抜粋切れ→同義再検索」空転により recursion_limit 到達事故。緩和で空転根絶＋予算停止の実効化（§2-4） |
 | navigator 内部 decide | 上限 3 手 | P3: 2 手内で回復動作を確認、余裕 1 手 |
 | decide 温度・max_tokens | 0.2 / 300 | P2/P3: 実測 completion 43〜80 tok、300 で十分 |
-| recursion_limit | 50（FR-33 踏襲） | 安全弁のみ・実測で接近せず |
+| recursion_limit | 50（FR-33 踏襲） | ~~安全弁のみ・実測で接近せず~~ → 2026-07-18 本番で到達事故（空転 26 周）。FR-37 で到達時は evidence による generate 縮退へフォールバック（§2-4）。値は不変 |
 
 ## 8. 受け入れ基準（実装検収）
 
