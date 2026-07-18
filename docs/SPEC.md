@@ -441,6 +441,21 @@
      generate へ縮退（evidence 皆無なら定型の「見つかりませんでした」回答）。
      SSE 契約は不変（token→done を通常配信・DB 保存も通常経路）。`recursion_limit=50` は不変。
 
+### FR-38 断片観測の truncated 明示と get_docs 全文取得ツール（2026-07-18 追加・利用者発案/承認、詳細: `docs/AGENT_REACT.md` §2-5）
+- 背景: 必要情報の散らばり範囲はクエリで動的に変わる（「〇〇さんの出展内容」は人名の前後に固まるが、
+  「〇〇研究室の学生メンバー全員」は 1 ファイル全体が必要）。固定断片では列挙系を拾えず、decide からは
+  「ファイル全体が evidence に入ったか」も見えない。
+- 対処（**LLM 抽出の別呼び出しは行わない** — 全文を読む LLM は次周の decide 自身。追加 LLM 呼び出しゼロ）:
+  1. 断片観測: search はマッチ位置中心 ±200 字・retrieve はクエリ語出現位置中心(なければ先頭 400 字)。
+     各ヒットに file_id・chunk 位置・`truncated: true/false` を明示し、decide プロンプトに
+     「truncated=true で続きが必要なら get_docs」を追記。
+  2. get_docs ツール新設（メニュー 7 種目）: `{file_ids: 1..2}` → 全チャンクを chunk_index 順に取得し
+     evidence へマージ（兄弟展開の上位互換）。観測 = 本文先頭 ~1,500 tok ＋「全 N チャンク取得済み
+     （回答生成時に全文参照）」メタ。行動ログ result はメタのみ。
+  3. ガード: file_id は既知のもののみ・未知 ID はエラー観測・反復ガード対象・観測は予算計測に乗る
+     （重い精読ほど予算が減り自然に finish へ — FR-37 の予算停止哲学と整合）。
+  4. status は additive（get_docs 用 step 追加・FE の未知 step 耐性を実装時確認）。
+
 ## 4. 非機能要件
 
 - **NFR-1**: LLM 推論はローカル GPU 群上の vLLM のみを使用し、外部 LLM API に依存しない

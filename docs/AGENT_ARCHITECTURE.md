@@ -69,12 +69,14 @@ flowchart TD
     DE --> RD{"_route_after_decide"}:::router
     RD -->|"retrieve(queries)"| RT["<b>retrieve</b>（ノード）<br/>意味ベクトル検索＋兄弟チャンク展開"]:::wfnode
     RD -->|"search(keywords)"| SE["<b>search</b>（ノード）<br/>決定的字句グレップ＋バリアント展開"]:::wfnode
+    RD -->|"get_docs(file_ids)"| GD["<b>get_docs</b>（ノード・FR-38）<br/>file_id 全チャンク取得→evidence マージ<br/>LLM 呼び出しなし（Qdrant のみ）"]:::wfnode
     RD -->|"web_search(queries)"| WS["<b>web_search</b>（ノード）<br/>ドメイン制限なし・CB 存続<br/>soft 予算超過時は raw_content 抑制"]:::wfnode
     RD -->|"campus_navigator(request)"| NV["<b>campus_navigator</b>（サブエージェント）<br/>fast path（決定的・LLM 0回）→ 内部 decide ≤3手<br/>ask_origin は決定的バリデータが裁く"]:::subag
     RD -->|"バリデーション不合格"| DE
 
-    RT -->|"観測（500 tok 上限に圧縮・FR-37）"| DE
+    RT -->|"観測（500 tok 上限・ヒット中心断片＋truncated/file_id 明示・FR-37/38）"| DE
     SE -->|"観測"| DE
+    GD -->|"観測（本文 ~1.5k tok＋全チャンク取得済みメタ）"| DE
     WS -->|"観測"| DE
     NV --> RN{"_route_after_navigator"}:::router
     RN -->|"route / place / not_navigable<br/>（観測として）"| DE
@@ -140,6 +142,7 @@ flowchart TD
 | ノード | decide（`_decide`） | 次アクションの選択（guided JSON）。予算計測・メニュー構成・バリデーション（0回finish 差し戻し・反復ガード）・SSE 実況（初回 analyze / 以降 evaluate=thought）を担う | 生成 vLLM（`decide()`: response_format json_schema）、`/tokenize` | ✔ |
 | ノード | retrieve（`_retrieve`） | 意味ベクトル検索（queries 1..3）。ヒットを evidence store（`knowledge_results`）へマージ・兄弟チャンク展開。観測はタイトル＋抜粋（400 字/件）を 500 tok 上限に圧縮（FR-37） | 埋め込み vLLM（gouin）＋ Qdrant | — |
 | ノード | search（`_search`） | 決定的字句グレップ（keywords 1..6）。部屋番号・固有名詞向け。表記ゆれバリアント展開 | Qdrant スキャン＋ `app/rag/lexical.py` | — |
+| ノード | get_docs（FR-38） | file_id 単位の全チャンク取得（file_ids 1..2）。chunk_index 順に evidence へマージ（兄弟展開の上位互換）。観測は本文先頭 ~1,500 tok＋「全 N チャンク取得済み」メタ。LLM 呼び出しなし | Qdrant | — |
 | ノード | web_search（`_web_search`） | Tavily 検索＋本文取得（queries 1..3）。**ドメイン制限なし**。CB 開放時は「利用不可」観測。soft 超過時 raw_content 抑制 | Tavily API＋httpx | — |
 | サブエージェント | campus_navigator（`_campus_navigator` → `navigator.py`） | 学内の場所・経路解決。fast path（`find_locations_in_text`＋`resolve_location`・LLM 0回）→ 失敗時のみ内部 decide（resolve_place / find_route / ask_origin・≤3手）。戻りは route / place / need_origin / not_navigable の構造化 4 種。**最終文章は書かない** | campus_map（純関数）、生成 vLLM（内部 decide 時のみ） | （✔） |
 | ノード | respond_need_origin（`_respond_need_origin`） | need_origin のターン終端。status→token[定型文]→map(ask_origin)。sources は位置インデックス出典（FR-29）。`turn_terminated` フラグの条件エッジで generate を構造的に迂回 | campus_map（payload は navigator が構築済み） | — |
