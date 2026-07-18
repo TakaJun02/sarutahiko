@@ -51,7 +51,7 @@ const composerPlaceholder = computed(() => (
   chat.isOriginSelectionPending
     ? 'マップから現在地を選んでください'
     : chat.isClarificationPending
-      ? '上のフォームからお答えください'
+      ? '質問の下の回答欄でお答えください'
       : '質問を入力'
 ))
 
@@ -527,7 +527,7 @@ watch(
 watch(
   () => chat.messages.map((message) => {
     const sourceKey = message.sources.map((source) => source.url).join(',')
-    return `${message.clientId || message.id}:${message.content.length}:${message.revealedLength}:${message.statusText}:${message.statusStep}:${message.doneReceived}:${message.mapInteractive}:${message.clarificationActive}:${sourceKey}`
+    return `${message.clientId || message.id}:${message.content.length}:${message.revealedLength}:${message.statusText}:${message.statusStep}:${message.doneReceived}:${message.mapInteractive}:${message.clarificationExpected}:${message.clarificationActive}:${sourceKey}`
   }).join('|'),
   () => {
     if (pendingScrollBehavior || isAtBottom.value) {
@@ -763,7 +763,7 @@ onBeforeUnmount(() => {
               <template v-if="message.role === 'assistant'">
                 <div class="w-full text-white">
                   <LoadingSpinnerV5
-                    :mode="message.pending ? 'pending' : 'settled'"
+                    :mode="message.pending ? 'pending' : (message.clarificationExpected ? 'elicit' : 'settled')"
                     :text="message.statusText || 'お待ちください…'"
                     :status-step="message.statusStep || 'generate'"
                     :status-run-id="message.statusRunId"

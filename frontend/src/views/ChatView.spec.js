@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const chatViewSource = readFileSync(new URL('./ChatView.vue', import.meta.url), 'utf8')
+const clarificationCardSource = readFileSync(new URL('../components/ClarificationCard.vue', import.meta.url), 'utf8')
 const normalizedSource = chatViewSource.replace(/\s+/g, ' ')
+const normalizedClarificationSource = clarificationCardSource.replace(/\s+/g, ' ')
 
 describe('ChatView about dialog', () => {
   it('keeps the FR-22 copy in the required order with the laboratory link before the QR section', () => {
@@ -176,7 +178,7 @@ describe('ChatView FR-39 clarification form', () => {
   })
 
   it('locks composer and suggestions while clarification is pending', () => {
-    expect(normalizedSource).toContain("'上のフォームからお答えください'")
+    expect(normalizedSource).toContain("'質問の下の回答欄でお答えください'")
     expect(normalizedSource).toContain('if (chat.isClarificationPending) { return }')
     expect(normalizedSource).toContain(
       "'composer-shell--origin-locked': chat.isOriginSelectionPending || chat.isClarificationPending",
@@ -192,5 +194,45 @@ describe('ChatView FR-39 clarification form', () => {
   it('uses the store clarification submit and cancel actions', () => {
     expect(normalizedSource).toContain('await chat.submitClarificationAnswer(message, text)')
     expect(normalizedSource).toContain('chat.cancelClarification(message)')
+  })
+})
+
+describe('ChatView FR-40 clarification elicit mode', () => {
+  it('keeps the Aurora Ring in elicit mode after pending clarification tokens start', () => {
+    expect(normalizedSource).toContain(
+      ':mode="message.pending ? \'pending\' : (message.clarificationExpected ? \'elicit\' : \'settled\')"',
+    )
+    expect(normalizedSource).toContain('message.clarificationExpected}:${message.clarificationActive}')
+  })
+})
+
+describe('ClarificationCard R2 inline composer', () => {
+  it('uses the inline handoff composer copy and structure', () => {
+    expect(normalizedClarificationSource).toContain('class="clarification-card w-full sm:max-w-xl"')
+    expect(normalizedClarificationSource).toContain('ひとことだけ教えてください')
+    expect(normalizedClarificationSource).toContain('placeholder="例：機械工学科、はい"')
+    expect(normalizedClarificationSource).toContain("isSending ? '回答を送信中' : '確認質問への回答を送信'")
+    expect(normalizedClarificationSource).toContain('答えずに続ける')
+    expect(normalizedClarificationSource).toContain('composer-shell flex items-end gap-2 rounded-[1.6rem] p-2')
+    expect(normalizedClarificationSource).toContain('rows="1"')
+    expect(normalizedClarificationSource).toContain('min-h-11')
+    expect(normalizedClarificationSource).toContain('h-11 w-11 shrink-0 place-items-center rounded-full')
+  })
+
+  it('removes the deprecated R1 card treatments', () => {
+    expect(clarificationCardSource).not.toContain('clarification-card__rail')
+    expect(clarificationCardSource).not.toContain('min-h-24')
+    expect(clarificationCardSource).not.toContain('underline')
+    expect(clarificationCardSource).not.toContain('回答する')
+    expect(clarificationCardSource).not.toContain('こちらにお答えください')
+    expect(clarificationCardSource).not.toContain('わかる範囲で入力してください')
+  })
+
+  it('associates the cue label with the textarea and keeps the main composer arrow', () => {
+    expect(normalizedClarificationSource).toContain(':for="textareaId"')
+    expect(normalizedClarificationSource).toContain(':id="textareaId"')
+    expect(normalizedClarificationSource).toContain(':aria-labelledby="labelId"')
+    expect(normalizedClarificationSource).toContain('d="M12 19V5M5 12l7-7 7 7"')
+    expect(normalizedClarificationSource).toContain('stroke-width="2.2"')
   })
 })

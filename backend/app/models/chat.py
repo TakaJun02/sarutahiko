@@ -39,7 +39,16 @@ class Source(BaseModel):
 
 
 class StatusPayload(BaseModel):
-    step: Literal["analyze", "retrieve", "search", "get_docs", "web_search", "evaluate", "generate"]
+    step: Literal[
+        "analyze",
+        "retrieve",
+        "search",
+        "get_docs",
+        "web_search",
+        "evaluate",
+        "generate",
+        "clarify",
+    ]
     text: str
     partial: bool = False
 

@@ -30,7 +30,16 @@ from app.rag.models import KnowledgeChunk
 from app.search.models import WebSearchResult
 from app.services.time_context import build_time_context
 
-Step = Literal["analyze", "retrieve", "search", "get_docs", "web_search", "evaluate", "generate"]
+Step = Literal[
+    "analyze",
+    "retrieve",
+    "search",
+    "get_docs",
+    "web_search",
+    "evaluate",
+    "generate",
+    "clarify",
+]
 
 MAX_KNOWLEDGE_CONTEXT_CHUNKS = 24
 MAX_SAME_FILE_EXPANSION_CHUNKS = 12
@@ -99,6 +108,7 @@ STATUS_TEXTS: dict[Step, str] = {
     "evaluate": "集めた情報をチェックしています…",
     "web_search": "Webで最新情報を探検しています…",
     "generate": "とっておきの回答をまとめています…",
+    "clarify": "案内に必要なことを少しだけ確認します。",
 }
 
 ASK_ORIGIN_STATUS_TEXT = "現在地を確認しています…"
@@ -853,7 +863,7 @@ class RealCampusAgent:
 
     async def _ask_user(self, state: AgentState) -> dict:
         question = str(state.get("action_input", {}).get("question") or "").strip()
-        _write_stream_event("status", self._status("generate"))
+        _write_stream_event("status", self._status("clarify"))
         for start in range(0, len(question), ASK_USER_TOKEN_CHARS):
             _write_stream_event(
                 "token",

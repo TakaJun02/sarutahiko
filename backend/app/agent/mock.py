@@ -8,6 +8,8 @@ from app.models.auth import User
 from app.models.chat import DonePayload, Source, StatusPayload, TokenPayload
 from app.services.time_context import build_time_context
 
+CLARIFY_STATUS_TEXT = "案内に必要なことを少しだけ確認します。"
+
 
 class MockCampusAgent:
     """Phase 1 mock agent. Replace this behind the same interface in Phase 3."""
@@ -78,7 +80,7 @@ class MockCampusAgent:
     ) -> AsyncIterator[tuple[str, dict]]:
         statuses = [
             StatusPayload(step="analyze", text="ご質問を確認しています…"),
-            StatusPayload(step="generate", text="確認したいことをまとめています…"),
+            StatusPayload(step="clarify", text=CLARIFY_STATUS_TEXT),
         ]
         for status in statuses:
             yield "status", status.model_dump()

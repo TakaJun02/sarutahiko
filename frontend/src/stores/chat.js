@@ -47,6 +47,7 @@ export function createMessage(role, content = '', overrides = {}) {
     sources: [],
     map: null,
     mapInteractive: false,
+    clarificationExpected: false,
     clarificationActive: false,
     ...overrides,
   }
@@ -95,6 +96,9 @@ export function applyAssistantEvent(message, event) {
     message.statusPartial = event.data.partial === true
     message.pending = true
     message.streaming = false
+    if (incomingStep === 'clarify') {
+      message.clarificationExpected = true
+    }
     return
   }
   if (event.event === 'token') {
@@ -125,6 +129,7 @@ export function applyAssistantEvent(message, event) {
     message.sources = []
     message.map = null
     message.mapInteractive = false
+    message.clarificationExpected = false
     message.clarificationActive = false
     delete message.doneReceived
     delete message.finalSources
@@ -165,6 +170,7 @@ function finalizeAssistantMessage(message) {
   message.map = message.finalMap || null
   message.mapInteractive = Boolean(message.finalMapInteractive)
   message.clarificationActive = Boolean(message.finalClarification)
+  message.clarificationExpected = Boolean(message.finalClarification)
   delete message.doneReceived
   delete message.finalSources
   delete message.finalMap
@@ -337,6 +343,7 @@ export const useChatStore = defineStore('chat', {
           sources: message.sources || [],
           map: message.map || null,
           mapInteractive: false,
+          clarificationExpected: false,
           clarificationActive: false,
         }),
       )
@@ -414,6 +421,7 @@ export const useChatStore = defineStore('chat', {
         assistantMessage.sources = []
         assistantMessage.map = null
         assistantMessage.mapInteractive = false
+        assistantMessage.clarificationExpected = false
         assistantMessage.clarificationActive = false
         delete assistantMessage.doneReceived
         delete assistantMessage.finalSources
@@ -441,6 +449,7 @@ export const useChatStore = defineStore('chat', {
             (message) => message.clientId === clarificationCardClientId,
           )
           if (clarificationCard) {
+            clarificationCard.clarificationExpected = true
             clarificationCard.clarificationActive = true
           }
         }
@@ -454,6 +463,7 @@ export const useChatStore = defineStore('chat', {
           message.mapInteractive = false
         }
         message.finalMapInteractive = false
+        message.clarificationExpected = false
         message.clarificationActive = false
         message.finalClarification = false
       }
@@ -492,6 +502,7 @@ export const useChatStore = defineStore('chat', {
         return
       }
       message.clarificationActive = false
+      message.clarificationExpected = false
       message.clarificationDraft = answer
       await this.sendMessage(answer, {
         clarificationCardClientId: message.clientId,
@@ -505,6 +516,7 @@ export const useChatStore = defineStore('chat', {
         return
       }
       message.clarificationActive = false
+      message.clarificationExpected = false
       message.clarificationDraft = ''
       if (this.lastFailedRequest?.clarificationCardClientId === message.clientId) {
         this.error = ''

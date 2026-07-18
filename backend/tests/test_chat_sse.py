@@ -102,6 +102,7 @@ async def test_chat_stream_uses_documented_sse_schema(app) -> None:
         "search",
         "generate",
     ]
+    assert "clarify" not in [payload["step"] for _, payload in status_events]
     assert [payload["partial"] for _, payload in status_events] == [
         False,
         True,
@@ -134,8 +135,17 @@ async def test_mock_clarification_trigger_streams_clarification_done_kind(app) -
     events = _events(response.text)
     assert [payload["step"] for event, payload in events if event == "status"] == [
         "analyze",
-        "generate",
+        "clarify",
     ]
+    clarify_index = next(
+        index
+        for index, (event, payload) in enumerate(events)
+        if event == "status" and payload["step"] == "clarify"
+    )
+    token_index = next(index for index, (event, _) in enumerate(events) if event == "token")
+    done_index = next(index for index, (event, _) in enumerate(events) if event == "done")
+    assert clarify_index < token_index < done_index
+    assert events[clarify_index][1]["text"] == "案内に必要なことを少しだけ確認します。"
     assert "".join(payload["text"] for event, payload in events if event == "token") == (
         "どの学科についてお調べしましょうか？ 気になっている学科名を教えてください。"
     )

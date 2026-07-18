@@ -26,7 +26,7 @@ const props = defineProps({
   mode: {
     type: String,
     default: 'pending',
-    validator: (value) => ['pending', 'settled'].includes(value),
+    validator: (value) => ['pending', 'settled', 'elicit'].includes(value),
   },
 })
 
@@ -149,7 +149,8 @@ const isPending = computed(() => props.mode === 'pending')
   gap: 1rem;
 }
 
-.aurora-ring-v5--settled {
+.aurora-ring-v5--settled,
+.aurora-ring-v5--elicit {
   --aurora-stage-size: 24px;
   --aurora-icon-size: 24px;
   align-items: flex-start;

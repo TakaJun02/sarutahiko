@@ -61,6 +61,25 @@ describe('chat store SSE helpers', () => {
 
     expect(message.statusPartial).toBe(false)
     expect(message.statusRunId).toBe(0)
+    expect(message.clarificationExpected).toBe(false)
+  })
+
+  it('marks clarification as expected when a clarify status arrives', () => {
+    const message = createMessage('assistant', '', { pending: true })
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: {
+        step: 'clarify',
+        text: '案内に必要なことを少しだけ確認します。',
+        partial: false,
+      },
+    })
+
+    expect(message.pending).toBe(true)
+    expect(message.statusStep).toBe('clarify')
+    expect(message.statusText).toBe('案内に必要なことを少しだけ確認します。')
+    expect(message.clarificationExpected).toBe(true)
   })
 
   it('keeps one run id for partial growth and finalization, then increments on switches', () => {
@@ -215,6 +234,14 @@ describe('chat store SSE helpers', () => {
     store.messages = [message]
 
     applyAssistantEvent(message, {
+      event: 'status',
+      data: {
+        step: 'clarify',
+        text: '案内に必要なことを少しだけ確認します。',
+        partial: false,
+      },
+    })
+    applyAssistantEvent(message, {
       event: 'token',
       data: { text: 'どの学科について知りたいですか？' },
     })
@@ -228,6 +255,7 @@ describe('chat store SSE helpers', () => {
       },
     })
 
+    expect(message.clarificationExpected).toBe(true)
     expect(message.finalClarification).toBe(true)
     expect(message.clarificationActive).toBe(false)
     expect(store.isClarificationPending).toBe(false)
@@ -236,8 +264,39 @@ describe('chat store SSE helpers', () => {
     store.advanceRevealFrame(0.016)
 
     expect(message.clarificationActive).toBe(true)
+    expect(message.clarificationExpected).toBe(true)
     expect(message.finalClarification).toBeUndefined()
     expect(store.isClarificationPending).toBe(true)
+  })
+
+  it('drops clarification expected on finalize when done kind is not clarification', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '', {
+      pending: false,
+      streaming: true,
+      clarificationExpected: true,
+    })
+    store.messages = [message]
+
+    applyAssistantEvent(message, {
+      event: 'token',
+      data: { text: '通常回答です。' },
+    })
+    applyAssistantEvent(message, {
+      event: 'done',
+      data: {
+        thread_id: 'thread-1',
+        message_id: 'message-1',
+        sources: [],
+        kind: null,
+      },
+    })
+
+    message.revealedLength = message.content.length
+    store.advanceRevealFrame(0.016)
+
+    expect(message.clarificationExpected).toBe(false)
+    expect(message.clarificationActive).toBe(false)
   })
 
   it('sends the original question with origin metadata and deactivates the ask-origin card', async () => {
@@ -311,6 +370,7 @@ describe('chat store SSE helpers', () => {
   it('submits a clarification answer through the guarded card path', async () => {
     const store = useChatStore()
     const message = createMessage('assistant', 'どの学科ですか？', {
+      clarificationExpected: true,
       clarificationActive: true,
     })
     store.messages = [message]
@@ -319,6 +379,7 @@ describe('chat store SSE helpers', () => {
     await store.submitClarificationAnswer(message, ' 情報工学科です ')
 
     expect(message.clarificationActive).toBe(false)
+    expect(message.clarificationExpected).toBe(false)
     expect(message.clarificationDraft).toBe('情報工学科です')
     expect(store.isClarificationPending).toBe(false)
     expect(store.sendMessage).toHaveBeenCalledWith('情報工学科です', {
@@ -339,6 +400,7 @@ describe('chat store SSE helpers', () => {
     )
     const store = useChatStore()
     const message = createMessage('assistant', 'どの学科ですか？', {
+      clarificationExpected: true,
       clarificationActive: true,
     })
     store.messages = [message]
@@ -346,6 +408,7 @@ describe('chat store SSE helpers', () => {
     await store.submitClarificationAnswer(message, '情報工学科です')
 
     expect(message.clarificationActive).toBe(true)
+    expect(message.clarificationExpected).toBe(true)
     expect(store.isClarificationPending).toBe(true)
     expect(store.lastFailedRequest).toMatchObject({
       message: '情報工学科です',
@@ -360,12 +423,14 @@ describe('chat store SSE helpers', () => {
       thread_id: null,
     })
     expect(message.clarificationActive).toBe(false)
+    expect(message.clarificationExpected).toBe(false)
     expect(store.isClarificationPending).toBe(false)
   })
 
   it('cancels the active clarification card and clears its failed request', () => {
     const store = useChatStore()
     const message = createMessage('assistant', 'どの学科ですか？', {
+      clarificationExpected: true,
       clarificationActive: true,
     })
     store.messages = [message]
@@ -379,6 +444,7 @@ describe('chat store SSE helpers', () => {
     store.cancelClarification(message)
 
     expect(message.clarificationActive).toBe(false)
+    expect(message.clarificationExpected).toBe(false)
     expect(message.clarificationDraft).toBe('')
     expect(store.isClarificationPending).toBe(false)
     expect(store.error).toBe('')
@@ -489,6 +555,23 @@ describe('chat store SSE helpers', () => {
     expect(latest.mapInteractive).toBe(false)
   })
 
+  it('clears pending clarification state during the shared deactivation pass', () => {
+    const store = useChatStore()
+    const previous = createMessage('assistant', 'どの学科ですか？', {
+      clarificationExpected: true,
+      clarificationActive: true,
+      finalClarification: true,
+    })
+    store.messages = [previous]
+
+    store.deactivateMapCards()
+
+    expect(previous.clarificationExpected).toBe(false)
+    expect(previous.clarificationActive).toBe(false)
+    expect(previous.finalClarification).toBe(false)
+    expect(store.isClarificationPending).toBe(false)
+  })
+
   it('snaps revealed length on assistant error events', () => {
     const message = createMessage('assistant', '', { pending: true })
 
@@ -510,6 +593,13 @@ describe('chat store SSE helpers', () => {
     const message = createMessage('assistant', '', { pending: true })
 
     applyAssistantEvent(message, {
+      event: 'status',
+      data: {
+        step: 'clarify',
+        text: '案内に必要なことを少しだけ確認します。',
+      },
+    })
+    applyAssistantEvent(message, {
       event: 'done',
       data: {
         thread_id: 'thread-1',
@@ -519,6 +609,7 @@ describe('chat store SSE helpers', () => {
       },
     })
     expect(message.finalClarification).toBe(true)
+    expect(message.clarificationExpected).toBe(true)
 
     applyAssistantEvent(message, {
       event: 'error',
@@ -526,6 +617,7 @@ describe('chat store SSE helpers', () => {
     })
 
     expect(message.finalClarification).toBeUndefined()
+    expect(message.clarificationExpected).toBe(false)
     expect(message.clarificationActive).toBe(false)
   })
 
@@ -726,6 +818,7 @@ describe('chat store thread history actions', () => {
     await store.openThread('thread-clarify')
 
     expect(store.messages[0].content).toBe('どの学科について知りたいですか？')
+    expect(store.messages[0].clarificationExpected).toBe(false)
     expect(store.messages[0].clarificationActive).toBe(false)
     expect(store.isClarificationPending).toBe(false)
   })

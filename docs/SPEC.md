@@ -465,6 +465,22 @@
 - **意匠は GPT-5.6 Sol がデザインリード**（利用者指示）。「AI が作ったような」デザイン禁止・
   Campus Signal 既存トークンのみで現行 UI と一体に見えること。確定意匠は詳細文書 §6 に転記。
 
+### FR-40 確認質問 UI の是正 R2 — 意匠再設計と探索継続演出（2026-07-18 追加・利用者指示、詳細: `docs/UI_CLARIFICATION_FORM.md` v2.0）
+- 利用者評価: FR-39 の R1 意匠は「全然だめ」。**GPT-5.6 Sol が再度デザインリード**し全面再設計する
+  （R1 意匠は廃止。利用者指定の effort "ultra" は CLI/API 非対応のため上限 xhigh で実施し、
+  却下意匠のスクリーンショット添付＋批評ブリーフで補う）。
+- **ask_user 受付中は出力待ち演出（Aurora Ring のクルクル）を止めない**（利用者指示原文:
+  「回答が 1 ターン完了したような UX になってしまうため。あくまで回答を生成するための流れの一部なので、
+  出力待ちの演出は止めないでください」）。
+  - LoadingSpinnerV5 に第 3 モード **`elicit`**（リング回転・アイコン kurun 継続＋本文スロット表示）を追加。
+    リング SVG 構造・アニメーション値・STEP_THEMES・pending→settled morph・shimmer は**不変**
+    （FR-5/FR-12 不可侵のうち「リング周囲の見せ方」の拡張。利用者指示による確定仕様改訂）。
+  - SSE additive: `status` の step 語彙に **`clarify`** を追加し、ask_user の token 配信**直前**に送出。
+    FE はこれで clarification を事前検知し、リングを一度も settle させずに elicit へ遷移する
+    （done の `kind` だけでは settle→再回転のチラつきが不可避なため）。
+  - 解消は elicitation の終了と同時: フォーム送信（次ターンの pending スピナーへ引き継ぎ）・
+    キャンセル・エラー・スレッド切替/リロード（復元は常に settled）。
+
 ## 4. 非機能要件
 
 - **NFR-1**: LLM 推論はローカル GPU 群上の vLLM のみを使用し、外部 LLM API に依存しない

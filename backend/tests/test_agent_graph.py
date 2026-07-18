@@ -1335,6 +1335,7 @@ async def test_campus_navigator_fast_path_need_origin_exact_sse() -> None:
         "そこからの行き方をご案内します🗺️"
     )
     assert events[-2][1]["mode"] == "ask_origin"
+    assert "clarify" not in [data["step"] for event, data in events if event == "status"]
     assert events[-1][1]["sources"] == [LOCATION_INDEX_SOURCE.model_dump()]
     assert events[-1][1]["kind"] is None
     assert len(llm.decide_calls) == 1
@@ -1532,8 +1533,17 @@ async def test_ask_user_is_terminal_and_records_clarification_metadata() -> None
         "analyze",
         "analyze",
         "analyze",
-        "generate",
+        "clarify",
     ]
+    clarify_index = next(
+        index
+        for index, (event, data) in enumerate(events)
+        if event == "status" and data["step"] == "clarify"
+    )
+    token_index = next(index for index, (event, _) in enumerate(events) if event == "token")
+    done_index = next(index for index, (event, _) in enumerate(events) if event == "done")
+    assert clarify_index < token_index < done_index
+    assert events[clarify_index][1]["text"] == "案内に必要なことを少しだけ確認します。"
     assert "".join(data["text"] for event, data in events if event == "token") == (
         "参加したい学科は決まっていますか？"
     )
@@ -1889,6 +1899,7 @@ async def test_map_free_stream_has_status_then_token_then_done() -> None:
     first_token = names.index("token")
     assert all(name == "status" for name in names[:first_token])
     assert "map" not in names
+    assert "clarify" not in [data["step"] for event, data in events if event == "status"]
     assert names[-1] == "done"
     assert events[-1][1]["kind"] is None
 
