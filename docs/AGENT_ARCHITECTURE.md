@@ -73,7 +73,7 @@ flowchart TD
     RD -->|"campus_navigator(request)"| NV["<b>campus_navigator</b>（サブエージェント）<br/>fast path（決定的・LLM 0回）→ 内部 decide ≤3手<br/>ask_origin は決定的バリデータが裁く"]:::subag
     RD -->|"バリデーション不合格"| DE
 
-    RT -->|"観測（120 tok 級に圧縮）"| DE
+    RT -->|"観測（500 tok 上限に圧縮・FR-37）"| DE
     SE -->|"観測"| DE
     WS -->|"観測"| DE
     NV --> RN{"_route_after_navigator"}:::router
@@ -119,6 +119,11 @@ flowchart TD
   - **soft（70%）**: decide へ「まとめに入れ」注記＋web_search の raw_content 取得を抑制
   - **hard（85%）または evidence が generate 実予算を充足**: メニューを `finish`（＋ask_user）へ縮退
 - 安全弁（チューニングノブではない）: 同一 `(action, action_input)` 反復ガード・`recursion_limit 50`。
+  FR-37（2026-07-18）: `recursion_limit` 到達時は `GraphRecursionError` を捕捉し、累積 `merged_state` の
+  evidence で generate 単独の縮退グラフへフォールバック（evidence 皆無なら定型回答）。SSE 契約不変。
+  併せて観測 1 件上限を 120→500 トークン（チャンク抜粋 160→400 字）へ緩和し、hard 停止が
+  recursion_limit より先（最悪 12〜14 周）に効く状態を回復。重複除外時は「全文 evidence 取得済み」
+  注記を観測へ付す（詳細: `AGENT_REACT.md` §2-4 改訂）。
 - decide transport 死亡時のフォールバック: ツール 0 回なら `retrieve(質問文)`、実行済みなら `finish`
   （ターンを落とさない）。
 
@@ -133,7 +138,7 @@ flowchart TD
 | 区分 | ステップ | 役割 | 使用ツール / 外部リソース | LLM |
 |---|---|---|---|---|
 | ノード | decide（`_decide`） | 次アクションの選択（guided JSON）。予算計測・メニュー構成・バリデーション（0回finish 差し戻し・反復ガード）・SSE 実況（初回 analyze / 以降 evaluate=thought）を担う | 生成 vLLM（`decide()`: response_format json_schema）、`/tokenize` | ✔ |
-| ノード | retrieve（`_retrieve`） | 意味ベクトル検索（queries 1..3）。ヒットを evidence store（`knowledge_results`）へマージ・兄弟チャンク展開。観測はタイトル＋抜粋を 120 tok 級に圧縮 | 埋め込み vLLM（gouin）＋ Qdrant | — |
+| ノード | retrieve（`_retrieve`） | 意味ベクトル検索（queries 1..3）。ヒットを evidence store（`knowledge_results`）へマージ・兄弟チャンク展開。観測はタイトル＋抜粋（400 字/件）を 500 tok 上限に圧縮（FR-37） | 埋め込み vLLM（gouin）＋ Qdrant | — |
 | ノード | search（`_search`） | 決定的字句グレップ（keywords 1..6）。部屋番号・固有名詞向け。表記ゆれバリアント展開 | Qdrant スキャン＋ `app/rag/lexical.py` | — |
 | ノード | web_search（`_web_search`） | Tavily 検索＋本文取得（queries 1..3）。**ドメイン制限なし**。CB 開放時は「利用不可」観測。soft 超過時 raw_content 抑制 | Tavily API＋httpx | — |
 | サブエージェント | campus_navigator（`_campus_navigator` → `navigator.py`） | 学内の場所・経路解決。fast path（`find_locations_in_text`＋`resolve_location`・LLM 0回）→ 失敗時のみ内部 decide（resolve_place / find_route / ask_origin・≤3手）。戻りは route / place / need_origin / not_navigable の構造化 4 種。**最終文章は書かない** | campus_map（純関数）、生成 vLLM（内部 decide 時のみ） | （✔） |

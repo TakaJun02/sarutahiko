@@ -166,6 +166,22 @@ flowchart TD
 - **安全弁**（チューニングノブではない・事故対策）:
   1. 同一 `(action, action_input)` 反復ガード（§2-1）。
   2. グラフの `recursion_limit`（FR-33 の 50 を踏襲）。
+- **2026-07-18 FR-37 改訂（本番 recursion_limit 到達事故対応。背景: `SPEC.md` FR-37）**:
+  1. 観測 1 件の上限を 120→**500 トークン**、チャンク抜粋を先頭 160→**400 字**（上位 3 件は不変）
+     へ緩和。狙いは (a) 「抜粋が肝心の箇所の手前で切れる→途切れていると誤認して同義再検索」の
+     空転根絶、(b) 観測が予算を実際に消費することで hard 停止が recursion_limit より先に効くこと
+     （観測は行動ログ result と観測一覧に二重掲載 → 1 周最大 ~1,000 tok → 最悪 12〜14 周で hard）。
+     `_web_observation` は共通上限（`OBSERVATION_TOKEN_LIMIT`）経由で同時に緩和される。
+  2. 重複除外が発生した観測には「除外分の全文は evidence 取得済みで、回答生成時にそのまま
+     参照される（再取得不要）」注記を付す（「見えない続き」を探し続ける誤認の遮断）。
+  3. **GraphRecursionError フォールバック**: `astream` が `GraphRecursionError` を送出した場合、
+     `stream()` が累積している `merged_state`（updates マージ済み＝例外時点の evidence を含む）を
+     入力に、**generate ノード単独の縮退グラフ**を実行して通常の token→done 契約で回答する
+     （writer 契約・status/SSE 語彙は本経路と同一）。`knowledge_results`・`web_results` がともに
+     空の場合は定型の「見つかりませんでした」回答を token 分割配信（ask_user と同じ 8 字分割）。
+     `agent.trace` に `fallback_generate`（reason=recursion_limit・evidence 件数）を記録。
+     `recursion_limit=50` は不変。checkpointer 追加・周回カウンタ復活は不可。
+     テスト容易性のため `recursion_limit` はインスタンス属性（既定 50）として注入可能にする。
 - **廃止する定数・state**: `MAX_LOCAL_SEARCH_FOLLOWUPS` / `MAX_RETRIEVAL_FOLLOWUPS` /
   `MAX_WEB_SEARCH_ROUNDS` / `MIN_WEB_ROUNDS_BEFORE_GIVE_UP`、周回カウンタ類
   （`web_search_rounds` / `local_search_followups` / `retrieval_followups` 等）。
@@ -283,10 +299,10 @@ flowchart TD
 |---|---|---|
 | soft 閾値 | **11,468 トークン**（= 16,384 の 70%） | P1: 実効窓 16,384 実測。decide プロンプトは 340〜450 tok 級で余裕大 |
 | hard 閾値 | **13,926 トークン**（= 同 85%）または evidence ⊇ generate 実予算 | 同上 |
-| 観測 1 件の上限 | 120 トークン級（タイトル＋2 行要約） | P3: この粒度で選択・回復とも良好 |
+| 観測 1 件の上限 | ~~120 トークン級（タイトル＋2 行要約）~~ → **2026-07-18 FR-37 改訂: 500 トークン（抜粋 400 字×3 件）** | P3 では良好としたが、本番で「抜粋切れ→同義再検索」空転により recursion_limit 到達事故。緩和で空転根絶＋予算停止の実効化（§2-4） |
 | navigator 内部 decide | 上限 3 手 | P3: 2 手内で回復動作を確認、余裕 1 手 |
 | decide 温度・max_tokens | 0.2 / 300 | P2/P3: 実測 completion 43〜80 tok、300 で十分 |
-| recursion_limit | 50（FR-33 踏襲） | 安全弁のみ・実測で接近せず |
+| recursion_limit | 50（FR-33 踏襲） | ~~安全弁のみ・実測で接近せず~~ → 2026-07-18 本番で到達事故（空転 26 周）。FR-37 で到達時は evidence による generate 縮退へフォールバック（§2-4）。値は不変 |
 
 ## 8. 受け入れ基準（実装検収）
 
