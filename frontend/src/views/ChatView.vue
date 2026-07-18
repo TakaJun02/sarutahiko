@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import CampusPet from '../components/CampusPet.vue'
+import CampusPetPicker from '../components/CampusPetPicker.vue'
 import ClarificationCard from '../components/ClarificationCard.vue'
 import LoadingSpinnerV5 from '../components/LoadingSpinnerV5.vue'
 import MapCard from '../components/MapCard.vue'
@@ -10,6 +12,8 @@ import ThreadSidebar from '../components/ThreadSidebar.vue'
 import { useViewportState } from '../composables/useAppViewport'
 import { useAuthStore } from '../stores/auth'
 import { toFriendlyErrorMessage, useChatStore } from '../stores/chat'
+import { useCampusPetStore } from '../stores/pet'
+import { isCampusPetPassphrase } from '../utils/campusPet'
 import { getDialogAriaLabel, getDialogInitialFocus } from '../utils/dialog'
 import {
   buildGreetingLines,
@@ -33,6 +37,7 @@ const suggestions = [
 
 const auth = useAuthStore()
 const chat = useChatStore()
+const pet = useCampusPetStore()
 const router = useRouter()
 const route = useRoute()
 const { appHeight } = useViewportState()
@@ -43,12 +48,16 @@ const scrollContainerRef = ref(null)
 const messagesEnd = ref(null)
 const inputRef = ref(null)
 const footerRef = ref(null)
+const composerShellRef = ref(null)
 const footerClearancePx = ref(224)
+const petComposerClearancePx = ref(100)
 const expandedSourceKeys = ref(new Set())
 const activeGreeting = ref(EMPTY_GREETING_VARIANTS[0])
 const isAtBottom = ref(true)
 const composerPlaceholder = computed(() => (
-  chat.isOriginSelectionPending
+  pet.pickerOpen
+    ? '呼び出す仲間を選んでください'
+    : chat.isOriginSelectionPending
     ? 'マップから現在地を選んでください'
     : chat.isClarificationPending
       ? '質問の下の回答欄でお答えください'
@@ -65,6 +74,7 @@ const dialogError = ref('')
 const dialogBusy = ref(false)
 const dialogInputRef = ref(null)
 const dialogCancelRef = ref(null)
+const aboutPetHintOpen = ref(false)
 
 // Transient hint shown when Enter is pressed while a reply is streaming.
 const busyHint = ref('')
@@ -123,6 +133,14 @@ async function send() {
     showBusyHint()
     return
   }
+  if (pet.pickerOpen) {
+    return
+  }
+  if (isCampusPetPassphrase(text)) {
+    draft.value = ''
+    pet.openPicker()
+    return
+  }
   pendingScrollBehavior = 'smooth'
   draft.value = ''
   try {
@@ -178,6 +196,20 @@ function cancelClarification(message) {
   })
 }
 
+function selectCampusPet(form) {
+  pet.summon(form)
+  nextTick(() => {
+    inputRef.value?.focus()
+  })
+}
+
+function cancelCampusPetPicker() {
+  pet.closePicker()
+  nextTick(() => {
+    inputRef.value?.focus()
+  })
+}
+
 function onEnter(event) {
   if (event.isComposing || event.shiftKey) {
     return
@@ -193,10 +225,16 @@ function onEnter(event) {
     showBusyHint()
     return
   }
+  if (pet.pickerOpen) {
+    return
+  }
   send()
 }
 
 function applySuggestion(text) {
+  if (pet.pickerOpen) {
+    return
+  }
   if (chat.isOriginSelectionPending || chat.isClarificationPending || chat.isSending) {
     return
   }
@@ -257,6 +295,7 @@ function revealedMessageContent(message) {
 }
 
 function logout() {
+  pet.closePicker()
   auth.clearSession()
   chat.reset()
   router.replace('/login')
@@ -279,11 +318,13 @@ function selectThread(threadId) {
   if (threadId === chat.threadId) {
     return
   }
+  pet.closePicker()
   router.push(`/chat/${threadId}`)
 }
 
 function startNewChat() {
   closeDrawer()
+  pet.closePicker()
   if (chat.messages.length === 0) {
     chooseEmptyGreeting()
   }
@@ -334,12 +375,16 @@ function removeThread(threadId) {
 }
 
 function openAboutDialog() {
+  aboutPetHintOpen.value = false
   openDialog('about')
 }
 
 function closeDialog() {
   if (dialogBusy.value) {
     return
+  }
+  if (dialog.value?.kind === 'about') {
+    aboutPetHintOpen.value = false
   }
   dialog.value = null
   restoreDialogFocus()
@@ -431,6 +476,10 @@ function onWindowKeydown(event) {
   }
   if (drawerOpen.value) {
     closeDrawer()
+    return
+  }
+  if (pet.pickerOpen) {
+    cancelCampusPetPicker()
   }
 }
 
@@ -492,8 +541,12 @@ async function scrollToBottom(fallbackBehavior = 'smooth') {
 
 function updateFooterClearance() {
   const footerHeight = footerRef.value?.offsetHeight || 0
+  const composerHeight = composerShellRef.value?.offsetHeight || 0
   if (footerHeight > 0) {
     footerClearancePx.value = Math.ceil(footerHeight + 24)
+  }
+  if (composerHeight > 0) {
+    petComposerClearancePx.value = Math.ceil(composerHeight + 12)
   }
 }
 
@@ -545,6 +598,7 @@ watch(appHeight, () => {
 watch(
   () => route.params.threadId,
   (threadId) => {
+    pet.closePicker()
     syncThreadFromRoute(threadId || null)
   },
 )
@@ -598,6 +652,8 @@ onBeforeUnmount(() => {
         <span class="ambient-thinking-cloud ambient-thinking-cloud--far"></span>
       </span>
     </div>
+
+    <CampusPet :composer-clearance="petComposerClearancePx" />
 
     <aside class="relative z-10 hidden w-[17.5rem] shrink-0 border-r border-edge lg:block">
       <ThreadSidebar
@@ -735,6 +791,7 @@ onBeforeUnmount(() => {
             </h2>
 
             <div class="chat-empty__actions mt-7 flex w-full flex-wrap gap-2.5">
+              <fieldset :disabled="pet.pickerOpen" class="contents">
               <button
                 v-for="suggestion in suggestions"
                 :key="suggestion.label"
@@ -749,6 +806,7 @@ onBeforeUnmount(() => {
                   <path d="M20 5v6a5 5 0 0 1-5 5H5 M9 12l-4 4 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </button>
+              </fieldset>
             </div>
           </div>
 
@@ -902,10 +960,18 @@ onBeforeUnmount(() => {
           class="composer-dock sticky bottom-0 z-10 px-4 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] pt-8"
           @submit.prevent="send"
         >
+          <CampusPetPicker
+            v-if="pet.pickerOpen"
+            :current-form="pet.currentForm"
+            :show-hint="!pet.unlocked"
+            @select="selectCampusPet"
+            @cancel="cancelCampusPetPicker"
+          />
           <div class="relative mx-auto w-full max-w-3xl">
             <Transition name="latest-jump">
               <button
                 v-if="chat.messages.length > 0 && !isAtBottom"
+                v-show="!pet.pickerOpen"
                 type="button"
                 class="absolute -top-14 left-1/2 grid h-11 w-11 -translate-x-1/2 place-items-center rounded-full border border-edge-strong bg-ink-raised/70 text-white/80 shadow-glass backdrop-blur-md transition duration-base ease-expressive hover:bg-ink-raised/90 hover:text-white active:scale-[0.94]"
                 aria-label="最新のメッセージへ移動"
@@ -918,13 +984,16 @@ onBeforeUnmount(() => {
               </button>
             </Transition>
             <div
+              ref="composerShellRef"
               class="composer-shell flex items-end gap-2 rounded-[1.6rem] p-2"
               :class="{
                 'composer-shell--streaming': chat.isSending,
                 'composer-shell--origin-locked': chat.isOriginSelectionPending || chat.isClarificationPending,
+                'composer-shell--pet-locked': pet.pickerOpen,
               }"
               :aria-disabled="chat.isOriginSelectionPending || chat.isClarificationPending"
             >
+              <fieldset :disabled="pet.pickerOpen" class="contents">
               <textarea
                 ref="inputRef"
                 v-model="draft"
@@ -944,6 +1013,7 @@ onBeforeUnmount(() => {
                   <path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </button>
+              </fieldset>
             </div>
             <!-- The full error message lives in the conversation bubble; this
                  banner is a compact retry affordance. -->
@@ -1041,13 +1111,55 @@ onBeforeUnmount(() => {
                 ibera.cps.akita-pu.ac.jp
               </p>
             </section>
+            <section v-if="pet.unlocked" class="about-pet-row" aria-label="キャンパスペット">
+              <div class="about-pet-row__copy">
+                <span class="about-pet-row__mark" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="7.2" fill="currentColor" opacity="0.22" />
+                    <path d="M8.2 12.8c1.9 1.7 5.7 1.7 7.6 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+                    <path d="M9 9.3h0.1M15 9.3h0.1" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" />
+                  </svg>
+                </span>
+                <span>
+                  <span class="about-pet-row__title">キャンパスペット</span>
+                  <span class="about-pet-row__meta">合言葉:「ペットを呼び出す」</span>
+                </span>
+              </div>
+              <div class="about-pet-row__actions">
+                <button
+                  type="button"
+                  class="about-pet-toggle"
+                  role="switch"
+                  :aria-checked="pet.visible"
+                  :aria-label="pet.visible ? 'ペットを非表示' : 'ペットを表示'"
+                  @click="pet.toggleVisible()"
+                >
+                  <span class="about-pet-toggle__knob"></span>
+                </button>
+              </div>
+            </section>
           </template>
           <p v-if="dialogError" class="mt-3 text-sm text-red-300" role="alert">{{ dialogError }}</p>
           <div v-if="dialog.kind === 'about'" class="mt-5 flex justify-end">
+            <div class="about-pet-corner">
+              <button
+                type="button"
+                class="about-pet-secret"
+                aria-label="小さなおまけのヒント"
+                :aria-expanded="aboutPetHintOpen"
+                @click="aboutPetHintOpen = !aboutPetHintOpen"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7.4 14.2c-1.8 0-3.1-1-3.1-2.4 0-1.5 1.4-2.5 3.2-2.5 0.4-2.3 2.4-3.8 5-3.8 2.8 0 4.8 1.8 5 4.3 1.4 0.2 2.4 1.1 2.4 2.3 0 1.4-1.3 2.2-3 2.2H7.4z" fill="currentColor" opacity="0.42" />
+                  <path d="M8 17.2h7.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity="0.42" />
+                </svg>
+              </button>
+              <p class="about-pet-hint" :hidden="!aboutPetHintOpen">メッセージで「ペットを呼び出す」と送ってみよう！</p>
+            </div>
             <button
               ref="dialogCancelRef"
               type="button"
-              class="min-h-11 rounded-ui-sm border border-edge px-4 py-2 text-sm text-white/70 transition duration-fast ease-standard hover:bg-fill-hover hover:text-white active:scale-[0.97]"
+              class="min-h-11 shrink-0 whitespace-nowrap rounded-ui-sm border border-edge px-4 py-2 text-sm text-white/70 transition duration-fast ease-standard hover:bg-fill-hover hover:text-white active:scale-[0.97]"
               @click="closeDialog"
             >
               閉じる
@@ -1144,6 +1256,19 @@ onBeforeUnmount(() => {
   box-shadow:
     0 0 0 1px rgba(255, 118, 87, 0.035),
     var(--shadow-raised);
+}
+
+.composer-shell--pet-locked {
+  border-color: rgba(255, 118, 87, 0.26);
+  background: color-mix(in srgb, var(--color-raised) 94%, var(--color-signal) 6%);
+  box-shadow:
+    0 0 0 1px rgba(255, 118, 87, 0.035),
+    var(--shadow-raised);
+}
+
+.composer-shell--pet-locked textarea {
+  cursor: not-allowed;
+  color: rgba(242, 241, 236, 0.42);
 }
 
 .composer-shell--origin-locked textarea {
