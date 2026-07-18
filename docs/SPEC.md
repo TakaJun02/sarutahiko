@@ -1,6 +1,7 @@
 # campus-guide-agent システム仕様書
 
-- 版: v0.26（2026-07-18, Fable 改訂 — 利用者指示: **FR-34 ReAct ハーネス刷新＋Gemma 4 31B 復帰**
+- 版: v0.27（2026-07-18, Fable 改訂 — **FR-35 生成 LLM の本番既定を 31B PP=2 へ切替**（利用者指示）。FR-34 の完了を記録）
+- v0.26（2026-07-18, Fable 改訂 — 利用者指示: **FR-34 ReAct ハーネス刷新＋Gemma 4 31B 復帰**
   （詳細: `docs/AGENT_REACT.md`）。ワークフローノード内の固定処理をツール駆動の ReAct ループへ
   刷新（ハーネス v6）。経路ドメインはサブエージェントへ切り出し。生成 LLM を 31B へ戻し
   本機＋nubia の PP=2 で運用。着手は FR-33 本番反映 → PoC（P1〜P4）合格後）
@@ -399,6 +400,17 @@
   旧 31B 単カードの max-model-len 2816 問題を解消し 16k 窓を狙う）。12B 単機は緊急切り戻し用に保持。
 - SSE 契約（イベント種別・step 語彙・status 自由文）は互換維持・フロント無改修。
   着手順は FR-33 本番反映 → PP=2 疎通（P1）→ PoC（P2〜P4）→ 仕様 v1.0 確定 → 実装・検収。
+- **完了（2026-07-18）**: PoC P1〜P4 全合格・実装（Codex）・Fable 検収（pytest 133 / Vitest 89 /
+  build green・実 LLM E2E 7 リクエスト全合格）・develop マージ済み。
+
+### FR-35 生成 LLM の本番既定を 31B PP=2 へ切替（2026-07-18 追加・利用者指示）
+- FR-34 で検証済みの **Gemma 4 31B PP=2 を本番の既定**とする（12B 単機は緊急切り戻し先として
+  compose 定義を保持）。
+- backend は `network_mode: host` 化し、生成エンドポイントを `http://127.0.0.1:8000/v1` に統一
+  （PP=2 でも 12B でも同一 URL — 切り戻しは「どちらを立てるか＋`LLM_MODEL`」のみ）。
+- `serve-31b.sh` はデタッチ起動（セッション切断でも生存）・start/stop/status/logs・
+  `max-num-seqs 8`（NFR-1 の同時利用目標に一致）。
+- 起動・切り戻し runbook: `docs/PP2_MULTINODE_GUIDE.md` §6-9（技術選定の記録: `ARCHITECTURE.md` v0.6）。
 
 ## 4. 非機能要件
 
