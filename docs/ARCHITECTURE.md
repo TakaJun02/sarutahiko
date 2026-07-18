@@ -46,7 +46,7 @@ backend のローカル起動・Vite の `/api` プロキシ先はともに 8080
 - docker compose の公開ポートはすべて `127.0.0.1:` バインドとする（Docker の port publish はホストのファイアウォールを素通りするため、vLLM・Qdrant・backend への外部直アクセスを遮断する目的）。
 - 本番起動（FR-35 以降）: 生成 31B PP=2 を先に立て（`infra/pp2/` — nubia worker → ibera head →
   `serve-31b.sh`）、`docker compose up -d backend`（depends_on で qdrant も起動。**vllm サービスは
-  起動しない** — 12B は切り戻し時のみ明示起動）。手順の正: `docs/PP2_MULTINODE_GUIDE.md` §6-9。
+  起動しない** — 12B は切り戻し時のみ明示起動）。手順の正: `docs/PP2_MULTINODE_GUIDE.md` §10（v2.0 で改番。旧 v1.0 §6-9）。
 
 ## 2. 技術選定と理由
 
@@ -57,7 +57,7 @@ backend のローカル起動・Vite の `/api` プロキシ先はともに 8080
 | バックエンド | Python 3.11+ / FastAPI | SSE・非同期・LLM エコシステムとの親和性 |
 | エージェント制御 | LangGraph **1.2.9**（**定義＝実行**・FR-33 で一本化、`docs/LANGGRAPH_MIGRATION.md`）。**2026-07-18 FR-34 でハーネス v6 = ReAct 化**（`docs/AGENT_REACT.md` v1.0） | **decide ループ**（guided JSON）が retrieve / search / web_search / campus_navigator / ask_user / finish を毎ターン選択。停止はコンテキスト予算（実効窓の 70%/85%）で、周回カウンタは全廃。status/token/map は `get_stream_writer()` の custom イベントでノード内から送出。**LangSmith 系環境変数（`LANGCHAIN_TRACING_V2` / `LANGSMITH_TRACING`）は設定しない**（テレメトリ無効を維持） |
 | LLM サービング | vLLM（OpenAI 互換サーバ） | 確定仕様。バックエンドからは OpenAI クライアントで接続 |
-| LLM モデル | 本番既定: **`google/gemma-4-31B-it-qat-w4a16-ct` の PP=2**（2026-07-18 FR-35 利用者指示）。緊急切り戻し先: **`google/gemma-4-12B-it-qat-w4a16-ct` 単機**（compose vllm サービスとして定義を保持） | 31B は本機+nubia の 2 筐体パイプライン並列（PP=2・Ray）: 16k 窓・decode 37.9 tok/s・prefix cache 98.8% 短縮・実 LLM E2E 全合格（FR-34、`docs/PP2_MULTINODE_GUIDE.md`）。ハーネス v6 はモデル非依存で、12B への切り戻しは PP 停止→compose vllm 起動→`LLM_MODEL` 差し替えのみ（同一 URL・§6-9 runbook）。thinking 非対応・`chat_template_kwargs` を送らない規約は両モデル共通（AGENT_HARNESS.md §4） |
+| LLM モデル | 本番既定: **`google/gemma-4-31B-it-qat-w4a16-ct` の PP=2**（2026-07-18 FR-35 利用者指示）。緊急切り戻し先: **`google/gemma-4-12B-it-qat-w4a16-ct` 単機**（compose vllm サービスとして定義を保持） | 31B は本機+nubia の 2 筐体パイプライン並列（PP=2・Ray）: 16k 窓・decode 37.9 tok/s・prefix cache 98.8% 短縮・実 LLM E2E 全合格（FR-34、`docs/PP2_MULTINODE_GUIDE.md`）。ハーネス v6 はモデル非依存で、12B への切り戻しは PP 停止→compose vllm 起動→`LLM_MODEL` 差し替えのみ（同一 URL・PP2_MULTINODE_GUIDE §10 runbook）。thinking 非対応・`chat_template_kwargs` を送らない規約は両モデル共通（AGENT_HARNESS.md §4） |
 | 埋め込み | **`Qwen/Qwen3-Embedding-8B`（第2GPUサーバー・vLLM serve・OpenAI 互換 /v1/embeddings）** | **2026-07-12 利用者指示**: bge-m3(CPU) から変更。MTEB 多言語で最高水準・日本語検索に強い。生成用 GPU と取り合わないよう別マシンで提供。クエリ側 instruct プレフィックス等の利用規約はハーネス v5 §V5-1 | 
 | 埋め込み（旧） | `BAAI/bge-m3`（CPU） | v0.2 までの構成。`EMBEDDING_BASE_URL` 未設定時の開発用フォールバックとしてコードパスは残す |
 | リランカー | `BAAI/bge-reranker-v2-m3`（任意、Phase 3 で効果測定） | 検索精度向上の定番。効果がなければ外す |

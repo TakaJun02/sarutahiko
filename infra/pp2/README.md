@@ -245,7 +245,9 @@ export HEAD_NODE_IP='<ibera の LAN IP>'
 
 ### 2-4. Gemma 4 31B を serve
 
-【利用者・ibera】別 shell で foreground 起動する。初回は層分割を指定せず、vLLM の均等分割で測る。
+【利用者・ibera】起動する（FR-35 以降は**デタッチ起動が既定**で、API READY まで自動待機する。
+foreground でデバッグしたい場合のみ `PP2_FOREGROUND=1` を付ける。死活確認は `serve-31b.sh status`、
+ログ追尾は `serve-31b.sh logs`）。初回は層分割を指定せず、vLLM の均等分割で測る。
 
 ```bash
 cd /home/junta_takahashi/oc_2026
@@ -259,7 +261,7 @@ cd /home/junta_takahashi/oc_2026
 --pipeline-parallel-size 2
 --tensor-parallel-size 1
 --max-model-len 16384
---max-num-seqs 4
+--max-num-seqs 8
 --gpu-memory-utilization 0.92
 --limit-mm-per-prompt '{"image": 0}'
 --enable-prefix-caching
@@ -273,7 +275,7 @@ cd /home/junta_takahashi/oc_2026
 | `PIPELINE_PARALLEL_SIZE` | `2` |
 | `TENSOR_PARALLEL_SIZE` | `1` |
 | `MAX_MODEL_LEN` | `16384` |
-| `MAX_NUM_SEQS` | `4` |
+| `MAX_NUM_SEQS` | `8` |
 | `GPU_MEMORY_UTILIZATION` | `0.92` |
 | `LIMIT_MM_PER_PROMPT` | `{"image": 0}` |
 | `VLLM_HOST` / `VLLM_PORT` | `127.0.0.1` / `8000` |
@@ -403,8 +405,8 @@ model 同梱 template で tool protocol が成立しない場合だけ、公式 
 
 ### 通常停止
 
-`serve-31b.sh` の foreground shell で `Ctrl-C` 後、head、worker の順に ephemeral container を消す。
-HF cache は bind mount であり削除されない。
+`./infra/pp2/serve-31b.sh stop` で serve を止め（foreground 起動時は `Ctrl-C`）、head、worker の順に
+ephemeral container を消す。HF cache は bind mount であり削除されない。
 
 【利用者・ibera】
 
@@ -466,12 +468,14 @@ cd /home/junta_takahashi/oc_2026
 
 ```bash
 cd /home/junta_takahashi/oc_2026
-docker compose up -d backend
+LLM_MODEL=google/gemma-4-12B-it-qat-w4a16-ct docker compose up -d vllm backend
 docker compose ps
 curl -fsS http://127.0.0.1:8000/v1/models
 curl -fsS http://127.0.0.1:8080/api/health
 ```
 
-`backend` の `depends_on` により既存 `vllm` と `qdrant` も起動する。切り戻し時は PP 用 env export が
+FR-35 以降 `backend` の `depends_on` は `qdrant` のみ（vllm は含まない）なので、**12B の `vllm` は
+上記のとおり明示起動する**。`LLM_MODEL` は毎回コマンドの環境変数で渡す（`.env` に書かない —
+戻し忘れ防止。`docs/PP2_MULTINODE_GUIDE.md` §10-3）。切り戻し時は PP 用 env export が
 残った shell を使い回さず、新しい shell で compose を起動する。12B が応答することを確認してから
 来場者向け Nginx endpoint を復帰確認する。
