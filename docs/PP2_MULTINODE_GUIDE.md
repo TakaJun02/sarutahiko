@@ -308,7 +308,7 @@ curl -fs http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application
   -d '{"model":"google/gemma-4-31B-it-qat-w4a16-ct","messages":[{"role":"user","content":"一文で自己紹介して"}],"max_tokens":60}'
 ```
 
-### 手順 8: 撤収と本番復帰（ibera / nubia）
+### 手順 8: 撤収（PoC 等の一時利用を畳む場合）
 
 ```bash
 # ibera — PP スタック停止（serve はコンテナごと消える）
@@ -316,11 +316,59 @@ curl -fs http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application
 
 # nubia — worker 停止（GPU メモリ解放）
 cd ~/campus-guide-agent && infra/pp2/start-worker-nubia.sh stop
-
-# ibera — 12B 本番復帰（リポジトリルートで）
-cd /home/junta_takahashi/oc_2026 && docker compose up -d backend
-curl -fs http://127.0.0.1:8080/api/health   # status: ok（vllm はロード完了まで 1〜2 分 degraded）
 ```
+
+## 6-9. 本番運用モード（FR-35・2026-07-18 利用者指示で 31B PP=2 が本番既定）
+
+FR-35 で backend は `network_mode: host` になり、生成エンドポイントは常に
+`http://127.0.0.1:8000/v1`。**PP=2 の serve（ホスト直）と 12B（compose vllm の
+127.0.0.1:8000 公開）が同じ URL を取り合う**設計なので、両方同時には起動できない
+（`serve-31b.sh` は起動前に 8000 の占有を検査して弾く）。
+
+### 本番起動（通常運用・再起動後もこの順）
+
+```bash
+# 0) nubia: worker 起動（常時稼働。再起動後もこれだけ）
+cd ~/campus-guide-agent && HEAD_NODE_IP=172.28.208.109 infra/pp2/start-worker-nubia.sh
+
+# 1) ibera: 12B が動いていれば止める（初回切替時のみ）
+cd /home/junta_takahashi/oc_2026 && docker compose stop vllm
+
+# 2) ibera: head 起動 → 2 GPU を待つ → 両ノード NVML 確認（§5 罠#3）
+infra/pp2/start-head.sh && infra/pp2/start-head.sh status
+docker exec pp2-ray-head-ibera nvidia-smi
+
+# 3) ibera: serve（デタッチ起動・API READY まで自動待機・max-num-seqs 8）
+infra/pp2/serve-31b.sh            # ← start が既定。ready 表示が出たら完了
+infra/pp2/serve-31b.sh status     # 以降の死活確認 / logs でログ追尾
+
+# 4) ibera: backend（qdrant も連れて上がる。vllm サービスは起動しない）
+docker compose up -d backend
+curl -fs http://127.0.0.1:8080/api/health   # model が 31B で status: ok を確認
+```
+
+### 12B への緊急切り戻し（当日 PP 系障害時。目標 3 分）
+
+```bash
+# ibera のみで完結（nubia が死んでいても実行可能）
+infra/pp2/serve-31b.sh stop || true
+infra/pp2/start-head.sh stop || true        # head ごと落として 8000 を確実に解放
+cd /home/junta_takahashi/oc_2026
+LLM_MODEL=google/gemma-4-12B-it-qat-w4a16-ct docker compose up -d vllm backend
+curl -fs http://127.0.0.1:8080/api/health   # model が 12B で status: ok（ロード 1〜2 分）
+```
+
+31B へ戻すときは「本番起動」手順を再実行（`docker compose stop vllm` を忘れない）。
+`LLM_MODEL` は毎回の `docker compose up` コマンドの環境変数で切り替える（.env に書くと
+戻し忘れの事故になるため推奨しない）。
+
+### 運用上の注意
+
+- **nubia 断 = 生成全停止**。nubia の再起動・停電後は worker 起動（手順 0）→ serve は
+  自動では戻らないので `serve-31b.sh stop` → `serve-31b.sh`（クラスタが 2 GPU に戻ってから）。
+- serve はコンテナ内デタッチプロセスなので、**launching したシェルや SSH が切れても生存**する。
+  head コンテナを消す（`start-head.sh stop`）と一緒に死ぬ。
+- 週次程度で §5 罠#3（NVML 剥がれ）の予防確認: 両ノードで `docker exec … nvidia-smi`。
 
 ---
 
