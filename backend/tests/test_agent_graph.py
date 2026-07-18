@@ -12,11 +12,16 @@ from openai import BadRequestError
 from app.agent.campus_map import resolve_location
 from app.agent.graph import (
     DECIDE_SYSTEM_PROMPT,
+    DUPLICATE_EVIDENCE_NOTE,
+    FALLBACK_NOT_FOUND_RESPONSE,
     GENERATE_SYSTEM_PROMPT,
+    GET_DOCS_OBSERVATION_TOKEN_LIMIT,
     HARD_CONTEXT_RATIO,
     LOCATION_INDEX_SOURCE,
     MAX_HISTORY_MESSAGES,
     MIN_GENERATION_CONTEXT_TOKENS,
+    OBSERVATION_CHUNK_EXCERPT_CHARS,
+    OBSERVATION_TOKEN_LIMIT,
     PROMPT_MARGIN_TOKENS,
     SOFT_CONTEXT_RATIO,
     RealCampusAgent,
@@ -130,12 +135,35 @@ class FakeKnowledgeStore:
     def __init__(self, results) -> None:
         self.results = results
         self.calls: list[dict] = []
+        self.file_calls: list[list[str]] = []
 
     async def search(self, query: str, *, limit: int):
         self.calls.append({"query": query, "limit": limit})
         if isinstance(self.results, dict):
             return self.results.get(query, [])
         return self.results
+
+    async def get_file_chunks(self, file_ids):
+        requested = list(file_ids)
+        self.file_calls.append(requested)
+        if isinstance(self.results, dict):
+            chunks = [
+                chunk
+                for result_chunks in self.results.values()
+                for chunk in result_chunks
+            ]
+        else:
+            chunks = list(self.results)
+        file_order = {file_id: index for index, file_id in enumerate(requested)}
+        return sorted(
+            [chunk for chunk in chunks if chunk.file_id in file_order],
+            key=lambda chunk: (
+                file_order.get(chunk.file_id, len(file_order)),
+                chunk.chunk_index is None,
+                chunk.chunk_index if chunk.chunk_index is not None else 0,
+                chunk.id,
+            ),
+        )
 
 
 class FakeSearchProvider:
@@ -245,6 +273,7 @@ def _agent(
     http_client_factory=None,
     llm_context_window: int = 16384,
     llm_answer_max_tokens: int = 640,
+    recursion_limit: int = 50,
 ) -> RealCampusAgent:
     return RealCampusAgent(
         llm_client=llm or FakeLLMClient(),
@@ -255,6 +284,7 @@ def _agent(
         llm_context_window=llm_context_window,
         llm_answer_max_tokens=llm_answer_max_tokens,
         time_context_provider=lambda: _FIXED_TIME_CONTEXT,
+        recursion_limit=recursion_limit,
     )
 
 
@@ -466,6 +496,7 @@ async def test_compiled_graph_matches_react_runtime() -> None:
         "decide",
         "retrieve",
         "search",
+        "get_docs",
         "web_search",
         "campus_navigator",
         "ask_user",
@@ -475,6 +506,7 @@ async def test_compiled_graph_matches_react_runtime() -> None:
     assert ("__start__", "decide") in edges
     assert ("retrieve", "decide") in edges
     assert ("search", "decide") in edges
+    assert ("get_docs", "decide") in edges
     assert ("web_search", "decide") in edges
     assert ("ask_user", "__end__") in edges
     assert ("respond_need_origin", "__end__") in edges
@@ -487,6 +519,8 @@ async def test_decide_prompt_is_the_fable_confirmed_text() -> None:
     )
     assert "本学を「APU」と略さないこと" in DECIDE_SYSTEM_PROMPT
     assert "web_search {queries: string[1..3]}" in DECIDE_SYSTEM_PROMPT
+    assert "get_docs {file_ids: string[1..2]}" in DECIDE_SYSTEM_PROMPT
+    assert "truncated=true" in DECIDE_SYSTEM_PROMPT
     assert "ツール実行 0 回のまま finish しない" in DECIDE_SYSTEM_PROMPT
 
 
@@ -621,6 +655,67 @@ async def test_invalid_action_input_is_observed_without_execution() -> None:
 
     assert result["action"] == "decide"
     assert "1〜3" in result["observations"][-1]
+
+
+async def test_get_docs_is_offered_only_after_known_file_id() -> None:
+    llm = FakeLLMClient(
+        completions=[_decision("get_docs", {"file_ids": ["lab-cps-members"]})]
+    )
+    agent = _agent(llm=llm)
+
+    result = await agent._decide(
+        {
+            "question": "学生メンバー全員は？",
+            "history": [],
+            "knowledge_results": [_chunk(file_id="lab-cps-members", chunk_index=0)],
+            "web_results": [],
+            "decision_count": 1,
+            "actions_log": [{"action": "search", "result": "1件"}],
+            "action_keys": ["search\t{}"],
+            "observations": ["file_id=lab-cps-members chunk=1/? truncated=false"],
+            "known_file_ids": ["lab-cps-members"],
+            "tool_executions": 1,
+        }
+    )
+
+    assert result["action"] == "get_docs"
+    assert llm.decide_calls[0]["schema"]["properties"]["action"]["enum"] == [
+        "retrieve",
+        "search",
+        "get_docs",
+        "web_search",
+        "campus_navigator",
+        "ask_user",
+        "finish",
+    ]
+
+
+async def test_unknown_get_docs_file_id_returns_error_observation_with_known_ids() -> None:
+    llm = FakeLLMClient(
+        completions=[_decision("get_docs", {"file_ids": ["unknown-file"]})]
+    )
+    agent = _agent(llm=llm)
+
+    result = await agent._decide(
+        {
+            "question": "資料全体を見て",
+            "history": [],
+            "knowledge_results": [_chunk(file_id="known-file", chunk_index=0)],
+            "web_results": [],
+            "decision_count": 1,
+            "actions_log": [{"action": "search", "result": "1件"}],
+            "action_keys": ["search\t{}"],
+            "observations": ["file_id=known-file chunk=1/? truncated=true"],
+            "known_file_ids": ["known-file"],
+            "tool_executions": 1,
+        }
+    )
+
+    assert result["action"] == "decide"
+    assert "未知の file_id" in result["observations"][-1]
+    assert "unknown-file" in result["observations"][-1]
+    assert "known-file" in result["observations"][-1]
+    assert all(not key.startswith("get_docs\t") for key in result["action_keys"])
 
 
 @pytest.mark.parametrize(
@@ -813,6 +908,77 @@ async def test_normal_retrieve_finish_stream_is_contract_compatible() -> None:
     assert store.calls == [{"query": "食堂", "limit": 8}]
 
 
+async def test_recursion_limit_fallback_generates_from_merged_evidence(
+    caplog,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_TRACE", "1")
+    caplog.set_level(logging.INFO, logger="agent.trace")
+    chunk = _chunk()
+    llm = FakeLLMClient(
+        completions=[
+            _decision("retrieve", {"queries": ["食堂"]}, "学内資料を探します。"),
+        ],
+        tokens=["縮退", "回答"],
+    )
+    agent = _agent(
+        llm=llm,
+        store=FakeKnowledgeStore([chunk]),
+        recursion_limit=2,
+    )
+
+    events = await _collect(agent, "食堂について教えて")
+
+    assert events[-1][0] == "done"
+    assert "".join(data["text"] for event, data in events if event == "token") == "縮退回答"
+    assert len(llm.stream_calls) == 1
+    assert events[-1][1]["sources"] == [
+        {"title": "食堂", "url": "https://example.test/facility", "type": "knowledge"}
+    ]
+    records = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "agent.trace"
+    ]
+    fallback = next(record for record in records if record["event"] == "fallback_generate")
+    assert fallback["reason"] == "recursion_limit"
+    assert fallback["evidence_count"] == 1
+
+
+async def test_recursion_limit_fallback_without_evidence_streams_not_found_response(
+    caplog,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_TRACE", "1")
+    caplog.set_level(logging.INFO, logger="agent.trace")
+    llm = FakeLLMClient(
+        completions=[
+            _decision("retrieve", {"queries": ["不明"]}, "学内資料を探します。"),
+        ],
+        tokens=["呼ばれない"],
+    )
+    agent = _agent(llm=llm, recursion_limit=1)
+
+    events = await _collect(agent, "不明な質問")
+
+    token_parts = [data["text"] for event, data in events if event == "token"]
+    assert "".join(token_parts) == FALLBACK_NOT_FOUND_RESPONSE
+    assert all(len(part) <= 8 for part in token_parts)
+    assert llm.stream_calls == []
+    assert events[-1] == (
+        "done",
+        {"thread_id": "thread-1", "message_id": "message-1", "sources": []},
+    )
+    records = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "agent.trace"
+    ]
+    fallback = next(record for record in records if record["event"] == "fallback_generate")
+    assert fallback["reason"] == "recursion_limit"
+    assert fallback["evidence_count"] == 0
+
+
 async def test_search_tool_stream_uses_search_step() -> None:
     grep_chunk = _chunk(grep_hit=True, grep_keywords=("GI512",), score=1001.0)
     lexical = FakeLexicalSearch(
@@ -848,11 +1014,13 @@ async def test_search_tool_stream_uses_search_step() -> None:
 async def test_retrieve_dedupes_chunks_and_preserves_grep_metadata() -> None:
     grep = _chunk(
         id="same",
+        file_id="facility-food",
+        chunk_index=0,
         score=1001.0,
         grep_hit=True,
         grep_keywords=("食堂",),
     )
-    vector = _chunk(id="same", score=0.95)
+    vector = _chunk(id="same", file_id="facility-food", chunk_index=0, score=0.95)
     agent = _agent(store=FakeKnowledgeStore([vector]))
     state = {
         "question": "食堂",
@@ -870,6 +1038,8 @@ async def test_retrieve_dedupes_chunks_and_preserves_grep_metadata() -> None:
     assert merged.grep_hit is True
     assert merged.grep_keywords == ("食堂",)
     assert merged.score == 1001.0
+    assert DUPLICATE_EVIDENCE_NOTE in result["observations"][-1]
+    assert "file_id=facility-food" in result["observations"][-1]
 
 
 async def test_retrieve_expands_same_file_siblings_once(tmp_path: Path) -> None:
@@ -914,6 +1084,105 @@ async def test_retrieve_expands_same_file_siblings_once(tmp_path: Path) -> None:
     assert len(second["knowledge_results"]) == 3
 
 
+async def test_get_docs_fetches_all_file_chunks_and_logs_metadata_only() -> None:
+    chunks = [
+        _chunk(
+            id=f"lab-cps-members-{index}",
+            file_id="lab-cps-members",
+            chunk_index=index,
+            title="CPS研メンバー",
+            text=f"チャンク{index} " + ("学生メンバー詳細 " * 120),
+            score=None,
+        )
+        for index in range(4)
+    ]
+    store = FakeKnowledgeStore(chunks)
+    agent = _agent(store=store)
+    state = {
+        "trace_id": "trace",
+        "question": "CPS研の学生メンバー全員は？",
+        "action_input": {"file_ids": ["lab-cps-members"]},
+        "knowledge_results": [chunks[0]],
+        "observations": ["file_id=lab-cps-members chunk=1/4 truncated=true"],
+        "known_file_ids": ["lab-cps-members"],
+        "actions_log": [{"action": "get_docs", "result": "selected"}],
+        "tool_executions": 1,
+        "same_file_expanded_file_ids": [],
+        "same_file_expanded_chunk_ids": [],
+    }
+
+    result = await agent._get_docs(state)
+
+    assert store.file_calls == [["lab-cps-members"]]
+    assert [chunk.chunk_index for chunk in result["knowledge_results"]] == [0, 1, 2, 3]
+    assert "全 4 チャンクを evidence に取得済み" in result["observations"][-1]
+    assert "本文先頭" in result["observations"][-1]
+    assert estimate_tokens(result["observations"][-1]) <= GET_DOCS_OBSERVATION_TOKEN_LIMIT
+    assert result["actions_log"][-1]["result"].startswith("get_docs:")
+    assert "学生メンバー詳細" not in result["actions_log"][-1]["result"]
+    assert result["same_file_expanded_file_ids"] == ["lab-cps-members"]
+    assert result["same_file_expanded_chunk_ids"] == [chunk.id for chunk in chunks]
+
+
+async def test_get_docs_status_uses_dedicated_step(monkeypatch) -> None:
+    chunk = _chunk(id="doc-0", file_id="doc", chunk_index=0)
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "app.agent.graph._write_stream_event",
+        lambda event, data: events.append((event, data)),
+    )
+
+    await _agent(store=FakeKnowledgeStore([chunk]))._get_docs(
+        {
+            "question": "資料全体",
+            "action_input": {"file_ids": ["doc"]},
+            "knowledge_results": [],
+            "observations": [],
+            "known_file_ids": ["doc"],
+            "actions_log": [{"action": "get_docs", "result": "selected"}],
+            "tool_executions": 1,
+        }
+    )
+
+    assert (
+        "status",
+        {"step": "get_docs", "text": "資料全体を読み込んでいます（doc）…", "partial": False},
+    ) in events
+
+
+async def test_get_docs_trace_records_counts(caplog, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_TRACE", "1")
+    caplog.set_level(logging.INFO, logger="agent.trace")
+    chunks = [
+        _chunk(id=f"doc-{index}", file_id="doc", chunk_index=index)
+        for index in range(2)
+    ]
+
+    await _agent(store=FakeKnowledgeStore(chunks))._get_docs(
+        {
+            "trace_id": "trace-get-docs",
+            "question": "資料全体",
+            "action_input": {"file_ids": ["doc"]},
+            "knowledge_results": [chunks[0]],
+            "observations": ["file_id=doc chunk=1/2 truncated=true"],
+            "known_file_ids": ["doc"],
+            "actions_log": [{"action": "get_docs", "result": "selected"}],
+            "tool_executions": 1,
+        }
+    )
+
+    records = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "agent.trace"
+    ]
+    get_docs = next(record for record in records if record["event"] == "get_docs")
+    assert get_docs["file_ids"] == ["doc"]
+    assert get_docs["chunks_added"] == 1
+    assert get_docs["total_chunks"] == 2
+    assert get_docs["observation_tokens"] > 0
+
+
 async def test_web_search_is_always_unrestricted() -> None:
     search = FakeSearchProvider(
         [WebSearchResult("交通", "https://example.test/access", "案内", "本文")]
@@ -934,6 +1203,35 @@ async def test_web_search_is_always_unrestricted() -> None:
     assert result["web_results"][0].url == "https://example.test/access"
     assert search.calls[0]["include_domains"] is None
     assert search.calls[0]["include_raw_content"] is True
+
+
+async def test_web_search_duplicate_observation_notes_existing_evidence() -> None:
+    existing = WebSearchResult("既存", "https://example.test/access", "既存", "既存本文")
+    search = FakeSearchProvider(
+        [
+            WebSearchResult("重複", "https://example.test/access", "重複", "重複本文"),
+            WebSearchResult("新規", "https://example.test/new", "新規", "新規本文"),
+        ]
+    )
+    agent = _agent(search=search)
+
+    result = await agent._web_search(
+        {
+            "question": "交通",
+            "action_input": {"queries": ["交通"]},
+            "web_results": [existing],
+            "observations": [],
+            "actions_log": [{"action": "web_search", "result": "selected"}],
+            "tool_executions": 0,
+            "context_usage": {"soft_exceeded": False},
+        }
+    )
+
+    assert [web.url for web in result["web_results"]] == [
+        "https://example.test/access",
+        "https://example.test/new",
+    ]
+    assert DUPLICATE_EVIDENCE_NOTE in result["observations"][-1]
 
 
 async def test_soft_budget_suppresses_web_raw_content_and_page_fetch() -> None:
@@ -1378,10 +1676,73 @@ async def test_evidence_full_shrinks_action_menu() -> None:
     ]
 
 
-async def test_observations_are_compacted_to_roughly_120_tokens() -> None:
+async def test_observations_are_compacted_to_fr37_token_limit() -> None:
     agent = _agent()
     observation = agent._compact_observation("長い観測" * 500)
-    assert estimate_tokens(observation) <= 120
+    assert OBSERVATION_TOKEN_LIMIT == 500
+    assert estimate_tokens(observation) <= OBSERVATION_TOKEN_LIMIT
+    assert estimate_tokens(observation) > 120
+
+
+async def test_knowledge_observation_uses_fr37_chunk_excerpt_limit() -> None:
+    agent = _agent()
+    chunk = _chunk(text=("x" * (OBSERVATION_CHUNK_EXCERPT_CHARS - 1)) + "Y" + "Z")
+
+    observation = agent._knowledge_observation("意味検索", [chunk], duplicate_count=0)
+
+    assert "Y" in observation
+    assert "Z" not in observation
+
+
+async def test_knowledge_observation_centers_excerpt_on_keyword_match() -> None:
+    agent = _agent()
+    chunk = _chunk(
+        file_id="lab-cps-open-lab-2026",
+        chunk_index=2,
+        text=("A" * 500) + "小川春翔 出展内容 人間タワーバトル" + ("B" * 500),
+    )
+
+    observation = agent._knowledge_observation(
+        "意味検索",
+        [chunk],
+        duplicate_count=0,
+        terms=["小川春翔"],
+    )
+
+    assert "file_id=lab-cps-open-lab-2026" in observation
+    assert "chunk=3/?" in observation
+    assert "truncated=true" in observation
+    assert "小川春翔 出展内容 人間タワーバトル" in observation
+    assert "A" * 350 not in observation
+
+
+async def test_observation_excerpt_maps_normalized_match_offsets_to_original_text() -> None:
+    text = ("㈱" * 100) + ("Ａ" * 120) + "ＣＰＳ中心語" + ("B" * 500)
+
+    excerpt, truncated = RealCampusAgent._observation_excerpt(text, ["CPS中心語"])
+
+    body = excerpt.strip("…")
+    keyword_index = body.index("ＣＰＳ中心語")
+    assert truncated is True
+    assert 150 <= keyword_index <= 250
+    assert "㈱" in body
+    assert "BBBBB" in body
+
+
+async def test_duplicate_observations_note_evidence_is_already_available() -> None:
+    agent = _agent()
+
+    knowledge_observation = agent._knowledge_observation(
+        "意味検索",
+        [],
+        duplicate_count=1,
+        duplicate_file_ids=["lab-cps-members"],
+    )
+    web_observation = agent._web_observation([], duplicate_count=1)
+
+    assert DUPLICATE_EVIDENCE_NOTE in knowledge_observation
+    assert "file_id=lab-cps-members" in knowledge_observation
+    assert DUPLICATE_EVIDENCE_NOTE in web_observation
 
 
 async def test_history_slice_keeps_latest_eight_messages() -> None:
