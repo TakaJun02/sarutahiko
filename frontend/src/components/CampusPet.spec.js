@@ -127,10 +127,18 @@ describe('FR-41 §11-2 picker behavior', () => {
     expect(pickerSource).toContain('class="campus-pet-picker__stage"')
     expect(pickerSource).toContain('class="campus-pet-picker__figure"')
     expect(pickerSource).toContain(':style="`--i: ${index}`"')
-    expect(pickerSource).toContain('class="campus-pet-picker__smoke-mark"')
-    expect(pickerSource).toContain('animation-delay: calc(var(--i, 0) * 55ms);')
+    expect(pickerSource).toContain('class="campus-pet-picker__kicker"')
+    expect(pickerSource).toContain('class="campus-pet-picker__apparition"')
+    expect(pickerSource).toContain('class="campus-pet-picker__halo"')
+    expect(pickerSource).toContain('class="campus-pet-picker__ground"')
+    expect(pickerSource).toContain('animation-delay: calc(180ms + var(--i, 0) * 70ms);')
+    expect(pickerSource).toContain('@keyframes campus_pet_halo_bloom')
+    expect(pickerSource).toContain('@keyframes campus_pet_ground_sweep')
     expect(pickerSource).toContain('@keyframes campus_pet_picker_pop')
     expect(pickerSource).toContain('@keyframes campus_pet_picker_puff')
+    expect(pickerSource).toContain('animation: campus_pet_picker_fade 260ms var(--ease-standard) 700ms both;')
+    expect(pickerSource).not.toContain('campus-pet-picker__head')
+    expect(pickerSource).not.toContain('campus-pet-picker__smoke-mark')
     expect(pickerSource).not.toContain('campus-pet-picker__grid')
     expect(pickerSource).not.toContain('campus-pet-picker__thumb')
     expect(normalizedChatSource).toContain("'composer-shell--pet-locked': pet.phase !== 'idle'")
@@ -360,13 +368,67 @@ describe('FR-41 §11-7 reduced motion', () => {
     expect(petCssSource).toContain('animation: campus_pet_smoke_reduce 220ms ease-out both !important;')
     expect(pickerSource).toContain('.campus-pet-picker__option:active')
     expect(pickerSource).toContain('.campus-pet-picker__figure::after')
+    expect(pickerSource).toContain('animation: campus_pet_picker_fade 220ms ease-out both !important;')
     expect(petCssSource).toContain('.about-pet-toggle__knob')
     expect(petCssSource).toContain('.campus-pet-button[data-settling="true"] .campus-pet')
     expect(petCssSource).toContain('animation: none;')
   })
 })
 
-describe('FR-41 §11-8 existing frontend regression surface', () => {
+describe('FR-41 §11-8 v1.3 names and About guide', () => {
+  it('uses the finalized names and exact descriptions as one shared source', () => {
+    expect(CAMPUS_PET_FORMS).toEqual([
+      {
+        id: 'robo',
+        name: 'ぴこ',
+        description: 'APU-Navi の AI エージェントから生まれた分身。質問がとどくと、耳のフィンを光らせて一緒に考えてくれる。',
+      },
+      {
+        id: 'sarutahiko',
+        name: '猿田彦',
+        description: '日本神話で道をひらく“導きの神”。キャンパスを案内するこのアプリの、たのもしい道案内役。',
+      },
+      {
+        id: 'akita',
+        name: 'こまち',
+        description: '秋田生まれの秋田犬の子犬。人なつっこくて、こたえを待つ間もしっぽをふって寄りそってくれる。',
+      },
+      {
+        id: 'gotenmari',
+        name: 'てまりん',
+        description: '由利本荘のつるし飾り「本荘ごてんまり」から生まれた手まりの妖精。じまんの刺繍でみんなを和ませる。',
+      },
+      {
+        id: 'namahage',
+        name: 'なまはげ',
+        description: '秋田の来訪神・なまはげ。こわい顔はやる気の証。なまけ心にカツを入れて、探しものを応援してくれる。',
+        rare: true,
+      },
+      {
+        id: 'yatagarasu',
+        name: '八咫烏',
+        description: '三本足の導きの神使。開発メンバー・小川春翔さんのシステム「八咫烏」から名をうけついだ、稲妻をまとう守り神。',
+      },
+    ])
+    expect(pickerSource).toContain('{{ form.name }}')
+    expect(normalizedChatSource).toContain('<li v-for="form in CAMPUS_PET_FORMS" :key="form.id" class="about-pet-guide__row">')
+    expect(normalizedChatSource).toContain('<span class="about-pet-guide__name">{{ form.name }}</span>')
+    expect(normalizedChatSource).toContain('<span class="about-pet-guide__desc">{{ form.description }}</span>')
+  })
+
+  it('branches the About disclosure between the hint and six-entry guide', () => {
+    expect(normalizedChatSource).toContain('const hasCampusPetCompanion = computed(() => Boolean(pet.unlocked && pet.currentForm))')
+    expect(normalizedChatSource).toContain('<div v-if="hasCampusPetCompanion && aboutPetHintOpen" class="about-pet-guide campus-pet-host">')
+    expect(normalizedChatSource).toContain('<p v-if="!hasCampusPetCompanion" class="about-pet-hint" :hidden="!aboutPetHintOpen">')
+    expect(normalizedChatSource).toContain(':aria-expanded="aboutPetHintOpen"')
+    expect(normalizedChatSource).toContain('if (dialog.value?.kind === \'about\') { aboutPetHintOpen.value = false')
+    expect(chatViewSource).toContain('このコたちに特別な機能はありません。となりで一緒に待ってくれる、癒し担当です。')
+    expect(petCssSource).toContain('.about-pet-guide__figure')
+    expect(petCssSource).toContain('width: 2.25rem;')
+  })
+})
+
+describe('FR-41 §11-9 existing frontend regression surface', () => {
   it('keeps the existing composer, clarification, map, loading, and About content paths present', () => {
     expect(normalizedChatSource).toContain("'composer-shell--origin-locked': chat.isOriginSelectionPending || chat.isClarificationPending")
     expect(normalizedChatSource).toContain('<ClarificationCard v-if="message.clarificationActive"')

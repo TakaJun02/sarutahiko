@@ -3,12 +3,37 @@ export const CAMPUS_PET_PASSPHRASE = 'ペットを呼び出す'
 export const CAMPUS_PET_SUMMON_WAIT_MS = 1900
 
 export const CAMPUS_PET_FORMS = Object.freeze([
-  { id: 'robo', name: 'ぴこ' },
-  { id: 'sarutahiko', name: 'みちかぜ' },
-  { id: 'akita', name: 'こまち' },
-  { id: 'gotenmari', name: 'てまりん' },
-  { id: 'namahage', name: 'ガオウ', rare: true },
-  { id: 'yatagarasu', name: '八咫烏' },
+  {
+    id: 'robo',
+    name: 'ぴこ',
+    description: 'APU-Navi の AI エージェントから生まれた分身。質問がとどくと、耳のフィンを光らせて一緒に考えてくれる。',
+  },
+  {
+    id: 'sarutahiko',
+    name: '猿田彦',
+    description: '日本神話で道をひらく“導きの神”。キャンパスを案内するこのアプリの、たのもしい道案内役。',
+  },
+  {
+    id: 'akita',
+    name: 'こまち',
+    description: '秋田生まれの秋田犬の子犬。人なつっこくて、こたえを待つ間もしっぽをふって寄りそってくれる。',
+  },
+  {
+    id: 'gotenmari',
+    name: 'てまりん',
+    description: '由利本荘のつるし飾り「本荘ごてんまり」から生まれた手まりの妖精。じまんの刺繍でみんなを和ませる。',
+  },
+  {
+    id: 'namahage',
+    name: 'なまはげ',
+    description: '秋田の来訪神・なまはげ。こわい顔はやる気の証。なまけ心にカツを入れて、探しものを応援してくれる。',
+    rare: true,
+  },
+  {
+    id: 'yatagarasu',
+    name: '八咫烏',
+    description: '三本足の導きの神使。開発メンバー・小川春翔さんのシステム「八咫烏」から名をうけついだ、稲妻をまとう守り神。',
+  },
 ])
 
 const FORM_IDS = new Set(CAMPUS_PET_FORMS.map((form) => form.id))

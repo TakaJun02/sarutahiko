@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import CampusPet from '../components/CampusPet.vue'
 import CampusPetPicker from '../components/CampusPetPicker.vue'
+import CampusPetSvg from '../components/CampusPetSvg.vue'
 import ClarificationCard from '../components/ClarificationCard.vue'
 import LoadingSpinnerV5 from '../components/LoadingSpinnerV5.vue'
 import MapCard from '../components/MapCard.vue'
@@ -14,6 +15,7 @@ import { useAuthStore } from '../stores/auth'
 import { toFriendlyErrorMessage, useChatStore } from '../stores/chat'
 import { useCampusPetStore } from '../stores/pet'
 import {
+  CAMPUS_PET_FORMS,
   CAMPUS_PET_PASSPHRASE,
   CAMPUS_PET_SUMMON_WAIT_MS,
   isCampusPetPassphrase,
@@ -79,6 +81,7 @@ const dialogBusy = ref(false)
 const dialogInputRef = ref(null)
 const dialogCancelRef = ref(null)
 const aboutPetHintOpen = ref(false)
+const hasCampusPetCompanion = computed(() => Boolean(pet.unlocked && pet.currentForm))
 
 // Transient hint shown when Enter is pressed while a reply is streaming.
 const busyHint = ref('')
@@ -1204,6 +1207,20 @@ onBeforeUnmount(() => {
                 </button>
               </div>
             </section>
+            <div v-if="hasCampusPetCompanion && aboutPetHintOpen" class="about-pet-guide campus-pet-host">
+              <p class="about-pet-guide__note">このコたちに特別な機能はありません。となりで一緒に待ってくれる、癒し担当です。</p>
+              <ul class="about-pet-guide__list">
+                <li v-for="form in CAMPUS_PET_FORMS" :key="form.id" class="about-pet-guide__row">
+                  <span class="about-pet-guide__figure" aria-hidden="true">
+                    <CampusPetSvg :form="form.id" state="idle" />
+                  </span>
+                  <span class="about-pet-guide__copy">
+                    <span class="about-pet-guide__name">{{ form.name }}</span>
+                    <span class="about-pet-guide__desc">{{ form.description }}</span>
+                  </span>
+                </li>
+              </ul>
+            </div>
           </template>
           <p v-if="dialogError" class="mt-3 text-sm text-red-300" role="alert">{{ dialogError }}</p>
           <div v-if="dialog.kind === 'about'" class="mt-5 flex justify-end">
@@ -1220,7 +1237,7 @@ onBeforeUnmount(() => {
                   <path d="M8 17.2h7.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity="0.42" />
                 </svg>
               </button>
-              <p class="about-pet-hint" :hidden="!aboutPetHintOpen">メッセージで「ペットを呼び出す」と送ってみよう！</p>
+              <p v-if="!hasCampusPetCompanion" class="about-pet-hint" :hidden="!aboutPetHintOpen">メッセージで「ペットを呼び出す」と送ってみよう！</p>
             </div>
             <button
               ref="dialogCancelRef"
