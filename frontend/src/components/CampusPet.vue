@@ -4,6 +4,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { useCampusPetStore } from '../stores/pet'
 import {
+  canOpenCampusPetPickerFromTap,
   chooseCampusPetReaction,
   clampCampusPetTranslation,
   pointerDragThreshold,
@@ -162,6 +163,9 @@ function handleTap() {
   clearTimer(tapTimer)
   tapTimer = window.setTimeout(() => {
     playReaction()
+    if (canOpenCampusPetPickerFromTap(chat)) {
+      pet.openPickerDirect()
+    }
     lastTapAt = 0
     tapTimer = null
   }, 300)

@@ -65,6 +65,14 @@ export function isCampusPetPassphrase(text) {
   return normalized === CAMPUS_PET_PASSPHRASE
 }
 
+export function canOpenCampusPetPickerFromTap(chatState) {
+  return !(
+    chatState.isSending
+    || chatState.isOriginSelectionPending
+    || chatState.isClarificationPending
+  )
+}
+
 function isValidPosition(pos) {
   return (
     pos

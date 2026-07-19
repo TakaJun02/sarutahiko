@@ -590,6 +590,16 @@ watch(draft, () => {
 })
 
 watch(
+  () => pet.summonRunId,
+  () => {
+    if (pet.phase === 'picking' && pet.summonOrigin === 'pet') {
+      pendingScrollBehavior = 'smooth'
+      scrollToBottom('smooth')
+    }
+  },
+)
+
+watch(
   () => chat.messages.length,
   (messageCount, previousMessageCount) => {
     if (messageCount === 0 && previousMessageCount > 0) {
@@ -995,7 +1005,10 @@ onBeforeUnmount(() => {
               v-if="pet.phase !== 'idle'"
               class="campus-pet-summon-block space-y-8 py-6 sm:py-8"
             >
-              <article class="message-row message-row--user w-full px-4">
+              <article
+                v-if="pet.summonOrigin === 'passphrase'"
+                class="message-row message-row--user w-full px-4"
+              >
                 <div class="mx-auto w-full max-w-3xl">
                   <div class="flex justify-end">
                     <p class="max-w-[88%] whitespace-pre-wrap break-words rounded-[1.35rem] rounded-br-md border border-white/[0.075] bg-ink-high px-4 py-2.5 text-base leading-7 text-[#f1f1ec] shadow-soft sm:max-w-[78%]">
@@ -1208,7 +1221,7 @@ onBeforeUnmount(() => {
               </div>
             </section>
             <div v-if="hasCampusPetCompanion && aboutPetHintOpen" class="about-pet-guide campus-pet-host">
-              <p class="about-pet-guide__note">このコたちに特別な機能はありません。となりで一緒に待ってくれる、癒し担当です。</p>
+              <p class="about-pet-guide__note">このコたちに特別な機能はありません。となりで一緒に待ってくれる、癒し担当です。ペットをタップすると、仲間をえらび直せます。</p>
               <ul class="about-pet-guide__list">
                 <li v-for="form in CAMPUS_PET_FORMS" :key="form.id" class="about-pet-guide__row">
                   <span class="about-pet-guide__figure" aria-hidden="true">

@@ -9,6 +9,7 @@ import {
   CAMPUS_PET_FORMS,
   CAMPUS_PET_SUMMON_WAIT_MS,
   CAMPUS_PET_STORAGE_KEY,
+  canOpenCampusPetPickerFromTap,
   chooseCampusPetReaction,
   clampCampusPetTranslation,
   createDefaultCampusPetState,
@@ -91,11 +92,13 @@ describe('FR-41 §11-1 passphrase interception', () => {
     globalThis.setTimeout(() => pet.showPicker(), CAMPUS_PET_SUMMON_WAIT_MS)
 
     expect(pet.phase).toBe('waiting')
+    expect(pet.summonOrigin).toBe('passphrase')
     expect(runId).toBeGreaterThan(0)
     vi.advanceTimersByTime(1899)
     expect(pet.phase).toBe('waiting')
     vi.advanceTimersByTime(1)
     expect(pet.phase).toBe('picking')
+    expect(pet.summonOrigin).toBe('passphrase')
     expect(chat.messages).toEqual(messagesBefore)
     expect(JSON.stringify(chat.$state)).toBe(chatStateBefore)
     expect(sendMessage).not.toHaveBeenCalled()
@@ -152,6 +155,7 @@ describe('FR-41 §11-2 picker behavior', () => {
     expect(store.phase).toBe('waiting')
     expect(store.cancelSummon()).toBe(true)
     expect(store.phase).toBe('idle')
+    expect(store.summonOrigin).toBeNull()
 
     store.beginSummon()
     store.showPicker()
@@ -162,6 +166,7 @@ describe('FR-41 §11-2 picker behavior', () => {
     store.showPicker()
     expect(store.summon('akita')).toBe(true)
     expect(store.phase).toBe('idle')
+    expect(store.summonOrigin).toBeNull()
     expect(store.currentForm).toBe('akita')
     expect(normalizedChatSource).toContain("if (pet.phase !== 'idle') { cancelCampusPetPicker()")
     expect(normalizedChatSource).toContain('function selectCampusPet(form) { clearPetSummonTimer() pet.summon(form)')
@@ -422,13 +427,64 @@ describe('FR-41 §11-8 v1.3 names and About guide', () => {
     expect(normalizedChatSource).toContain('<p v-if="!hasCampusPetCompanion" class="about-pet-hint" :hidden="!aboutPetHintOpen">')
     expect(normalizedChatSource).toContain(':aria-expanded="aboutPetHintOpen"')
     expect(normalizedChatSource).toContain('if (dialog.value?.kind === \'about\') { aboutPetHintOpen.value = false')
-    expect(chatViewSource).toContain('このコたちに特別な機能はありません。となりで一緒に待ってくれる、癒し担当です。')
+    expect(chatViewSource).toContain('このコたちに特別な機能はありません。となりで一緒に待ってくれる、癒し担当です。ペットをタップすると、仲間をえらび直せます。')
     expect(petCssSource).toContain('.about-pet-guide__figure')
     expect(petCssSource).toContain('width: 2.25rem;')
   })
 })
 
-describe('FR-41 §11-9 existing frontend regression surface', () => {
+describe('FR-41 §11-9 v1.4 pet tap picker route', () => {
+  it('opens picking directly with a pet origin and resets it on every exit', () => {
+    const chat = useChatStore()
+    const store = useCampusPetStore()
+    const sendMessage = vi.spyOn(chat, 'sendMessage')
+    const chatStateBefore = JSON.stringify(chat.$state)
+
+    expect(store.openPickerDirect()).toBe(true)
+    expect(store.phase).toBe('picking')
+    expect(store.summonOrigin).toBe('pet')
+    expect(store.summonRunId).toBe(1)
+    expect(store.showPicker()).toBe(false)
+    expect(store.phase).not.toBe('waiting')
+    expect(JSON.stringify(chat.$state)).toBe(chatStateBefore)
+    expect(sendMessage).not.toHaveBeenCalled()
+
+    expect(store.cancelSummon()).toBe(true)
+    expect(store.phase).toBe('idle')
+    expect(store.summonOrigin).toBeNull()
+
+    store.openPickerDirect()
+    expect(store.summon('robo')).toBe(true)
+    expect(store.phase).toBe('idle')
+    expect(store.summonOrigin).toBeNull()
+  })
+
+  it('keeps the reaction but blocks direct picking while normal sending is unavailable', () => {
+    const available = {
+      isSending: false,
+      isOriginSelectionPending: false,
+      isClarificationPending: false,
+    }
+    expect(canOpenCampusPetPickerFromTap(available)).toBe(true)
+    expect(canOpenCampusPetPickerFromTap({ ...available, isSending: true })).toBe(false)
+    expect(canOpenCampusPetPickerFromTap({ ...available, isOriginSelectionPending: true })).toBe(false)
+    expect(canOpenCampusPetPickerFromTap({ ...available, isClarificationPending: true })).toBe(false)
+
+    expect(normalizedPetSource).toContain('tapTimer = window.setTimeout(() => { playReaction() if (canOpenCampusPetPickerFromTap(chat)) { pet.openPickerDirect() }')
+    expect(normalizedPetSource).toContain('if (protectControls.value || pointerSession) { return }')
+  })
+
+  it('hides the passphrase bubble and scrolls the direct apparition with the shared exits', () => {
+    expect(normalizedChatSource).toContain("v-if=\"pet.summonOrigin === 'passphrase'\"")
+    expect(normalizedChatSource).toContain("if (pet.phase === 'picking' && pet.summonOrigin === 'pet') { pendingScrollBehavior = 'smooth' scrollToBottom('smooth')")
+    expect(normalizedChatSource).toContain("'composer-shell--pet-locked': pet.phase !== 'idle'")
+    expect(normalizedChatSource).toContain('function cancelCampusPetPicker() { clearPetSummonTimer() pet.cancelSummon()')
+    expect(normalizedChatSource).toContain('function logout() { clearPetSummonTimer() pet.cancelSummon()')
+    expect(normalizedChatSource).toContain('pet.cancelSummon() router.push(`/chat/${threadId}`)')
+  })
+})
+
+describe('FR-41 §11-10 existing frontend regression surface', () => {
   it('keeps the existing composer, clarification, map, loading, and About content paths present', () => {
     expect(normalizedChatSource).toContain("'composer-shell--origin-locked': chat.isOriginSelectionPending || chat.isClarificationPending")
     expect(normalizedChatSource).toContain('<ClarificationCard v-if="message.clarificationActive"')
