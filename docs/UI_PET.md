@@ -4,6 +4,10 @@
 > （FR-39 確認フォームと同じ文法の別入力面）を開いて利用者がフォームを選ぶ方式へ（抽選廃止）
 > ②About 内の隠しボタンは召喚せず**合言葉のヒント**を表示する方式へ ③召喚後のペットは
 > **指でドラッグして画面上を自由に移動**できるように（Codex Pets 翻案）。
+>
+> v1.2（2026-07-19 利用者指示）: ①合言葉送信後は**通常の回答待ち演出（LoadingSpinnerV5）を約 1.9 秒
+> 再生してから**選択 UI をかっこよく出現させる（召喚シーケンス・§3-1）②選択 UI を「枠付きグリッドの
+> フォーム」から**召喚ステージ（キャラクターセレクト式・§12-11 全面改稿）**へ再設計（意匠リード Fable）。
 
 - 位置づけ: OpenAI Codex CLI の隠し機能「Codex Pets」の APU-Navi 翻案（利用者発案 2026-07-19）。
 - 目的: 来場者（高校生・保護者）への**癒し**。回答待ち時間に寄り添う小さなコンパニオンであり、
@@ -45,9 +49,19 @@
     （誤爆ゼロを最優先）。「ペットをよびだす」等の表記ゆれも不発とする（ヒントが正確な文言を教えるため）。
 - 判定が働くのは「通常送信が可能な状態」のみ。composer ロック中（FR-27 origin / FR-39 clarification）・
   `isSending` 中は通常の抑止に従う（合言葉の特別扱いなし）。
-- 選択カード表示中は **FR-27/39 と同じ文法で composer をロック**する（ロック視覚も同一）。
-  解除条件は ①フォームを選択（召喚して閉じる） ②「今はやめておく」で取り消し ③スレッド切替/ログアウト
-  （カード破棄）の 3 つ。カードはスレッド履歴に痕跡を残さない。
+- **召喚シーケンス（v1.2）** — 合言葉一致後は即座にカードを出さず、通常の送信と同じ見た目の演出を挟む:
+  1. **ローカル専用のユーザーバブル**「ペットを呼び出す」を会話末尾に表示し、通常送信と同じく最下部へ
+     スクロール。store・backend・履歴には一切書かない（リロードで消える一時表示）。
+  2. アシスタント行に **LoadingSpinnerV5 を通常の思考中表示**で再生する（スピナー本体・既定文言とも
+     不可侵のまま流用。runId は一時 ID を新規発行）。**約 1.9 秒**（実装定数）。
+  3. 1.9 秒後、スピナーを 160ms でフェードアウトし、同じアシスタント枠に**選択ステージ（§12-11）を
+     マテリアライズ**させる（パネル 240ms ライズ → 6 体が 55ms 間隔で「ドロン」とポップ）。
+  4. 選択/キャンセルで**一時ブロック全体（バブル・ステージ）を 260ms でフェードアウト**して痕跡を消す。
+     選択時はペット位置で煙召喚が同時に始まる。`prefers-reduced-motion` は全段フェードのみ。
+  - シーケンス中（待機〜ステージ表示中）は **FR-27/39 と同じ文法で composer をロック**する
+    （ロック視覚も同一）。解除条件は ①フォームを選択 ②「今はやめておく」/Esc で取り消し
+    ③スレッド切替/ログアウト（シーケンス破棄）の 3 つ。待機中の Esc も同様に取り消し。
+  - v1.1 の「composer 直上の選択カード」は廃止。選択 UI は会話内のアシスタント枠に出す。
 - フォーム選択で: 未解禁なら解禁し、煙演出とともに召喚。**既に召喚済みなら交代召喚**
   （同じフォームを選んだ場合は煙だけ再生してそのまま）。
 - 初回召喚（解禁）時のみ、カード見出しの下に一言「チャットの邪魔はしないよ。指でつまんで
@@ -187,10 +201,11 @@
 ## §11 テスト観点（Vitest・受け入れ基準）
 
 1. 合言葉判定: 「ペットを呼び出す」「 ペットを呼び出す！ 」（前後空白・末尾 `!`/`！`/`。`・NFKC）→
-   選択カードが開き backend へ送信されない・履歴に残らない／「ペットを呼び出すよ」「ペットを呼び出す方法は？」
-   「ペットをよびだす」「ドロン」→ 発火せず通常送信（ストアの送信スパイで検証）。
-2. 選択カード: 6 フォーム固定順表示・選択で召喚＋解禁＋カード閉鎖・「今はやめておく」で何もせず閉鎖・
-   表示中は composer ロック（FR-27/39 と同じ解除条件）・スレッド切替で破棄・履歴に痕跡ゼロ。
+   召喚シーケンスが始まり backend へ送信されない・store/履歴に残らない／「ペットを呼び出すよ」
+   「ペットを呼び出す方法は？」「ペットをよびだす」「ドロン」→ 発火せず通常送信（ストアの送信スパイで検証)。
+2. 召喚シーケンス: 一時バブル＋スピナー表示 → 約 1.9 秒でステージへ遷移（fake timer）・待機中/表示中の
+   composer ロックと Esc/キャンセル/スレッド切替での破棄・選択で召喚＋解禁＋ブロック消滅・store 無書き込み。
+   ステージは 6 フォーム固定順表示。
 3. 交代: 召喚済みで合言葉再送 → カード再表示（現フォームに目印）・別フォーム選択で煙交代・
    同一フォーム選択は煙のみ。
 4. 状態遷移: `isSending`・clarification・done 4 秒の各遷移。
@@ -1518,81 +1533,83 @@ meta 行が合言葉を再掲する）。
 
 名称は利用者が最終確定する。実装時は `formNames` の初期値としてこの案を入れ、後から文言だけ差し替えられる構造にする。
 
-### §12-11. 呼び出し選択カード（v1.1）
+### §12-11. 召喚ステージ（v1.2 全面改稿 — 旧「選択カード」を置換）
 
-合言葉で開く選択 UI。**FR-39 確認フォームと同じ文法**（signal rail・ドット見出し・Campus Signal
-トークンのみ・composer ロック視覚は origin-locked と同一）を踏襲し、composer の直上（確認フォームと
-同じスロット）に出す。スレッド履歴には入れない一時 UI。開いたら先頭オプションへフォーカス、
-`Esc` はキャンセルと同じ。サムネイルは §12-4 の各フォーム SVG（`data-state="idle"`）をそのまま
-48px で埋め込む（画像アセットなし）。
+v1.1 の枠付きグリッドは「AI 感」があり利用者却下。v1.2 は**キャラクターセレクト式の召喚ステージ**:
+オプションの枠を全廃し、**6 体が床線の上に一列に立つ**。名前は足元の名札、ホバー/フォーカスで本体が
+3px 持ち上がり足元にシグナル色のスポットライトが灯る。召喚シーケンス（§3-1）の 3 段目として
+アシスタント枠にマテリアライズし、パネルのライズ（240ms）→ **6 体が左から 55ms 間隔で
+「ドロン」とポップ**（scale 0.6→1.06→1 ＋ 紙色パフ）する。ガオウの★は 2.4s で瞬く。
+サムネイルは §12-4 の各フォーム SVG（`data-state="idle"`・生存感のため idle アニメは止めない）。
+開いたら先頭オプションへフォーカス、`Esc` はキャンセルと同じ。`__hint` は初回解禁時のみ表示。
+召喚済みフォームは `--current` + `aria-current="true"`（名札がシグナル色・スポットライト常灯 0.55）。
 
 ```html
 <section class="campus-pet-picker" role="group" aria-label="キャンパスペットを呼び出す">
   <header class="campus-pet-picker__head">
-    <span class="campus-pet-picker__dot" aria-hidden="true"></span>
-    <h3 class="campus-pet-picker__title">どの仲間を呼び出す？</h3>
+    <svg class="campus-pet-picker__smoke-mark" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7.4 14.2c-1.8 0-3.1-1-3.1-2.4 0-1.5 1.4-2.5 3.2-2.5 0.4-2.3 2.4-3.8 5-3.8 2.8 0 4.8 1.8 5 4.3 1.4 0.2 2.4 1.1 2.4 2.3 0 1.4-1.3 2.2-3 2.2H7.4z" fill="currentColor" opacity="0.42" />
+      <path d="M8 17.2h7.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity="0.42" />
+    </svg>
+    <h3 class="campus-pet-picker__title">どの仲間を呼ぶ？</h3>
   </header>
-  <p class="campus-pet-picker__hint">チャットの邪魔はしないよ。指でつまんで好きな場所に置ける。</p>
-  <div class="campus-pet-picker__grid">
-    <button type="button" class="campus-pet-picker__option" data-form="robo">
-      <span class="campus-pet-picker__thumb"><!-- §12-4 robo SVG (idle) --></span>
+  <div class="campus-pet-picker__stage">
+    <button type="button" class="campus-pet-picker__option" data-form="robo" style="--i: 0">
+      <span class="campus-pet-picker__figure"><!-- §12-4 robo SVG (idle) --></span>
       <span class="campus-pet-picker__name">ぴこ</span>
     </button>
-    <button type="button" class="campus-pet-picker__option" data-form="sarutahiko">
-      <span class="campus-pet-picker__thumb"><!-- sarutahiko SVG --></span>
+    <button type="button" class="campus-pet-picker__option" data-form="sarutahiko" style="--i: 1">
+      <span class="campus-pet-picker__figure"><!-- sarutahiko SVG --></span>
       <span class="campus-pet-picker__name">みちかぜ</span>
     </button>
-    <button type="button" class="campus-pet-picker__option" data-form="akita">
-      <span class="campus-pet-picker__thumb"><!-- akita SVG --></span>
+    <button type="button" class="campus-pet-picker__option" data-form="akita" style="--i: 2">
+      <span class="campus-pet-picker__figure"><!-- akita SVG --></span>
       <span class="campus-pet-picker__name">こまち</span>
     </button>
-    <button type="button" class="campus-pet-picker__option" data-form="gotenmari">
-      <span class="campus-pet-picker__thumb"><!-- gotenmari SVG --></span>
+    <button type="button" class="campus-pet-picker__option" data-form="gotenmari" style="--i: 3">
+      <span class="campus-pet-picker__figure"><!-- gotenmari SVG --></span>
       <span class="campus-pet-picker__name">てまりん</span>
     </button>
-    <button type="button" class="campus-pet-picker__option campus-pet-picker__option--rare" data-form="namahage">
+    <button type="button" class="campus-pet-picker__option" data-form="namahage" style="--i: 4">
       <span class="campus-pet-picker__rare" aria-hidden="true">★</span>
-      <span class="campus-pet-picker__thumb"><!-- namahage SVG --></span>
+      <span class="campus-pet-picker__figure"><!-- namahage SVG --></span>
       <span class="campus-pet-picker__name">ガオウ</span>
     </button>
-    <button type="button" class="campus-pet-picker__option" data-form="yatagarasu">
-      <span class="campus-pet-picker__thumb"><!-- yatagarasu SVG --></span>
+    <button type="button" class="campus-pet-picker__option" data-form="yatagarasu" style="--i: 5">
+      <span class="campus-pet-picker__figure"><!-- yatagarasu SVG --></span>
       <span class="campus-pet-picker__name">八咫烏</span>
     </button>
   </div>
   <div class="campus-pet-picker__foot">
+    <p class="campus-pet-picker__hint">指でつまんで、好きな場所に置けるよ</p>
     <button type="button" class="campus-pet-picker__cancel">今はやめておく</button>
   </div>
 </section>
 ```
 
-- `__hint` は**初回召喚（解禁）時のみ**表示する（§3-1。2 回目以降は要素ごと出さない）。
-- 召喚済みフォームがある場合、そのオプションに `campus-pet-picker__option--current` と
-  `aria-current="true"` を付ける（§4-2 の「いま一緒」目印）。
-
 ```css
 .campus-pet-picker {
   width: min(48rem, calc(100% - 2rem));
   margin: 0 auto 0.625rem;
-  padding: 0.75rem 0.875rem 0.625rem;
+  padding: 0.625rem 0.75rem 0.5rem;
   border: 1px solid var(--color-edge);
   border-left: 2px solid var(--color-signal);
   border-radius: var(--radius-lg);
   background: var(--color-panel);
+  animation: campus_pet_picker_rise 240ms var(--ease-expressive) both;
 }
 
 .campus-pet-picker__head {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
 }
 
-.campus-pet-picker__dot {
-  width: 0.375rem;
-  height: 0.375rem;
+.campus-pet-picker__smoke-mark {
+  width: 1rem;
+  height: 1rem;
   flex: 0 0 auto;
-  border-radius: 9999px;
-  background: var(--color-signal);
+  color: var(--color-signal-soft);
 }
 
 .campus-pet-picker__title {
@@ -1603,101 +1620,151 @@ meta 行が合言葉を再掲する）。
   line-height: 1.4;
 }
 
-.campus-pet-picker__hint {
-  margin: 0.25rem 0 0 0.875rem;
-  color: var(--color-text-dim);
-  font-size: 0.75rem;
-  line-height: 1.5;
+.campus-pet-picker__stage {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.125rem;
+  margin-top: 0.375rem;
+  padding: 0.375rem 0.25rem 0;
 }
 
-.campus-pet-picker__grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.375rem;
-  margin-top: 0.625rem;
+.campus-pet-picker__stage::after {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 1.125rem;
+  left: 0.5rem;
+  border-top: 1px solid var(--color-edge);
+  content: "";
+  opacity: 0.7;
 }
 
 .campus-pet-picker__option {
   position: relative;
+  z-index: 1;
   display: grid;
+  flex: 1 1 0;
+  max-width: 4rem;
+  min-width: 2.75rem;
   justify-items: center;
-  gap: 0.25rem;
-  min-height: 5.25rem;
-  padding: 0.5rem 0.25rem 0.375rem;
-  border: 1px solid var(--color-edge);
-  border-radius: var(--radius-md);
+  gap: 0.125rem;
+  padding: 0.25rem 0 0.125rem;
+  border: 0;
   background: transparent;
-  transition:
-    border-color var(--motion-fast) var(--ease-standard),
-    background-color var(--motion-fast) var(--ease-standard),
-    transform var(--motion-fast) var(--ease-standard);
+  animation: campus_pet_picker_pop 340ms var(--ease-expressive) both;
+  animation-delay: calc(var(--i, 0) * 55ms);
 }
 
-.campus-pet-picker__option:hover,
-.campus-pet-picker__option:focus-visible {
-  border-color: var(--color-edge-strong);
-  background: var(--fill-hover, rgba(244, 243, 237, 0.055));
-}
-
-.campus-pet-picker__option:active {
-  transform: scale(0.97);
-}
-
-.campus-pet-picker__option--current {
-  border-color: rgba(255, 118, 87, 0.34);
-}
-
-.campus-pet-picker__option--current::after {
-  position: absolute;
-  top: 0.375rem;
-  left: 0.375rem;
-  width: 0.375rem;
-  height: 0.375rem;
-  border-radius: 9999px;
-  background: var(--color-signal);
-  content: "";
-}
-
-.campus-pet-picker__thumb {
-  width: 3rem;
-  height: 3rem;
-  pointer-events: none;
-}
-
-.campus-pet-picker__thumb .campus-pet {
+.campus-pet-picker__figure {
+  position: relative;
   width: 100%;
-  height: 100%;
+  max-width: 3.5rem;
+  aspect-ratio: 1;
+  transition: transform var(--motion-fast) var(--ease-expressive);
+}
+
+.campus-pet-picker__figure::before {
+  position: absolute;
+  bottom: -1px;
+  left: 50%;
+  width: 82%;
+  height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(255, 118, 87, 0.3), transparent);
+  content: "";
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity var(--motion-fast) var(--ease-standard);
+}
+
+.campus-pet-picker__figure::after {
+  position: absolute;
+  inset: 8%;
+  border-radius: 50%;
+  background: var(--pet-paper);
+  content: "";
+  opacity: 0;
+  animation: campus_pet_picker_puff 340ms var(--ease-expressive) both;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+
+.campus-pet-picker__figure .campus-pet {
+  position: relative;
+  z-index: 1;
+}
+
+.campus-pet-picker__option:hover .campus-pet-picker__figure,
+.campus-pet-picker__option:focus-visible .campus-pet-picker__figure {
+  transform: translateY(-3px);
+}
+
+.campus-pet-picker__option:hover .campus-pet-picker__figure::before,
+.campus-pet-picker__option:focus-visible .campus-pet-picker__figure::before {
+  opacity: 1;
+}
+
+.campus-pet-picker__option:active .campus-pet-picker__figure {
+  transform: translateY(-1px) scale(0.96);
 }
 
 .campus-pet-picker__name {
-  color: var(--color-text-muted);
-  font-size: 0.6875rem;
-  line-height: 1.2;
+  color: var(--color-text-dim);
+  font-size: 0.625rem;
+  line-height: 1.6;
+  transition: color var(--motion-fast) var(--ease-standard);
+}
+
+.campus-pet-picker__option:hover .campus-pet-picker__name,
+.campus-pet-picker__option:focus-visible .campus-pet-picker__name {
+  color: var(--color-text);
+}
+
+.campus-pet-picker__option--current .campus-pet-picker__name {
+  color: var(--color-signal);
+}
+
+.campus-pet-picker__option--current .campus-pet-picker__figure::before {
+  opacity: 0.55;
 }
 
 .campus-pet-picker__rare {
   position: absolute;
-  top: 0.25rem;
-  right: 0.375rem;
+  top: -0.125rem;
+  right: 12%;
+  z-index: 2;
   color: var(--pet-aurora-bridge, #ffc46b);
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   line-height: 1;
+  animation: campus_pet_picker_twinkle 2.4s var(--ease-standard) infinite;
 }
 
 .campus-pet-picker__foot {
   display: flex;
-  justify-content: flex-end;
-  margin-top: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.125rem;
+}
+
+.campus-pet-picker__hint {
+  margin: 0;
+  color: var(--color-text-dim);
+  font-size: 0.6875rem;
+  line-height: 1.5;
 }
 
 .campus-pet-picker__cancel {
   min-height: 2.25rem;
+  flex: 0 0 auto;
+  margin-left: auto;
   padding: 0 0.75rem;
   border: 0;
   border-radius: 9999px;
   background: transparent;
   color: var(--color-text-dim);
   font-size: 0.75rem;
+  white-space: nowrap;
   transition:
     background-color var(--motion-fast) var(--ease-standard),
     color var(--motion-fast) var(--ease-standard);
@@ -1709,17 +1776,51 @@ meta 行が合言葉を再掲する）。
   color: var(--color-text-muted);
 }
 
+@keyframes campus_pet_picker_rise {
+  from { opacity: 0; transform: translate3d(0, 8px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes campus_pet_picker_pop {
+  0% { opacity: 0; transform: translate3d(0, 6px, 0) scale(0.6); }
+  62% { opacity: 1; transform: translate3d(0, -1px, 0) scale(1.06); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes campus_pet_picker_puff {
+  0% { opacity: 0.32; transform: scale(0.45); }
+  100% { opacity: 0; transform: scale(1.25); }
+}
+
+@keyframes campus_pet_picker_twinkle {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .campus-pet-picker,
   .campus-pet-picker__option,
+  .campus-pet-picker__figure::after,
+  .campus-pet-picker__rare {
+    animation: none !important;
+  }
+
+  .campus-pet-picker__figure,
+  .campus-pet-picker__name,
   .campus-pet-picker__cancel {
     transition: none !important;
   }
 
-  .campus-pet-picker__option:active {
+  .campus-pet-picker__option:hover .campus-pet-picker__figure,
+  .campus-pet-picker__option:active .campus-pet-picker__figure {
     transform: none;
   }
 }
 ```
+
+一時ブロック（召喚シーケンス §3-1）の消滅は、バブルとステージを包むラッパーに 260ms の
+opacity フェード（`transform`/`opacity` のみ）をかけて DOM から除去する。ステージ表示中も
+LoadingSpinnerV5・確認フォーム等の既存要素には触れない。
 
 ### §12-12. ドラッグ移動の演出（v1.1）
 

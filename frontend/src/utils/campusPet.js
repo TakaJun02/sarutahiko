@@ -1,5 +1,6 @@
 export const CAMPUS_PET_STORAGE_KEY = 'campus-guide-pet'
 export const CAMPUS_PET_PASSPHRASE = 'ペットを呼び出す'
+export const CAMPUS_PET_SUMMON_WAIT_MS = 1900
 
 export const CAMPUS_PET_FORMS = Object.freeze([
   { id: 'robo', name: 'ぴこ' },

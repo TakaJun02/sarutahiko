@@ -3,9 +3,11 @@ import { readFileSync } from 'node:fs'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { useChatStore } from '../stores/chat'
 import { useCampusPetStore } from '../stores/pet'
 import {
   CAMPUS_PET_FORMS,
+  CAMPUS_PET_SUMMON_WAIT_MS,
   CAMPUS_PET_STORAGE_KEY,
   chooseCampusPetReaction,
   clampCampusPetTranslation,
@@ -45,6 +47,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -69,9 +72,40 @@ describe('FR-41 §11-1 passphrase interception', () => {
 
     const sendSource = chatViewSource.match(/async function send\(\) \{[\s\S]*?\n\}/)?.[0]
     expect(sendSource).toContain('if (isCampusPetPassphrase(text))')
-    expect(sendSource).toContain('pet.openPicker()')
+    expect(sendSource).toContain('beginCampusPetSummon()')
     expect(sendSource).toContain('await chat.sendMessage(text)')
-    expect(sendSource.indexOf('pet.openPicker()')).toBeLessThan(sendSource.indexOf('await chat.sendMessage(text)'))
+    expect(sendSource.indexOf('beginCampusPetSummon()')).toBeLessThan(sendSource.indexOf('await chat.sendMessage(text)'))
+    expect(chatViewSource).toContain('{{ CAMPUS_PET_PASSPHRASE }}')
+  })
+
+  it('keeps the summon local and advances waiting to picking after 1900ms', () => {
+    vi.useFakeTimers()
+    const chat = useChatStore()
+    const pet = useCampusPetStore()
+    const sendMessage = vi.spyOn(chat, 'sendMessage')
+    const messagesBefore = [...chat.messages]
+    const chatStateBefore = JSON.stringify(chat.$state)
+
+    expect(pet.beginSummon()).toBe(true)
+    const runId = pet.summonRunId
+    globalThis.setTimeout(() => pet.showPicker(), CAMPUS_PET_SUMMON_WAIT_MS)
+
+    expect(pet.phase).toBe('waiting')
+    expect(runId).toBeGreaterThan(0)
+    vi.advanceTimersByTime(1899)
+    expect(pet.phase).toBe('waiting')
+    vi.advanceTimersByTime(1)
+    expect(pet.phase).toBe('picking')
+    expect(chat.messages).toEqual(messagesBefore)
+    expect(JSON.stringify(chat.$state)).toBe(chatStateBefore)
+    expect(sendMessage).not.toHaveBeenCalled()
+
+    expect(chatViewSource).toContain('}, CAMPUS_PET_SUMMON_WAIT_MS)')
+    expect(chatViewSource).toContain(':key="pet.summonRunId"')
+    expect(chatViewSource).toContain('campus-pet-spinner-fade-leave-active')
+    expect(chatViewSource).toContain('transition: opacity 160ms ease-out;')
+    expect(chatViewSource).toContain('campus-pet-summon-block-leave-active')
+    expect(chatViewSource).toContain('transition: opacity 260ms ease-out;')
   })
 })
 
@@ -90,9 +124,40 @@ describe('FR-41 §11-2 picker behavior', () => {
     expect(pickerSource).toContain("emit('cancel')")
     expect(pickerSource).toContain("'campus-pet-picker__option--current': form.id === currentForm")
     expect(pickerSource).toContain(":aria-current=\"form.id === currentForm ? 'true' : undefined\"")
-    expect(normalizedChatSource).toContain("'composer-shell--pet-locked': pet.pickerOpen")
-    expect(normalizedChatSource).toContain('<fieldset :disabled="pet.pickerOpen" class="contents">')
-    expect(normalizedChatSource).toContain('pet.closePicker() router.push(`/chat/${threadId}`)')
+    expect(pickerSource).toContain('class="campus-pet-picker__stage"')
+    expect(pickerSource).toContain('class="campus-pet-picker__figure"')
+    expect(pickerSource).toContain(':style="`--i: ${index}`"')
+    expect(pickerSource).toContain('class="campus-pet-picker__smoke-mark"')
+    expect(pickerSource).toContain('animation-delay: calc(var(--i, 0) * 55ms);')
+    expect(pickerSource).toContain('@keyframes campus_pet_picker_pop')
+    expect(pickerSource).toContain('@keyframes campus_pet_picker_puff')
+    expect(pickerSource).not.toContain('campus-pet-picker__grid')
+    expect(pickerSource).not.toContain('campus-pet-picker__thumb')
+    expect(normalizedChatSource).toContain("'composer-shell--pet-locked': pet.phase !== 'idle'")
+    expect(normalizedChatSource).toContain('<fieldset :disabled="pet.phase !== \'idle\'" class="contents">')
+    expect(normalizedChatSource).toContain('pet.cancelSummon() router.push(`/chat/${threadId}`)')
+  })
+
+  it('cancels from waiting on Escape and removes on cancel or selection', () => {
+    const store = useCampusPetStore()
+    store.beginSummon()
+    expect(store.phase).toBe('waiting')
+    expect(store.cancelSummon()).toBe(true)
+    expect(store.phase).toBe('idle')
+
+    store.beginSummon()
+    store.showPicker()
+    expect(store.cancelSummon()).toBe(true)
+    expect(store.phase).toBe('idle')
+
+    store.beginSummon()
+    store.showPicker()
+    expect(store.summon('akita')).toBe(true)
+    expect(store.phase).toBe('idle')
+    expect(store.currentForm).toBe('akita')
+    expect(normalizedChatSource).toContain("if (pet.phase !== 'idle') { cancelCampusPetPicker()")
+    expect(normalizedChatSource).toContain('function selectCampusPet(form) { clearPetSummonTimer() pet.summon(form)')
+    expect(normalizedChatSource).toContain('function cancelCampusPetPicker() { clearPetSummonTimer() pet.cancelSummon()')
   })
 
   it('uses the six §12-4 SVGs without changing their markup', () => {
@@ -111,21 +176,24 @@ describe('FR-41 §11-3 form changes', () => {
     const storage = createMemoryStorage()
     vi.stubGlobal('localStorage', storage)
     const store = useCampusPetStore()
-    store.openPicker()
+    store.beginSummon()
+    store.showPicker()
 
     expect(store.summon('robo')).toBe(true)
     expect(store.unlocked).toBe(true)
     expect(store.visible).toBe(true)
     expect(store.currentForm).toBe('robo')
-    expect(store.pickerOpen).toBe(false)
+    expect(store.phase).toBe('idle')
     expect(store.summonRevision).toBe(1)
 
-    store.openPicker()
+    store.beginSummon()
+    store.showPicker()
     store.summon('robo')
     expect(store.currentForm).toBe('robo')
     expect(store.summonRevision).toBe(2)
 
-    store.openPicker()
+    store.beginSummon()
+    store.showPicker()
     store.summon('namahage')
     expect(store.currentForm).toBe('namahage')
     expect(store.summonRevision).toBe(3)
@@ -184,7 +252,7 @@ describe('FR-41 §11-5 pointer drag and tap handling', () => {
     expect(positionRatioFromRects(movedRect, layerRect)).toEqual(pos)
     expect(normalizedPetSource).toContain('buttonRef.value?.setPointerCapture?.(event.pointerId)')
     expect(campusPetSource).toContain('buttonRef.value.style.transform = `translate3d(${translation.tx}px, ${translation.ty}px, 0)`')
-    expect(normalizedPetSource).toContain("|| pet.pickerOpen" )
+    expect(normalizedPetSource).toContain("|| pet.phase !== 'idle'" )
   })
 
   it('uses every form-specific tap ratio without allowing a double-click action', () => {
@@ -234,7 +302,7 @@ describe('FR-41 §11-6 v1.1 persistence', () => {
       pos: { xr: 0.25, yr: 0.75 },
     })
     expect(Object.keys(saved)).toEqual(['unlocked', 'visible', 'currentForm', 'pos'])
-    expect(normalizedChatSource).toContain('function logout() { pet.closePicker() auth.clearSession() chat.reset()')
+    expect(normalizedChatSource).toContain('function logout() { clearPetSummonTimer() pet.cancelSummon() auth.clearSession() chat.reset()')
     expect(chatViewSource).not.toContain(`removeItem('${CAMPUS_PET_STORAGE_KEY}')`)
   })
 
@@ -290,7 +358,8 @@ describe('FR-41 §11-7 reduced motion', () => {
     expect(petCssSource.match(/@media \(prefers-reduced-motion: reduce\)/g)?.length).toBeGreaterThanOrEqual(4)
     expect(petCssSource).toContain('.campus-pet[data-state="summoning"] .pet-rig')
     expect(petCssSource).toContain('animation: campus_pet_smoke_reduce 220ms ease-out both !important;')
-    expect(petCssSource).toContain('.campus-pet-picker__option:active')
+    expect(pickerSource).toContain('.campus-pet-picker__option:active')
+    expect(pickerSource).toContain('.campus-pet-picker__figure::after')
     expect(petCssSource).toContain('.about-pet-toggle__knob')
     expect(petCssSource).toContain('.campus-pet-button[data-settling="true"] .campus-pet')
     expect(petCssSource).toContain('animation: none;')

@@ -37,7 +37,7 @@ const reaction = ref('')
 const protectControls = computed(() => (
   chat.isClarificationPending
   || chat.messages.some((message) => message.mapInteractive)
-  || pet.pickerOpen
+  || pet.phase !== 'idle'
 ))
 
 const petState = computed(() => {
