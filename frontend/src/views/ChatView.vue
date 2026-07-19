@@ -2,12 +2,24 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import CampusPet from '../components/CampusPet.vue'
+import CampusPetPicker from '../components/CampusPetPicker.vue'
+import CampusPetSvg from '../components/CampusPetSvg.vue'
+import ClarificationCard from '../components/ClarificationCard.vue'
 import LoadingSpinnerV5 from '../components/LoadingSpinnerV5.vue'
+import MapCard from '../components/MapCard.vue'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import ThreadSidebar from '../components/ThreadSidebar.vue'
 import { useViewportState } from '../composables/useAppViewport'
 import { useAuthStore } from '../stores/auth'
 import { toFriendlyErrorMessage, useChatStore } from '../stores/chat'
+import { useCampusPetStore } from '../stores/pet'
+import {
+  CAMPUS_PET_FORMS,
+  CAMPUS_PET_PASSPHRASE,
+  CAMPUS_PET_SUMMON_WAIT_MS,
+  isCampusPetPassphrase,
+} from '../utils/campusPet'
 import { getDialogAriaLabel, getDialogInitialFocus } from '../utils/dialog'
 import {
   buildGreetingLines,
@@ -23,14 +35,15 @@ const AT_BOTTOM_THRESHOLD_PX = 72
 
 // Suggested first questions for the empty state (tap inserts into the input).
 const suggestions = [
+  { label: 'サイバーフィジカルシステム研究室に行きたい' },
+  { label: '総合受付から学部棟Ⅰへの行き方は？' },
+  { label: 'GI512 はどこ？' },
   { label: '無料送迎バスの時刻は？' },
-  { label: '模擬講義は何がある？' },
-  { label: '食堂から D404 への行き方は？' },
-  { label: '個別進学相談はどこでやってる？' },
 ]
 
 const auth = useAuthStore()
 const chat = useChatStore()
+const pet = useCampusPetStore()
 const router = useRouter()
 const route = useRoute()
 const { appHeight } = useViewportState()
@@ -41,10 +54,21 @@ const scrollContainerRef = ref(null)
 const messagesEnd = ref(null)
 const inputRef = ref(null)
 const footerRef = ref(null)
+const composerShellRef = ref(null)
 const footerClearancePx = ref(224)
+const petComposerClearancePx = ref(100)
 const expandedSourceKeys = ref(new Set())
 const activeGreeting = ref(EMPTY_GREETING_VARIANTS[0])
 const isAtBottom = ref(true)
+const composerPlaceholder = computed(() => (
+  pet.phase !== 'idle'
+    ? '呼び出す仲間を選んでください'
+    : chat.isOriginSelectionPending
+    ? 'マップから現在地を選んでください'
+    : chat.isClarificationPending
+      ? '質問の下の回答欄でお答えください'
+      : '質問を入力'
+))
 
 const greetingNameParts = computed(() => splitGreetingName(auth.user?.name || ''))
 const greetingLines = computed(() => buildGreetingLines(activeGreeting.value, auth.user?.name || ''))
@@ -56,12 +80,15 @@ const dialogError = ref('')
 const dialogBusy = ref(false)
 const dialogInputRef = ref(null)
 const dialogCancelRef = ref(null)
+const aboutPetHintOpen = ref(false)
+const hasCampusPetCompanion = computed(() => Boolean(pet.unlocked && pet.currentForm))
 
 // Transient hint shown when Enter is pressed while a reply is streaming.
 const busyHint = ref('')
 
 let dialogReturnFocus = null
 let busyHintTimer = null
+let petSummonTimer = null
 let previousGreetingId = ''
 
 let footerResizeObserver = null
@@ -99,13 +126,49 @@ function showBusyHint() {
   }, 2500)
 }
 
+function clearPetSummonTimer() {
+  if (petSummonTimer) {
+    window.clearTimeout(petSummonTimer)
+    petSummonTimer = null
+  }
+}
+
+function beginCampusPetSummon() {
+  clearPetSummonTimer()
+  if (!pet.beginSummon()) {
+    return
+  }
+  pendingScrollBehavior = 'smooth'
+  scrollToBottom('smooth')
+  petSummonTimer = window.setTimeout(() => {
+    petSummonTimer = null
+    if (pet.showPicker() && isAtBottom.value) {
+      scrollToBottom('auto')
+    }
+  }, CAMPUS_PET_SUMMON_WAIT_MS)
+}
+
 async function send() {
   const text = draft.value
   if (!text.trim()) {
     return
   }
+  if (chat.isOriginSelectionPending) {
+    return
+  }
+  if (chat.isClarificationPending) {
+    return
+  }
   if (chat.isSending) {
     showBusyHint()
+    return
+  }
+  if (pet.phase !== 'idle') {
+    return
+  }
+  if (isCampusPetPassphrase(text)) {
+    draft.value = ''
+    beginCampusPetSummon()
     return
   }
   pendingScrollBehavior = 'smooth'
@@ -120,19 +183,93 @@ async function send() {
   }
 }
 
+async function selectMapOrigin(message, origin) {
+  if (chat.isSending) {
+    showBusyHint()
+    return
+  }
+  pendingScrollBehavior = 'smooth'
+  try {
+    await chat.selectMapOrigin(message, origin)
+  } catch (error) {
+    handleAuthError(error)
+  }
+}
+
+function cancelMapOrigin(message) {
+  chat.cancelMapOrigin(message)
+  nextTick(() => {
+    inputRef.value?.focus()
+  })
+}
+
+async function submitClarificationAnswer(message, text) {
+  if (chat.isSending) {
+    showBusyHint()
+    return
+  }
+  pendingScrollBehavior = 'smooth'
+  try {
+    await chat.submitClarificationAnswer(message, text)
+  } catch (error) {
+    handleAuthError(error)
+  } finally {
+    await nextTick()
+    inputRef.value?.focus()
+  }
+}
+
+function cancelClarification(message) {
+  chat.cancelClarification(message)
+  nextTick(() => {
+    inputRef.value?.focus()
+  })
+}
+
+function selectCampusPet(form) {
+  clearPetSummonTimer()
+  pet.summon(form)
+  nextTick(() => {
+    inputRef.value?.focus()
+  })
+}
+
+function cancelCampusPetPicker() {
+  clearPetSummonTimer()
+  pet.cancelSummon()
+  nextTick(() => {
+    inputRef.value?.focus()
+  })
+}
+
 function onEnter(event) {
   if (event.isComposing || event.shiftKey) {
     return
   }
   event.preventDefault()
+  if (chat.isOriginSelectionPending) {
+    return
+  }
+  if (chat.isClarificationPending) {
+    return
+  }
   if (chat.isSending) {
     showBusyHint()
+    return
+  }
+  if (pet.phase !== 'idle') {
     return
   }
   send()
 }
 
 function applySuggestion(text) {
+  if (pet.phase !== 'idle') {
+    return
+  }
+  if (chat.isOriginSelectionPending || chat.isClarificationPending || chat.isSending) {
+    return
+  }
   draft.value = text
   nextTick(() => {
     inputRef.value?.focus()
@@ -190,6 +327,8 @@ function revealedMessageContent(message) {
 }
 
 function logout() {
+  clearPetSummonTimer()
+  pet.cancelSummon()
   auth.clearSession()
   chat.reset()
   router.replace('/login')
@@ -212,11 +351,15 @@ function selectThread(threadId) {
   if (threadId === chat.threadId) {
     return
   }
+  clearPetSummonTimer()
+  pet.cancelSummon()
   router.push(`/chat/${threadId}`)
 }
 
 function startNewChat() {
   closeDrawer()
+  clearPetSummonTimer()
+  pet.cancelSummon()
   if (chat.messages.length === 0) {
     chooseEmptyGreeting()
   }
@@ -267,12 +410,16 @@ function removeThread(threadId) {
 }
 
 function openAboutDialog() {
+  aboutPetHintOpen.value = false
   openDialog('about')
 }
 
 function closeDialog() {
   if (dialogBusy.value) {
     return
+  }
+  if (dialog.value?.kind === 'about') {
+    aboutPetHintOpen.value = false
   }
   dialog.value = null
   restoreDialogFocus()
@@ -364,6 +511,10 @@ function onWindowKeydown(event) {
   }
   if (drawerOpen.value) {
     closeDrawer()
+    return
+  }
+  if (pet.phase !== 'idle') {
+    cancelCampusPetPicker()
   }
 }
 
@@ -425,14 +576,28 @@ async function scrollToBottom(fallbackBehavior = 'smooth') {
 
 function updateFooterClearance() {
   const footerHeight = footerRef.value?.offsetHeight || 0
+  const composerHeight = composerShellRef.value?.offsetHeight || 0
   if (footerHeight > 0) {
     footerClearancePx.value = Math.ceil(footerHeight + 24)
+  }
+  if (composerHeight > 0) {
+    petComposerClearancePx.value = Math.ceil(composerHeight + 12)
   }
 }
 
 watch(draft, () => {
   nextTick(autoResizeInput)
 })
+
+watch(
+  () => pet.summonRunId,
+  () => {
+    if (pet.phase === 'picking' && pet.summonOrigin === 'pet') {
+      pendingScrollBehavior = 'smooth'
+      scrollToBottom('smooth')
+    }
+  },
+)
 
 watch(
   () => chat.messages.length,
@@ -460,7 +625,7 @@ watch(
 watch(
   () => chat.messages.map((message) => {
     const sourceKey = message.sources.map((source) => source.url).join(',')
-    return `${message.clientId || message.id}:${message.content.length}:${message.revealedLength}:${message.statusText}:${message.statusStep}:${sourceKey}`
+    return `${message.clientId || message.id}:${message.content.length}:${message.revealedLength}:${message.statusText}:${message.statusStep}:${message.doneReceived}:${message.mapInteractive}:${message.clarificationExpected}:${message.clarificationActive}:${sourceKey}`
   }).join('|'),
   () => {
     if (pendingScrollBehavior || isAtBottom.value) {
@@ -478,6 +643,8 @@ watch(appHeight, () => {
 watch(
   () => route.params.threadId,
   (threadId) => {
+    clearPetSummonTimer()
+    pet.cancelSummon()
     syncThreadFromRoute(threadId || null)
   },
 )
@@ -509,6 +676,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown)
   footerResizeObserver?.disconnect()
+  clearPetSummonTimer()
+  pet.cancelSummon()
   if (busyHintTimer) {
     window.clearTimeout(busyHintTimer)
   }
@@ -531,6 +700,8 @@ onBeforeUnmount(() => {
         <span class="ambient-thinking-cloud ambient-thinking-cloud--far"></span>
       </span>
     </div>
+
+    <CampusPet :composer-clearance="petComposerClearancePx" />
 
     <aside class="relative z-10 hidden w-[17.5rem] shrink-0 border-r border-edge lg:block">
       <ThreadSidebar
@@ -649,7 +820,7 @@ onBeforeUnmount(() => {
           :style="{ paddingBottom: chat.messages.length ? `${footerClearancePx}px` : '0px' }"
         >
           <div
-            v-if="chat.messages.length === 0"
+            v-if="chat.messages.length === 0 && pet.phase === 'idle'"
             class="relative mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-5 py-8 sm:px-4 sm:py-12 md:max-lg:justify-end md:max-lg:pb-16"
           >
             <div class="chat-empty__identity">
@@ -668,11 +839,13 @@ onBeforeUnmount(() => {
             </h2>
 
             <div class="chat-empty__actions mt-7 flex w-full flex-wrap gap-2.5">
+              <fieldset :disabled="pet.phase !== 'idle'" class="contents">
               <button
                 v-for="suggestion in suggestions"
                 :key="suggestion.label"
                 type="button"
                 class="suggestion-card group inline-flex min-h-11 w-fit max-w-full items-center gap-3 rounded-full border border-edge-strong bg-ink-surface/65 px-4 py-2 text-left text-sm text-white/75 shadow-hairline transition duration-base ease-expressive hover:-translate-y-0.5 hover:bg-ink-raised hover:text-white active:translate-y-0 active:scale-[0.985]"
+                :disabled="chat.isOriginSelectionPending || chat.isClarificationPending || chat.isSending"
                 :aria-label="`入力欄に「${suggestion.label}」を入力`"
                 @click="applySuggestion(suggestion.label)"
               >
@@ -681,6 +854,7 @@ onBeforeUnmount(() => {
                   <path d="M20 5v6a5 5 0 0 1-5 5H5 M9 12l-4 4 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </button>
+              </fieldset>
             </div>
           </div>
 
@@ -695,12 +869,31 @@ onBeforeUnmount(() => {
               <template v-if="message.role === 'assistant'">
                 <div class="w-full text-white">
                   <LoadingSpinnerV5
-                    :mode="message.pending ? 'pending' : 'settled'"
+                    :mode="message.pending ? 'pending' : (message.clarificationExpected ? 'elicit' : 'settled')"
                     :text="message.statusText || 'お待ちください…'"
                     :status-step="message.statusStep || 'generate'"
+                    :status-run-id="message.statusRunId"
                   >
                     <div class="space-y-4">
                       <MarkdownRenderer v-if="message.content" :content="revealedMessageContent(message)" />
+                      <Transition name="clarification-card">
+                        <ClarificationCard
+                          v-if="message.clarificationActive"
+                          :is-sending="chat.isSending"
+                          :initial-text="message.clarificationDraft || ''"
+                          @submit="submitClarificationAnswer(message, $event)"
+                          @cancel="cancelClarification(message)"
+                        />
+                      </Transition>
+                      <MapCard
+                        v-if="message.map"
+                        :payload="message.map"
+                        :interactive="message.mapInteractive"
+                        :selected-node-id="message.mapSelectedNode || ''"
+                        :cancelled="Boolean(message.mapCancelled)"
+                        @origin-selected="selectMapOrigin(message, $event)"
+                        @origin-cancelled="cancelMapOrigin(message)"
+                      />
                       <div v-if="message.sources.length" class="border-t border-edge pt-3">
                         <button
                           type="button"
@@ -783,13 +976,71 @@ onBeforeUnmount(() => {
                 </div>
               </template>
               <div v-else class="flex justify-end">
-                <p class="max-w-[88%] whitespace-pre-wrap break-words rounded-[1.35rem] rounded-br-md border border-white/[0.075] bg-ink-high px-4 py-2.5 text-base leading-7 text-[#f1f1ec] shadow-soft sm:max-w-[78%]">
+                <div
+                  v-if="message.map?.mode === 'origin_select'"
+                  class="current-location-chip"
+                  role="status"
+                  :aria-label="`現在地: ${message.map.origin?.label || ''}`"
+                >
+                  <span class="current-location-chip__icon" aria-hidden="true">
+                    <svg viewBox="0 0 20 20" fill="none">
+                      <path d="M10 17.5s4.8-4.28 4.8-8.8a4.8 4.8 0 1 0-9.6 0c0 4.52 4.8 8.8 4.8 8.8z" stroke="currentColor" stroke-width="1.45" />
+                      <circle cx="10" cy="8.7" r="1.65" fill="currentColor" />
+                    </svg>
+                  </span>
+                  <span class="current-location-chip__copy">
+                    <small>現在地:</small>
+                    <strong>{{ message.map.origin?.label }}</strong>
+                  </span>
+                </div>
+                <p v-else class="max-w-[88%] whitespace-pre-wrap break-words rounded-[1.35rem] rounded-br-md border border-white/[0.075] bg-ink-high px-4 py-2.5 text-base leading-7 text-[#f1f1ec] shadow-soft sm:max-w-[78%]">
                   {{ message.content }}
                 </p>
               </div>
             </div>
             </article>
           </TransitionGroup>
+          <Transition name="campus-pet-summon-block">
+            <div
+              v-if="pet.phase !== 'idle'"
+              class="campus-pet-summon-block space-y-8 py-6 sm:py-8"
+            >
+              <article
+                v-if="pet.summonOrigin === 'passphrase'"
+                class="message-row message-row--user w-full px-4"
+              >
+                <div class="mx-auto w-full max-w-3xl">
+                  <div class="flex justify-end">
+                    <p class="max-w-[88%] whitespace-pre-wrap break-words rounded-[1.35rem] rounded-br-md border border-white/[0.075] bg-ink-high px-4 py-2.5 text-base leading-7 text-[#f1f1ec] shadow-soft sm:max-w-[78%]">
+                      {{ CAMPUS_PET_PASSPHRASE }}
+                    </p>
+                  </div>
+                </div>
+              </article>
+              <article class="message-row message-row--assistant w-full px-4">
+                <div class="mx-auto w-full max-w-3xl">
+                  <div class="w-full text-white">
+                    <Transition name="campus-pet-spinner-fade" mode="out-in">
+                      <LoadingSpinnerV5
+                        v-if="pet.phase === 'waiting'"
+                        :key="pet.summonRunId"
+                        mode="pending"
+                        :status-run-id="pet.summonRunId"
+                      />
+                      <CampusPetPicker
+                        v-else-if="pet.phase === 'picking'"
+                        :key="`campus-pet-picker-${pet.summonRunId}`"
+                        :current-form="pet.currentForm"
+                        :show-hint="!pet.unlocked"
+                        @select="selectCampusPet"
+                        @cancel="cancelCampusPetPicker"
+                      />
+                    </Transition>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </Transition>
           <div ref="messagesEnd" :style="{ scrollMarginBottom: `${footerClearancePx}px` }"></div>
         </div>
 
@@ -802,6 +1053,7 @@ onBeforeUnmount(() => {
             <Transition name="latest-jump">
               <button
                 v-if="chat.messages.length > 0 && !isAtBottom"
+                v-show="pet.phase === 'idle'"
                 type="button"
                 class="absolute -top-14 left-1/2 grid h-11 w-11 -translate-x-1/2 place-items-center rounded-full border border-edge-strong bg-ink-raised/70 text-white/80 shadow-glass backdrop-blur-md transition duration-base ease-expressive hover:bg-ink-raised/90 hover:text-white active:scale-[0.94]"
                 aria-label="最新のメッセージへ移動"
@@ -814,27 +1066,36 @@ onBeforeUnmount(() => {
               </button>
             </Transition>
             <div
+              ref="composerShellRef"
               class="composer-shell flex items-end gap-2 rounded-[1.6rem] p-2"
-              :class="{ 'composer-shell--streaming': chat.isSending }"
+              :class="{
+                'composer-shell--streaming': chat.isSending,
+                'composer-shell--origin-locked': chat.isOriginSelectionPending || chat.isClarificationPending,
+                'composer-shell--pet-locked': pet.phase !== 'idle',
+              }"
+              :aria-disabled="chat.isOriginSelectionPending || chat.isClarificationPending"
             >
+              <fieldset :disabled="pet.phase !== 'idle'" class="contents">
               <textarea
                 ref="inputRef"
                 v-model="draft"
                 rows="1"
                 class="max-h-[164px] min-h-11 flex-1 resize-none bg-transparent px-3 py-2.5 text-base leading-6 text-white outline-none placeholder:text-white/45 focus-visible:outline-none"
-                placeholder="質問を入力"
+                :placeholder="composerPlaceholder"
+                :disabled="chat.isOriginSelectionPending || chat.isClarificationPending"
                 @keydown.enter="onEnter"
               ></textarea>
               <button
                 type="submit"
                 class="grid h-11 w-11 shrink-0 place-items-center rounded-full text-[#11130f] transition duration-base ease-expressive enabled:bg-ink-paper enabled:hover:-translate-y-0.5 enabled:hover:bg-white enabled:active:translate-y-0 enabled:active:scale-[0.94] disabled:cursor-not-allowed disabled:bg-white/[0.07] disabled:text-white/25"
-                :disabled="!draft.trim() || chat.isSending"
+                :disabled="!draft.trim() || chat.isSending || chat.isOriginSelectionPending || chat.isClarificationPending"
                 aria-label="送信"
               >
                 <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none">
                   <path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </button>
+              </fieldset>
             </div>
             <!-- The full error message lives in the conversation bubble; this
                  banner is a compact retry affordance. -->
@@ -907,6 +1168,15 @@ onBeforeUnmount(() => {
             <div class="mt-3 space-y-3 text-sm leading-6 text-white/65">
               <p>APU-Navi は、秋田県立大学 サイバーフィジカルシステム研究室【CPS Lab】によって開発されました！</p>
             </div>
+            <a
+              href="https://www.cps.akita-pu.ac.jp/"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="group mt-5 flex min-h-11 w-full items-center justify-between gap-3 rounded-ui-sm border border-edge bg-ink-surface px-3.5 py-2.5 text-sm text-white/75 transition duration-fast ease-standard hover:border-edge-strong hover:bg-fill-hover hover:text-white"
+            >
+              <span class="text-[13px] leading-5">サイバーフィジカルシステム研究室のHPはこちらをクリック！</span>
+              <span aria-hidden="true" class="shrink-0 font-display text-base text-brand-soft transition duration-fast ease-expressive group-hover:-translate-y-0.5 group-hover:translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">↗</span>
+            </a>
             <section class="mt-5 border-t border-edge pt-5" aria-labelledby="about-qr-heading">
               <h4 id="about-qr-heading" class="text-center font-display text-sm font-semibold tracking-[-0.015em] text-white/90">
                 お手元のスマートフォンでも使えます
@@ -923,22 +1193,69 @@ onBeforeUnmount(() => {
                 ibera.cps.akita-pu.ac.jp
               </p>
             </section>
-            <a
-              href="https://www.cps.akita-pu.ac.jp/"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="group mt-5 flex min-h-11 w-full items-center justify-between gap-3 rounded-ui-sm border border-edge bg-ink-surface px-3.5 py-2.5 text-sm text-white/75 transition duration-fast ease-standard hover:border-edge-strong hover:bg-fill-hover hover:text-white"
-            >
-              <span class="text-[13px] leading-5">サイバーフィジカルシステム研究室のHPはこちらをクリック！</span>
-              <span aria-hidden="true" class="shrink-0 font-display text-base text-brand-soft transition duration-fast ease-expressive group-hover:-translate-y-0.5 group-hover:translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">↗</span>
-            </a>
+            <section v-if="pet.unlocked" class="about-pet-row" aria-label="キャンパスペット">
+              <div class="about-pet-row__copy">
+                <span class="about-pet-row__mark" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="7.2" fill="currentColor" opacity="0.22" />
+                    <path d="M8.2 12.8c1.9 1.7 5.7 1.7 7.6 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+                    <path d="M9 9.3h0.1M15 9.3h0.1" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" />
+                  </svg>
+                </span>
+                <span>
+                  <span class="about-pet-row__title">キャンパスペット</span>
+                  <span class="about-pet-row__meta">合言葉:「ペットを呼び出す」</span>
+                </span>
+              </div>
+              <div class="about-pet-row__actions">
+                <button
+                  type="button"
+                  class="about-pet-toggle"
+                  role="switch"
+                  :aria-checked="pet.visible"
+                  :aria-label="pet.visible ? 'ペットを非表示' : 'ペットを表示'"
+                  @click="pet.toggleVisible()"
+                >
+                  <span class="about-pet-toggle__knob"></span>
+                </button>
+              </div>
+            </section>
+            <div v-if="hasCampusPetCompanion && aboutPetHintOpen" class="about-pet-guide campus-pet-host">
+              <p class="about-pet-guide__note">このコたちに特別な機能はありません。となりで一緒に待ってくれる、癒し担当です。ペットをタップすると、仲間をえらび直せます。</p>
+              <ul class="about-pet-guide__list">
+                <li v-for="form in CAMPUS_PET_FORMS" :key="form.id" class="about-pet-guide__row">
+                  <span class="about-pet-guide__figure" aria-hidden="true">
+                    <CampusPetSvg :form="form.id" state="idle" />
+                  </span>
+                  <span class="about-pet-guide__copy">
+                    <span class="about-pet-guide__name">{{ form.name }}</span>
+                    <span class="about-pet-guide__desc">{{ form.description }}</span>
+                  </span>
+                </li>
+              </ul>
+            </div>
           </template>
           <p v-if="dialogError" class="mt-3 text-sm text-red-300" role="alert">{{ dialogError }}</p>
           <div v-if="dialog.kind === 'about'" class="mt-5 flex justify-end">
+            <div class="about-pet-corner">
+              <button
+                type="button"
+                class="about-pet-secret"
+                aria-label="小さなおまけのヒント"
+                :aria-expanded="aboutPetHintOpen"
+                @click="aboutPetHintOpen = !aboutPetHintOpen"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7.4 14.2c-1.8 0-3.1-1-3.1-2.4 0-1.5 1.4-2.5 3.2-2.5 0.4-2.3 2.4-3.8 5-3.8 2.8 0 4.8 1.8 5 4.3 1.4 0.2 2.4 1.1 2.4 2.3 0 1.4-1.3 2.2-3 2.2H7.4z" fill="currentColor" opacity="0.42" />
+                  <path d="M8 17.2h7.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity="0.42" />
+                </svg>
+              </button>
+              <p v-if="!hasCampusPetCompanion" class="about-pet-hint" :hidden="!aboutPetHintOpen">メッセージで「ペットを呼び出す」と送ってみよう！</p>
+            </div>
             <button
               ref="dialogCancelRef"
               type="button"
-              class="min-h-11 rounded-ui-sm border border-edge px-4 py-2 text-sm text-white/70 transition duration-fast ease-standard hover:bg-fill-hover hover:text-white active:scale-[0.97]"
+              class="min-h-11 shrink-0 whitespace-nowrap rounded-ui-sm border border-edge px-4 py-2 text-sm text-white/70 transition duration-fast ease-standard hover:bg-fill-hover hover:text-white active:scale-[0.97]"
               @click="closeDialog"
             >
               閉じる
@@ -973,6 +1290,104 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.current-location-chip {
+  display: inline-flex;
+  max-width: min(88%, 25rem);
+  align-items: center;
+  gap: 0.62rem;
+  border: 1px solid rgba(255, 118, 87, 0.28);
+  border-radius: 1.15rem 1.15rem 0.35rem 1.15rem;
+  background:
+    linear-gradient(135deg, rgba(255, 118, 87, 0.1), rgba(255, 118, 87, 0.035)),
+    #242724;
+  padding: 0.48rem 0.72rem 0.48rem 0.52rem;
+  box-shadow:
+    0 14px 34px -24px rgba(0, 0, 0, 0.95),
+    inset 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.current-location-chip__icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  place-items: center;
+  border-radius: 0.72rem;
+  background: #ff7657;
+  color: #2a120c;
+}
+
+.current-location-chip__icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.current-location-chip__copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.04rem;
+  text-align: left;
+}
+
+.current-location-chip__copy small {
+  color: rgba(242, 241, 236, 0.43);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.56rem;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  line-height: 1.3;
+}
+
+.current-location-chip__copy strong {
+  overflow-wrap: anywhere;
+  color: rgba(242, 241, 236, 0.9);
+  font-size: 0.76rem;
+  font-weight: 620;
+  line-height: 1.45;
+}
+
+.composer-shell--origin-locked {
+  border-color: rgba(255, 118, 87, 0.26);
+  background: color-mix(in srgb, var(--color-raised) 94%, var(--color-signal) 6%);
+  box-shadow:
+    0 0 0 1px rgba(255, 118, 87, 0.035),
+    var(--shadow-raised);
+}
+
+.composer-shell--pet-locked {
+  border-color: rgba(255, 118, 87, 0.26);
+  background: color-mix(in srgb, var(--color-raised) 94%, var(--color-signal) 6%);
+  box-shadow:
+    0 0 0 1px rgba(255, 118, 87, 0.035),
+    var(--shadow-raised);
+}
+
+.composer-shell--pet-locked textarea {
+  cursor: not-allowed;
+  color: rgba(242, 241, 236, 0.42);
+}
+
+.composer-shell--origin-locked textarea {
+  cursor: not-allowed;
+  color: rgba(242, 241, 236, 0.42);
+}
+
+.campus-pet-spinner-fade-leave-active {
+  transition: opacity 160ms ease-out;
+}
+
+.campus-pet-spinner-fade-leave-to {
+  opacity: 0;
+}
+
+.campus-pet-summon-block-leave-active {
+  transition: opacity 260ms ease-out;
+}
+
+.campus-pet-summon-block-leave-to {
+  opacity: 0;
+}
+
 .sources-collapse-enter-active,
 .sources-collapse-leave-active {
   transition:

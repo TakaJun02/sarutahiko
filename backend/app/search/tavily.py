@@ -37,6 +37,7 @@ class TavilySearchProvider:
         *,
         max_results: int = 3,
         include_domains: Sequence[str] | None = None,
+        include_raw_content: bool = True,
     ) -> list[WebSearchResult]:
         if not self.available:
             if not self.api_key:
@@ -48,7 +49,7 @@ class TavilySearchProvider:
             "max_results": max_results,
             "search_depth": "basic",
             "include_answer": False,
-            "include_raw_content": True,
+            "include_raw_content": include_raw_content,
         }
         if include_domains:
             payload["include_domains"] = list(include_domains)

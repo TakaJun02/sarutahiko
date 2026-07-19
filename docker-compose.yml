@@ -27,17 +27,19 @@ services:
       context: ./backend
     depends_on:
       - qdrant
-      - vllm
-    ports:
-      - "127.0.0.1:8080:8080"
+    # Host networking makes http://127.0.0.1:8000/v1 reach whichever generation
+    # server is up: the PP=2 31B serve (host, FR-35 default) or the compose vllm
+    # service above (12B fallback publishes the same 127.0.0.1:8000). Fallback
+    # therefore needs no URL change - only LLM_MODEL and which server runs.
+    network_mode: host
     environment:
       AGENT_MODE: ${AGENT_MODE:-real}
       DATABASE_PATH: /app/data/campus-guide.sqlite3
-      VLLM_BASE_URL: http://vllm:8000/v1
-      LLM_MODEL: ${LLM_MODEL:-google/gemma-4-12B-it-qat-w4a16-ct}
-      LLM_CONTEXT_WINDOW: ${LLM_CONTEXT_WINDOW:-16384}
+      VLLM_BASE_URL: http://127.0.0.1:8000/v1
+      LLM_MODEL: ${LLM_MODEL:-google/gemma-4-31B-it-qat-w4a16-ct}
+      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-16384}
       LLM_ANSWER_MAX_TOKENS: ${LLM_ANSWER_MAX_TOKENS:-1024}
-      QDRANT_URL: http://qdrant:6333
+      QDRANT_URL: http://127.0.0.1:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-campus_knowledge}
       EMBEDDING_BASE_URL: http://${Second_GPUsever}:8001/v1
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-8B}

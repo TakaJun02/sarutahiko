@@ -42,7 +42,13 @@ export function createMessage(role, content = '', overrides = {}) {
     streaming: false,
     statusText: '',
     statusStep: '',
+    statusPartial: false,
+    statusRunId: 0,
     sources: [],
+    map: null,
+    mapInteractive: false,
+    clarificationExpected: false,
+    clarificationActive: false,
     ...overrides,
   }
   if (typeof message.revealedLength !== 'number') {
@@ -73,10 +79,26 @@ export function parseSseBlock(block) {
 
 export function applyAssistantEvent(message, event) {
   if (event.event === 'status') {
-    message.statusText = event.data.text
-    message.statusStep = event.data.step
+    const incomingText = String(event.data.text || '')
+    const incomingStep = String(event.data.step || '')
+    const currentText = String(message.statusText || '')
+    const currentStep = String(message.statusStep || '')
+    const withoutTrailingEllipsis = (text) => text.endsWith('…') ? text.slice(0, -1) : text
+    const extendsCurrentRun = (
+      incomingStep === currentStep
+      && withoutTrailingEllipsis(incomingText).startsWith(withoutTrailingEllipsis(currentText))
+    )
+    if (!extendsCurrentRun) {
+      message.statusRunId = (message.statusRunId || 0) + 1
+    }
+    message.statusText = incomingText
+    message.statusStep = incomingStep
+    message.statusPartial = event.data.partial === true
     message.pending = true
     message.streaming = false
+    if (incomingStep === 'clarify') {
+      message.clarificationExpected = true
+    }
     return
   }
   if (event.event === 'token') {
@@ -85,12 +107,18 @@ export function applyAssistantEvent(message, event) {
     message.content += event.data.text
     return
   }
+  if (event.event === 'map') {
+    message.finalMap = event.data
+    message.finalMapInteractive = event.data.mode === 'ask_origin'
+    return
+  }
   if (event.event === 'done') {
     message.pending = false
     message.streaming = true
     message.id = event.data.message_id || message.id
     message.doneReceived = true
     message.finalSources = event.data.sources || []
+    message.finalClarification = event.data.kind === 'clarification'
     return event.data.thread_id
   }
   if (event.event === 'error') {
@@ -99,8 +127,15 @@ export function applyAssistantEvent(message, event) {
     message.content = event.data.message || '回答生成中にエラーが発生しました。'
     message.revealedLength = message.content.length
     message.sources = []
+    message.map = null
+    message.mapInteractive = false
+    message.clarificationExpected = false
+    message.clarificationActive = false
     delete message.doneReceived
     delete message.finalSources
+    delete message.finalMap
+    delete message.finalMapInteractive
+    delete message.finalClarification
   }
 }
 
@@ -132,8 +167,15 @@ function clampMessageReveal(message) {
 function finalizeAssistantMessage(message) {
   message.streaming = false
   message.sources = message.finalSources || []
+  message.map = message.finalMap || null
+  message.mapInteractive = Boolean(message.finalMapInteractive)
+  message.clarificationActive = Boolean(message.finalClarification)
+  message.clarificationExpected = Boolean(message.finalClarification)
   delete message.doneReceived
   delete message.finalSources
+  delete message.finalMap
+  delete message.finalMapInteractive
+  delete message.finalClarification
 }
 
 function messageHasRevealWork(message) {
@@ -230,7 +272,16 @@ export const useChatStore = defineStore('chat', {
     isSending: false,
     error: '',
     lastFailedMessage: '',
+    lastFailedRequest: null,
   }),
+  getters: {
+    isOriginSelectionPending: (state) => state.messages.some(
+      (message) => message.map?.mode === 'ask_origin' && message.mapInteractive,
+    ),
+    isClarificationPending: (state) => state.messages.some(
+      (message) => message.clarificationActive,
+    ),
+  },
   actions: {
     reset() {
       this.messages = []
@@ -239,12 +290,14 @@ export const useChatStore = defineStore('chat', {
       this.isSending = false
       this.error = ''
       this.lastFailedMessage = ''
+      this.lastFailedRequest = null
     },
     newChat() {
       this.messages = []
       this.threadId = null
       this.error = ''
       this.lastFailedMessage = ''
+      this.lastFailedRequest = null
     },
     hasRevealWork() {
       return this.messages.some((message) => messageHasRevealWork(message))
@@ -288,9 +341,15 @@ export const useChatStore = defineStore('chat', {
           pending: false,
           streaming: false,
           sources: message.sources || [],
+          map: message.map || null,
+          mapInteractive: false,
+          clarificationExpected: false,
+          clarificationActive: false,
         }),
       )
       this.error = ''
+      this.lastFailedMessage = ''
+      this.lastFailedRequest = null
     },
     async renameThread(threadId, title) {
       const updated = await renameThreadRequest(threadId, title)
@@ -306,13 +365,27 @@ export const useChatStore = defineStore('chat', {
         this.newChat()
       }
     },
-    async sendMessage(text) {
+    async sendMessage(text, options = {}) {
       const messageText = text.trim()
-      if (!messageText || this.isSending) {
+      const originNode = options.originNode || null
+      const originLabel = options.originLabel || ''
+      const clarificationCardClientId = options.clarificationCardClientId || null
+      if (
+        !messageText
+        || this.isSending
+        || (this.isOriginSelectionPending && !originNode)
+        || (this.isClarificationPending && !clarificationCardClientId)
+      ) {
         return
       }
 
-      const userMessage = createMessage('user', messageText)
+      this.deactivateMapCards()
+      const userMessage = createMessage('user', messageText, originNode ? {
+        map: {
+          mode: 'origin_select',
+          origin: { node: originNode, label: originLabel },
+        },
+      } : {})
       const assistantDraft = createMessage('assistant', '', {
         pending: true,
         statusText: '質問を分析しています…',
@@ -323,9 +396,10 @@ export const useChatStore = defineStore('chat', {
       this.isSending = true
       this.error = ''
       this.lastFailedMessage = ''
+      this.lastFailedRequest = null
 
       try {
-        await this.streamChatResponse(messageText, assistantMessage)
+        await this.streamChatResponse(messageText, assistantMessage, { originNode })
         if (this.threadId) {
           // Refresh the sidebar so new threads appear first and existing
           // threads bubble up (updated_at descending on the server).
@@ -345,16 +419,131 @@ export const useChatStore = defineStore('chat', {
         assistantMessage.content = this.error
         assistantMessage.revealedLength = assistantMessage.content.length
         assistantMessage.sources = []
+        assistantMessage.map = null
+        assistantMessage.mapInteractive = false
+        assistantMessage.clarificationExpected = false
+        assistantMessage.clarificationActive = false
         delete assistantMessage.doneReceived
         delete assistantMessage.finalSources
+        delete assistantMessage.finalMap
+        delete assistantMessage.finalMapInteractive
+        delete assistantMessage.finalClarification
         this.lastFailedMessage = messageText
+        this.lastFailedRequest = {
+          message: messageText,
+          originNode,
+          originLabel,
+          originCardClientId: options.originCardClientId || null,
+          clarificationCardClientId,
+        }
+        if (originNode && options.originCardClientId) {
+          const originCard = this.messages.find(
+            (message) => message.clientId === options.originCardClientId,
+          )
+          if (originCard?.map?.mode === 'ask_origin') {
+            originCard.mapInteractive = true
+          }
+        }
+        if (clarificationCardClientId) {
+          const clarificationCard = this.messages.find(
+            (message) => message.clientId === clarificationCardClientId,
+          )
+          if (clarificationCard) {
+            clarificationCard.clarificationExpected = true
+            clarificationCard.clarificationActive = true
+          }
+        }
       } finally {
         this.isSending = false
       }
     },
+    deactivateMapCards() {
+      for (const message of this.messages) {
+        if (message.map?.mode === 'ask_origin') {
+          message.mapInteractive = false
+        }
+        message.finalMapInteractive = false
+        message.clarificationExpected = false
+        message.clarificationActive = false
+        message.finalClarification = false
+      }
+    },
+    async selectMapOrigin(message, origin) {
+      if (
+        this.isSending
+        || !message?.mapInteractive
+        || message?.map?.mode !== 'ask_origin'
+        || !origin?.node
+        || !origin?.label
+      ) {
+        return
+      }
+      const question = String(message.map.question || '').trim()
+      if (!question) {
+        message.mapInteractive = false
+        return
+      }
+      message.mapInteractive = false
+      message.mapSelectedNode = origin.node
+      message.mapCancelled = false
+      await this.sendMessage(question, {
+        originNode: origin.node,
+        originLabel: origin.label,
+        originCardClientId: message.clientId,
+      })
+    },
+    async submitClarificationAnswer(message, text) {
+      const answer = String(text || '').trim()
+      if (
+        this.isSending
+        || !message?.clarificationActive
+        || !answer
+      ) {
+        return
+      }
+      message.clarificationActive = false
+      message.clarificationExpected = false
+      message.clarificationDraft = answer
+      await this.sendMessage(answer, {
+        clarificationCardClientId: message.clientId,
+      })
+    },
+    cancelClarification(message) {
+      if (
+        !message?.clarificationActive
+        || this.isSending
+      ) {
+        return
+      }
+      message.clarificationActive = false
+      message.clarificationExpected = false
+      message.clarificationDraft = ''
+      if (this.lastFailedRequest?.clarificationCardClientId === message.clientId) {
+        this.error = ''
+        this.lastFailedMessage = ''
+        this.lastFailedRequest = null
+      }
+    },
+    cancelMapOrigin(message) {
+      if (
+        !message?.mapInteractive
+        || message?.map?.mode !== 'ask_origin'
+        || this.isSending
+      ) {
+        return
+      }
+      message.mapInteractive = false
+      message.mapSelectedNode = null
+      message.mapCancelled = true
+      if (this.lastFailedRequest?.originCardClientId === message.clientId) {
+        this.error = ''
+        this.lastFailedMessage = ''
+        this.lastFailedRequest = null
+      }
+    },
     async retryLast() {
-      const text = this.lastFailedMessage
-      if (!text || this.isSending) {
+      const request = this.lastFailedRequest
+      if (!request?.message || this.isSending) {
         return
       }
       // Replace the failed exchange (its user + assistant pair are always the
@@ -364,20 +553,30 @@ export const useChatStore = defineStore('chat', {
       }
       this.error = ''
       this.lastFailedMessage = ''
-      await this.sendMessage(text)
+      this.lastFailedRequest = null
+      await this.sendMessage(request.message, {
+        originNode: request.originNode,
+        originLabel: request.originLabel,
+        originCardClientId: request.originCardClientId,
+        clarificationCardClientId: request.clarificationCardClientId,
+      })
     },
-    async streamChatResponse(text, assistantMessage) {
+    async streamChatResponse(text, assistantMessage, { originNode = null } = {}) {
       const token = getStoredToken()
+      const requestBody = {
+        message: text,
+        thread_id: this.threadId,
+      }
+      if (originNode) {
+        requestBody.origin_node = originNode
+      }
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          message: text,
-          thread_id: this.threadId,
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       if (!response.ok) {

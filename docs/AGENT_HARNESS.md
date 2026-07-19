@@ -1,4 +1,107 @@
-# エージェントハーネス仕様（v5 = v4 + 検索品質改善・モデル構成変更）
+# エージェントハーネス仕様 v6（ReAct 化・FR-34）
+
+- 版: v6.0（2026-07-18, Fable — **FR-34 ReAct 刷新**。制御フローは decide ループへ全面移行。
+  本章（V6）が現行実装の正。以下の v5 章は**基底**として保持し、V6 で明示的に置換した箇所を除き
+  有効（generate プロンプト・検索スコアリング・兄弟チャンク展開・trace 等は v6 でも現役）。
+  アーキテクチャ図は `docs/AGENT_ARCHITECTURE.md` v2.0、仕様・裁定は `docs/AGENT_REACT.md` v1.0）
+
+## V6-0. v5 からの構造変更（要約）
+
+| v5（固定フロー） | v6（ReAct） |
+|---|---|
+| analyze / evaluate ノード（専用プロンプト） | 単一の **decide** ノード（guided JSON・下記 V6-1） |
+| retrieve→search→evaluate→(web)→… の固定順序 | decide が毎ターン 6 アクションから選択 |
+| 周回カウンタ（`MAX_*_FOLLOWUPS` / `MAX_WEB_SEARCH_ROUNDS` 等） | **全廃**。停止はコンテキスト予算（V6-3） |
+| Web 第1R akita-pu.ac.jp 限定 | **ドメイン制限なし**（Tavily CB は存続） |
+| ask_origin ノード（analyze の route 意図で分岐） | **campus_navigator サブエージェント**内の terminal（決定的バリデータが裁く）。ワイヤ契約は不変 |
+| —（逆質問なし） | **ask_user** terminal ツール（clarification メタ＋履歴サニタイズ＋連続逆質問禁止） |
+| `chat()` 汎用 JSON 応答 | `VLLMClient.decide(messages, schema)`（response_format json_schema）＋寛容パース床 |
+
+- 廃止した実装: `_analyze` / `_evaluate` / `_route_after_analyze` / `_route_after_retrieve` /
+  `_route_after_evaluate`・周回カウンタ state・Qwen `enable_thinking` 分岐（遺物）。
+  よって基底章のうち **v3 §2（analyze）・§5（evaluate）・V4-2（include_domains）・V4-4（柔軟再試行
+  ループ）は v6 で失効**。それ以外の基底（generate プロンプト＝V5-1 系・V5-2 スコアリング・
+  V5-7 兄弟チャンク・V5-8/9 経路系プロンプト方針・V5-5 trace）は v6 でも有効。
+
+## V6-1. decide システムプロンプト（全文・実装 `graph.py: DECIDE_SYSTEM_PROMPT`）
+
+大学アイデンティティの明示は**必須**（PoC P3 で「APU」単独表記が立命館アジア太平洋大学と
+誤解された実測による。`AGENT_REACT.md` §0-2 #12。ブランド名「APU-Navi」は generate 側のみ・#15）。
+
+```
+あなたは秋田県立大学 本荘キャンパス（秋田県由利本荘市）のオープンキャンパス来場者案内 AI
+「キャンパスガイド」の探索判断（decide）コンポーネントです。来場者は主に高校生とその保護者です。
+質問とこれまでの観測を読み、次の action を必ず 1 つだけ選び、JSON のみを返してください。
+
+注意: 本学を「APU」と略さないこと。他大学（立命館アジア太平洋大学など）と混同しないこと。
+学外の一般情報（交通・宿泊・気象・比較情報など）は web_search で調べてよい。
+
+ツール:
+- retrieve {queries: string[1..3]}: 意味ベクトルで学内ナレッジを探す（言い換えに強い）
+- search {keywords: string[1..6]}: 部屋番号・研究室名・固有名詞を字句一致で探す
+- web_search {queries: string[1..3]}: ドメイン制限なしの Web 検索（学外・最新情報）
+- campus_navigator {request: string}: 学内の場所・経路の専門機構へ依頼（空間推論を自分でしない）
+- ask_user {question: string}: 回答が実質的に変わる場合だけ、来場者に短く聞き返す
+- finish {reason: string}: 根拠がそろったら探索を終えて回答生成へ進む
+
+方針:
+- ツール実行 0 回のまま finish しない。
+- 学内の場所・経路・「どこ」「行き方」は campus_navigator に任せる。
+- 推測で答えられる場合は推測と明示して答える方を優先し、ask_user を乱用しない。
+- 同一の action と action_input を繰り返さない。0 件なら言い換えるか別ツールに切り替える。
+- 予算注記が「まとめに入れ」の場合は新規探索を広げず finish を優先する。
+- thought は短い日本語 1〜2 文。
+```
+
+ランタイムで system 末尾に「現在選択可能な action: …」と予算注記（soft/hard 超過時）を注入。
+user メッセージは「質問／行動ログ（JSON）／観測（連番）／予算状態（JSON）」の 4 部構成。
+
+## V6-2. campus_navigator 内部 decide プロンプト（全文・実装 `navigator.py: NAVIGATOR_SYSTEM_PROMPT`）
+
+```
+あなたは秋田県立大学 本荘キャンパス（秋田県由利本荘市）の学内場所・経路を扱う campus_navigator です。
+本学を「APU」と略さず、他大学と混同しないでください。空間推論や道順の創作はせず、必ず決定的ツールを使います。
+JSON {thought, action, action_input} のみを返し、来場者向けの最終文章は書かないでください。
+
+内部ツール:
+- resolve_place {expression: string, role: "origin"|"destination"}: 名称を場所データで解決する
+- find_route {origin: string, destination: string}: 解決済み両端の決定的経路を求める
+- ask_origin {destination: string}: 目的地は解決済みだが出発地が不明な場合だけ現在地選択を提案する
+
+目的地が未解決なら ask_origin を使わず名称を変えて resolve_place してください。出発地が既知なら ask_origin を使わず find_route してください。thought は短い日本語1〜2文です。
+```
+
+- **fast path が先**（`find_locations_in_text` による決定的抽出＋意図判定。実 LLM E2E では
+  経路系 5 件全てが fast path で解決＝内部 decide 0 回）。内部 decide は上限 3 手。
+- ask_origin は**提案**であり、発動は決定的バリデータが裁く（目的地未解決→差し戻し・出発地既知→
+  差し戻し）。need_origin 成立時の SSE・map・sources・composer ロックは v5 の ask_origin ノードと
+  完全一致（実 LLM E2E 確認済み）。
+
+## V6-3. 定数（`AGENT_REACT.md` §7 の確定値・実装値）
+
+| 定数 | 値 | 意味 |
+|---|---|---|
+| `SOFT_CONTEXT_RATIO` / `HARD_CONTEXT_RATIO` | 0.70 / 0.85 | 実効窓（`VLLM_MAX_MODEL_LEN`、旧 `LLM_CONTEXT_WINDOW` フォールバック・既定 16384）に対する比。16k 時 11,468 / 13,926 トークン |
+| `OBSERVATION_TOKEN_LIMIT` | ~~120~~ → 500（2026-07-18 FR-37） | 観測 1 件の圧縮上限（タイトル＋断片 400 字/件）。緩和の経緯は `AGENT_REACT.md` §2-4 改訂。断片はヒット中心 ±200 字＋truncated/file_id 明示（FR-38 §2-5） |
+| get_docs 観測本文上限（FR-38・定数名は実装裁量） | 1,500 tok | get_docs 観測の本文部分の上限。file_ids は 1..2 件/アクション（`AGENT_REACT.md` §2-5） |
+| `NAVIGATOR_MAX_STEPS` | 3 | navigator 内部 decide の上限手数 |
+| decide 温度 / max_tokens | 0.2 / 300 | `VLLMClient.decide()` 固定（実測 completion 43〜80 tok） |
+| `recursion_limit` | 50 | LangGraph 安全弁（FR-33 踏襲）。FR-37 で到達時フォールバック追加（値は不変・テスト用にインスタンス属性化） |
+| `ASK_USER_TOKEN_CHARS` | 8 | ask_user の token 分割幅（FR-25 文字送り互換） |
+| `MAX_WEB_RESULTS_PER_ACTION` / `MAX_WEB_PAGES_PER_ACTION` | 5 / 3 | web_search 1 アクションあたりの取り込み上限 |
+
+## V6-4. 検収記録（2026-07-18, Fable）
+
+- pytest 133 / Vitest 89 / build green（Fable 再実行で確認）。
+- 実 LLM E2E（31B PP=2・6 シナリオ＋origin 再送の 7 リクエスト）: **全合格**。SSE 順序契約 7/7、
+  全件 60 秒以内（2.1〜44.4s）。ReAct 挙動: E6「学食」で retrieve 空振り→クエリ変更→字句→Web→
+  自発的 campus_navigator の 5 種ツール連鎖を確認。Web クエリの大学誤解（APU 混同）ゼロ。
+  trace: decide 19 件（全件予算付き）・navigator 5 件（全件 fast path）。
+- 実装: Codex/GPT-5.6Sol xhigh（コミット 1a0caaf）。
+
+---
+
+# （基底その0）エージェントハーネス仕様（v5 = v4 + 検索品質改善・モデル構成変更）
 
 - 版: v5.1（2026-07-13, Fable 改訂 — SPEC §2 の口調変更に伴い、①generate 用システムプロンプトを「学生ガイド」ペルソナ＋時間コンテキスト注入（FR-8、ARCHITECTURE.md §7）に更新、②ステータス実況の文言をガイド調に改稿。**step enum・SSE スキーマ・ハーネス制御フローは不変**。本文中の旧文言例は現行実装の文言に置換済み）
 - v5.0（2026-07-12, Fable 起草）。**v4（= v3 + §V4）を基底とし、§V5 のデルタを適用する。矛盾時は §V5 > §V4 > v3 の順で優先。**
@@ -144,6 +247,28 @@
 受け入れ: EVAL_QUESTIONS.md §H（経路案内）の全問で、該当ナレッジが検索で当たり、
 棟・ゾーン・階・部屋番号まで含む回答が返ること。
 
+## V5-9. 経路マップカード判定（2026-07-17 追加。FR-26 / docs/MAP_CARD.md）
+
+グラフのノード・エッジ・ルーティングは変更せず、analyze の構造化出力と `stream()` のターン終端分岐に
+次を追加する。経路・階・徒歩分数は LLM に生成させず、`ROUTE_GUIDANCE.md` §7.2 の構造化データから
+純 Python の決定的計算で作る。
+
+1. **analyze 出力**: 従来の `intent` / `retrieval_queries` / `keywords` に、
+   `route: {type: route|place|null, origin: string|null, destination: string|null}` を追加する。
+   `origin` は質問文または直近4ターン履歴で明示された場合だけユーザー表現のまま返し、推測しない。
+2. **resolver**: analyze の地点表現は NFKC + casefold 正規化した辞書引きだけで、9ノードと部屋・階へ
+   解決する。部屋番号から棟・階を推測しない。
+3. **出発地不明のターン終端**: `type=route`、目的地解決済み、出発地未解決のときは retrieve / search /
+   evaluate / Web Search / LLM generate を実行しない。`status(generate, 現在地を確認しています…)` → 定型 `token` →
+   `map(mode=ask_origin)` → `done` の順で終了し、通常どおり履歴保存する。
+4. **カード付与**: 両端解決済みの route と目的地解決済みの place は従来フローを完走し、全 token の後・
+   `done` 直前に `map` を最大1回送る。解決不能・通常質問・学外アクセスは `map` を送らず、従来イベント列を維持する。
+5. **履歴由来の出発地**: 今回の質問文に出発地表現がなく直近履歴から継承した場合、generate にその事実を
+   明示し、回答冒頭で出発地を示すようルール8へ追記する。
+
+受け入れ: `EVAL_QUESTIONS.md` §I と `MAP_CARD.md` §9 の全項目。特に D404 の階を補完しないこと、
+総合受付→学部棟Ⅱが E5+E6c の前面通路系となること、通常質問・学外アクセスに `map` が混入しないこと。
+
 ## V5-6. テスト・受け入れ基準（v4 §V4-5 に追加）
 
 1. ユニット: リモート埋め込みバックエンド（プレフィックス分岐・フォールバック・バッチ）／
@@ -232,6 +357,8 @@
 - アームが例外で落ちた場合も**残りのアームは必ず実行**して generate に進む（v3 §5 踏襲・スキップ理由はログ）。
 - 制御は引き続き `stream()` 内の逐次制御が正（Q-006 裁定）。LangGraph のノード定義は
   stream() と矛盾しない範囲で現状維持でよい（v4 で書き換え必須なのは stream() 側のみ）。
+  **（2026-07-18 追記: FR-33 で LangGraph 実行一本化済み — 本記述は v4 当時の経緯として保持。
+  現行の制御は `docs/LANGGRAPH_MIGRATION.md` / `docs/AGENT_ARCHITECTURE.md` §2 が正）**
 
 ### V4-5. テスト・受け入れ基準（v3 §9 に追加）
 
@@ -291,6 +418,8 @@ analyze（LLM: 意図・キーワード・検索クエリ）
 
 - 制御は v2 と同じく**明示的な逐次制御**（LangGraph のノード定義は維持してよいが、
   `stream()` 内のループが正。Q-006 の裁定を継承）。
+  **（2026-07-18 追記: FR-33 で LangGraph 実行一本化済み — 本記述は v5 当時の経緯として保持。
+  現行の制御は `docs/LANGGRAPH_MIGRATION.md` / `docs/AGENT_ARCHITECTURE.md` §2 が正）**
 - ローカル 2 アーム（retrieve + search）を先に尽くし、それでも不足なら Web へ。
   **ローカル追加ラウンドは最大 1 回**（evaluate が新キーワード/新クエリを出した場合のみ）。
 - **Web ラウンドは最大 3**（v2 は 2）。3 周目は「固有名詞が未解決」の場合のみ発火（§4.2）。

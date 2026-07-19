@@ -137,3 +137,28 @@ def test_initialize_creates_fresh_database_without_role(tmp_path: Path) -> None:
 
     with database.connect() as connection:
         assert _user_columns(connection) == ["id", "name", "created_at"]
+        message_columns = [row["name"] for row in connection.execute("PRAGMA table_info(messages)")]
+        assert "map_json" in message_columns
+        assert "metadata_json" in message_columns
+
+
+def test_initialize_adds_message_metadata_columns_to_existing_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy-map.sqlite3"
+    _create_legacy_database(db_path)
+
+    database = Database(db_path)
+
+    with database.connect() as connection:
+        message_columns = [row["name"] for row in connection.execute("PRAGMA table_info(messages)")]
+        assert "map_json" in message_columns
+        assert "metadata_json" in message_columns
+        message = connection.execute(
+            "SELECT id, content, map_json, metadata_json FROM messages WHERE id = ?",
+            ("message-1",),
+        ).fetchone()
+        assert dict(message) == {
+            "id": "message-1",
+            "content": "食堂はどこですか？",
+            "map_json": None,
+            "metadata_json": None,
+        }

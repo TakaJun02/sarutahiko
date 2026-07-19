@@ -48,12 +48,28 @@ class Database:
                     role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
                     content TEXT NOT NULL,
                     sources_json TEXT,
+                    map_json TEXT,
+                    metadata_json TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
                 );
                 """
             )
+        self._add_messages_map_column()
+        self._add_messages_metadata_column()
         self._drop_legacy_users_role_column()
+
+    def _add_messages_map_column(self) -> None:
+        with self.connect() as connection:
+            columns = connection.execute("PRAGMA table_info(messages)").fetchall()
+            if not any(column["name"] == "map_json" for column in columns):
+                connection.execute("ALTER TABLE messages ADD COLUMN map_json TEXT")
+
+    def _add_messages_metadata_column(self) -> None:
+        with self.connect() as connection:
+            columns = connection.execute("PRAGMA table_info(messages)").fetchall()
+            if not any(column["name"] == "metadata_json" for column in columns):
+                connection.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT")
 
     def _drop_legacy_users_role_column(self) -> None:
         # FR-6 (2026-07-13): the visitor attribute was removed. Legacy databases
