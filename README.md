@@ -6,8 +6,8 @@
 
 **秋田県立大学 本荘キャンパスを案内する、フルローカル LLM の AI エージェント**
 
-オープンキャンパス 2026 来場者（高校生・保護者）の「知りたい」に、
-学内ナレッジ RAG × Web 検索 × 経路案内で答えるキャンパスガイド。
+検索が「当たる」ことを祈らない —
+**欲しい情報に「届く」まで、エージェント自身が探し方を変えながら到達する**キャンパスガイド。
 
 [![Vue 3](https://img.shields.io/badge/Vue-3.5-42b883?logo=vuedotjs&logoColor=white)](frontend/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Python%203.11-009688?logo=fastapi&logoColor=white)](backend/)
@@ -27,78 +27,71 @@
 
 **APU-Navi** は、秋田県立大学 本荘キャンパスの学部・学科、研究室、施設、アクセス、
 オープンキャンパス当日のイベントについて自然言語で質問できる AI エージェントです。
+オープンキャンパス 2026 来場者（高校生・保護者）からの質問対応を主戦場にしています。
 
 クラウド LLM API は一切使いません。**生成も埋め込みも研究室の GPU 3 台で完結**します —
 Gemma 4 31B を 2 筐体パイプライン並列（PP=2）でサービングし、
 学内ナレッジ 130 文書・784+ チャンクを Qdrant でベクトル検索、
 足りない情報だけ Tavily で Web 検索します。
 
-## 🚀 主な機能
+そしてこのプロダクトの核心は、モデルでもインフラでもなく、**次章の ReAct エージェントの設計**です。
 
-- 🧠 **Agentic RAG（ReAct ループ）** — LangGraph の decide ループが `retrieve` / `search` / `get_docs` / `web_search` / `campus_navigator` / `ask_user` / `finish` を毎ターン自律選択。停止条件は周回数ではなくコンテキスト予算
-- 💭 **思考のライブ実況** — 「学内ナレッジを検索しています…」だけでなく、エージェントが**いま生成中の思考そのもの**を SSE でストリーミング表示（guided JSON のストリーミングデコード）
-- 🗺️ **経路案内マップカード** — 「受付から学部棟Ⅰまで行きたい」で自作ベクターマップに経路を描画。出発地不明ならマップタップで現在地を申告、全画面ビューア（pinch / ダブルタップ）付き
-- ✍️ **なめらか文字送り** — トークン到着をクライアント側でペーシングし、ChatGPT/Gemini 級の読み心地に
-- ❓ **確認質問フォーム** — エージェントが逆質問（`ask_user`）したターンは専用回答フォーム＋composer ロックの elicitation UI に切り替え。回答は human-in-the-loop（LangGraph interrupt/resume）で**同一実行に観測として戻り**、集めた evidence を保ったまま探索を継続
-- 🌌 **Gemini 実スクショ準拠のアンビエント UI** — ログイン=白×パステルブルーの霧、チャット=黒×深インディゴのグロー。待機中は「雲が流れる」思考中モーション
-- 📱 **PWA** — ホーム画面に追加してアプリとして起動。スマホ縦画面の利用が主戦場
-- 🧵 **会話スレッド永続化** — ニックネーム登録だけの軽量ログインで、履歴・名前変更・削除に対応（SQLite）
-- 🛡️ **フェイルセーフ** — Tavily 枠超過時はサーキットブレーカーが作動し、学内ナレッジのみで回答継続
-- 🥚 **隠し機能** — 合言葉を知っている人だけが出会える"なにか"がいます
+## 🧠 このプロダクトの核 — 「欲しい情報に届く」ための 3 つの設計
 
-## 🏗️ アーキテクチャ
+RAG プロダクトの回答品質は、生成よりも先に**検索の到達性**と**コンテキストの使い方**で決まります。
+APU-Navi は固定の検索パイプラインを持たず、LangGraph 上の **decide ノード（LLM・guided JSON）が
+毎ターン「次に何をするか」を選ぶ** ReAct ループとして探索します。
+その質を決めたのが、次の 3 つの設計判断です。
 
-```mermaid
-flowchart LR
-    subgraph client["ブラウザ（Vue 3 SPA / PWA）"]
-        UI["ChatView / MapCard<br/>SSE 受信・なめらか文字送り"]
-    end
-    subgraph ibera["ibera（RTX 3090 Ti 24GB）"]
-        BE["FastAPI backend<br/>LangGraph ReAct ハーネス"]
-        VLLM["vLLM 生成<br/>Gemma 4 31B w4a16<br/>PP=2 前半層（rank0）"]
-        QD[("Qdrant<br/>campus_knowledge<br/>784+ チャンク")]
-        DB[("SQLite<br/>users / threads / messages")]
-    end
-    subgraph nubia["nubia（RTX 3090）"]
-        PP2["vLLM PP=2 後半層（rank1）<br/>Ray / NCCL"]
-    end
-    subgraph gouin["gouin（第2GPUサーバー）"]
-        EMB["vLLM 埋め込み<br/>Qwen3-Embedding-8B"]
-    end
-    TAVILY["Tavily Web Search<br/>（サーキットブレーカー付き）"]
+### ① 意味検索と文字列検索の両輪を持たせる
 
-    UI -- "POST /api/chat（SSE）" --> BE
-    BE -- "guided JSON / streaming" --> VLLM
-    VLLM -.-> PP2
-    BE -- "/v1/embeddings" --> EMB
-    BE -- "ベクトル検索" --> QD
-    BE -- "httpx" --> TAVILY
-    BE --> DB
-```
+- **課題**: ベクトル検索だけでは「D404」「〇〇研究室」「バス 何時」のような
+  **固有表現・完全一致系の質問に弱い**。埋め込み空間では部屋番号や教員名は「近く」ならない。
+- **打ち手**: 意味ベクトル検索 `retrieve` に加えて、**決定的な字句グレップ `search`**
+  （表記ゆれバリアント展開付き・LLM 不使用）を並置し、質問の性質に応じて decide が使い分ける。
+- **効果**: 「雰囲気で聞かれた質問」は retrieve が、「名指しの質問」は search が拾う。
+  片方が空振りしても decide が観測からもう片方へ切り替えるため、**欲しい情報へ確実に到達できる**。
 
-1 つの質問に対しエージェントは `status`（思考実況）→ `token`（回答本文）→ `map`（経路カード）→
-`done`（出典・確認質問フラグ）の SSE イベントを流します。スキーマの正は
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3、ワークフロー全体図は
-[`docs/AGENT_ARCHITECTURE.md`](docs/AGENT_ARCHITECTURE.md)。
+### ② 断片 → 全文の 2 段取得（最も効いた工夫）
 
-### 🧭 AI エージェント — ReAct ワークフローとツール
+- **課題**: RAG の宿命のジレンマ。検索ヒットをそのまま大量に積むと**無駄な情報でコンテキストが
+  圧迫**され、チャンクを絞ると**情報を取りこぼす**。どちらに倒しても回答品質が落ちる。
+- **打ち手**: 検索ツールの観測は 1 件 **500 トークン上限の抜粋**に圧縮して返し、
+  切り詰めたことと出典ファイル（`truncated` / `file_id`）を明示する。そのうえで
+  「この文書は続きが要る」とエージェント自身が判断したものだけ、**`get_docs` で元ドキュメントの
+  全文**を取得する。
+- **効果**: **「情報の取りこぼし」と「コンテキストの圧迫」の回避を同時に成立**させた。
+  どの文書を深掘りするかの判断を固定ルールではなくエージェントに委ねたことが、
+  このプロダクトで**最も回答品質に効いた**設計判断。
 
-固定のパイプラインは持ちません。LangGraph 上の **decide ノード（LLM・guided JSON）が
-毎ターン「次に何をするか」を選択**し、ツールの観測を受けてまた考える ReAct ループです。
-探索の停止は周回数のカウンタではなく**コンテキスト予算**（実トークン計測で 70% soft / 85% hard）で決めます。
+### ③ 経路案内はサブエージェントに切り出す
+
+- **課題**: メインエージェントにツールを増やすほど、decide の**ツール選択ミス**が増える。
+  経路案内（場所解決・経路探索・出発地確認）はそれ自体が一つのドメインで、ツール数が多い。
+- **打ち手**: 経路系の判断をメインのメニューに並べず、**`campus_navigator` サブエージェント 1 つに
+  集約**。各観測に LLM を挟んで整形する案も検討したが、レスポンス時間が伸びるため不採用 —
+  **時間コストゼロの「構造による解決」**を選んだ。サブエージェント側もまず fast path
+  （決定的・LLM 0 回）で解決を試み、失敗時だけ内部 decide に落ちる 2 段構え。
+- **効果**: メインの選択肢は 7 つに保たれ選択精度が安定。経路質問の大半は LLM 追加呼び出し
+  なしで返り、**速度と精度を両立**した。
+
+### 3 つの工夫が組み込まれた ReAct ループ全体
+
+図中の ①②③ が上の設計に対応します。探索の停止は周回数ではなく
+**コンテキスト予算**（実トークン計測で 70% soft / 85% hard）で決めます。
 
 ```mermaid
 flowchart TD
     Q(["ユーザー質問"]) --> DE
     DE["<b>decide</b>（LLM・guided JSON）<br/>{thought, action, action_input}<br/>thought は SSE でライブ実況"]
 
-    DE -->|retrieve| RT["🔎 <b>retrieve</b><br/>意味ベクトル検索<br/>（Qwen3-Embedding + Qdrant）"]
-    DE -->|search| SE["🔤 <b>search</b><br/>決定的字句グレップ<br/>（表記ゆれバリアント展開）"]
-    DE -->|get_docs| GD["📄 <b>get_docs</b><br/>断片の元ドキュメント<br/>全文取得（file_id 単位）"]
+    DE -->|retrieve| RT["🔎 <b>retrieve</b> ①<br/>意味ベクトル検索<br/>（Qwen3-Embedding + Qdrant）"]
+    DE -->|search| SE["🔤 <b>search</b> ①<br/>決定的字句グレップ<br/>（表記ゆれバリアント展開）"]
+    DE -->|get_docs| GD["📄 <b>get_docs</b> ②<br/>断片の元ドキュメント<br/>全文取得（file_id 単位）"]
     DE -->|web_search| WS["🌐 <b>web_search</b><br/>Tavily<br/>（サーキットブレーカー付き）"]
-    DE -->|campus_navigator| NV["🗺️ <b>campus_navigator</b><br/>経路サブエージェント<br/>fast path（LLM 0回）→ 内部 decide ≤3手"]
+    DE -->|campus_navigator| NV["🗺️ <b>campus_navigator</b> ③<br/>経路サブエージェント<br/>fast path（LLM 0回）→ 内部 decide ≤3手"]
 
-    RT -->|"観測（500 tok 上限・truncated / file_id 明示）"| DE
+    RT -->|"観測（500 tok 上限・truncated / file_id 明示）②"| DE
     SE -->|観測| DE
     GD -->|"観測（本文 ~1.5k tok）"| DE
     WS -->|観測| DE
@@ -113,30 +106,15 @@ flowchart TD
 
 | ツール | 実体 | 役割 |
 |---|---|---|
-| `retrieve` | 埋め込み vLLM + Qdrant | 意味ベクトル検索。「雰囲気で聞かれた質問」を拾う |
-| `search` | Qdrant スキャン（LLM 不使用） | 決定的な文字列検索。部屋番号・固有名詞に強い |
-| `get_docs` | Qdrant（LLM 不使用） | 検索でヒットした断片の**元ドキュメント全文**を取得 |
+| `retrieve` ① | 埋め込み vLLM + Qdrant | 意味ベクトル検索。「雰囲気で聞かれた質問」を拾う |
+| `search` ① | Qdrant スキャン（LLM 不使用） | 決定的な文字列検索。部屋番号・固有名詞に強い |
+| `get_docs` ② | Qdrant（LLM 不使用） | 検索でヒットした断片の**元ドキュメント全文**を取得 |
 | `web_search` | Tavily API | 学内ナレッジにない情報だけ Web で補完 |
-| `campus_navigator` | サブエージェント | 学内の場所解決・経路探索（Dijkstra）・マップカード構築 |
+| `campus_navigator` ③ | サブエージェント | 学内の場所解決・経路探索（Dijkstra）・マップカード構築 |
 | `ask_user` | LangGraph interrupt/resume | 質問が曖昧なとき来場者に聞き返す human-in-the-loop。実行を checkpoint で中断し、回答を**観測として decide へ持ち帰って**同じ探索を継続 |
 | `finish` → generate | 生成 vLLM | 集めた evidence から回答を生成 |
 
-**設計の工夫 3 点:**
-
-1. **意味検索と文字列検索の両輪** — ベクトル検索（`retrieve`）だけでは
-   「D404」「〇〇研究室」のような固有表現の完全一致に弱い。決定的な字句グレップ
-   （`search`・表記ゆれバリアント展開付き）を併設したことで、欲しい情報へ確実に到達できる。
-2. **断片 → 全文の 2 段取得（最も効いた工夫）** — 検索ツールの観測は 1 件 500 トークン上限の
-   抜粋に圧縮して返し（`truncated` と `file_id` を明示）、エージェントが必要と判断した文書だけ
-   `get_docs` で全文を取る。**「情報の取りこぼし」と「無駄な情報によるコンテキスト圧迫」の
-   回避を両立**する。
-3. **経路案内のサブエージェント切り出し** — 場所解決・経路探索・出発地確認といった経路系の
-   判断をメインの decide メニューに並べず、`campus_navigator` 1 つに集約。**ツールが増えすぎて
-   選択をミスる問題を構造で回避**した。各観測に LLM を挟んで整形する案も検討したが、
-   レスポンス時間が伸びるため不採用。サブエージェント側も fast path（決定的・LLM 0 回）を
-   先に試す設計で、速度と精度を両立している。
-
-### 🗺️ campus_navigator サブエージェントの内部アーキテクチャ
+### ③ の中身 — campus_navigator サブエージェントの内部アーキテクチャ
 
 `campus_navigator` 自体も 1 体の ReAct エージェントです。ただし**まず決定的な fast path
 （LLM 0 回）で解決を試み、失敗したときだけ内部 decide ループに落ちる** 2 段構えで、
@@ -181,7 +159,56 @@ flowchart TD
 モデルの従順さに依存しません。
 
 ハーネスの仕様詳細は [`docs/AGENT_REACT.md`](docs/AGENT_REACT.md)、
-全体図は [`docs/AGENT_ARCHITECTURE.md`](docs/AGENT_ARCHITECTURE.md)。
+全体図は [`docs/AGENT_ARCHITECTURE.md`](docs/AGENT_ARCHITECTURE.md)、
+ask_user の human-in-the-loop 化は [`docs/AGENT_HITL.md`](docs/AGENT_HITL.md)。
+
+## 🚀 主な機能
+
+- 🧠 **Agentic RAG（ReAct ループ）** — 上記 3 つの設計を組み込んだ decide ループが
+  `retrieve` / `search` / `get_docs` / `web_search` / `campus_navigator` / `ask_user` / `finish` を毎ターン自律選択
+- 💭 **思考のライブ実況** — 「学内ナレッジを検索しています…」だけでなく、エージェントが**いま生成中の思考そのもの**を SSE でストリーミング表示（guided JSON のストリーミングデコード）
+- 🗺️ **経路案内マップカード** — 「受付から学部棟Ⅰまで行きたい」で自作ベクターマップに経路を描画。出発地不明ならマップタップで現在地を申告、全画面ビューア（pinch / ダブルタップ）付き
+- ✍️ **なめらか文字送り** — トークン到着をクライアント側でペーシングし、ChatGPT/Gemini 級の読み心地に
+- ❓ **確認質問フォーム** — エージェントが逆質問（`ask_user`）したターンは専用回答フォーム＋composer ロックの elicitation UI に切り替え。回答は human-in-the-loop（LangGraph interrupt/resume）で**同一実行に観測として戻り**、集めた evidence を保ったまま探索を継続
+- 🌌 **Gemini 実スクショ準拠のアンビエント UI** — ログイン=白×パステルブルーの霧、チャット=黒×深インディゴのグロー。待機中は「雲が流れる」思考中モーション
+- 📱 **PWA** — ホーム画面に追加してアプリとして起動。スマホ縦画面の利用が主戦場
+- 🧵 **会話スレッド永続化** — ニックネーム登録だけの軽量ログインで、履歴・名前変更・削除に対応（SQLite）
+- 🛡️ **フェイルセーフ** — Tavily 枠超過時はサーキットブレーカーが作動し、学内ナレッジのみで回答継続
+- 🥚 **隠し機能** — 合言葉を知っている人だけが出会える"なにか"がいます
+
+## 🏗️ システム構成
+
+```mermaid
+flowchart LR
+    subgraph client["ブラウザ（Vue 3 SPA / PWA）"]
+        UI["ChatView / MapCard<br/>SSE 受信・なめらか文字送り"]
+    end
+    subgraph ibera["ibera（RTX 3090 Ti 24GB）"]
+        BE["FastAPI backend<br/>LangGraph ReAct ハーネス"]
+        VLLM["vLLM 生成<br/>Gemma 4 31B w4a16<br/>PP=2 前半層（rank0）"]
+        QD[("Qdrant<br/>campus_knowledge<br/>784+ チャンク")]
+        DB[("SQLite<br/>users / threads / messages")]
+    end
+    subgraph nubia["nubia（RTX 3090）"]
+        PP2["vLLM PP=2 後半層（rank1）<br/>Ray / NCCL"]
+    end
+    subgraph gouin["gouin（第2GPUサーバー）"]
+        EMB["vLLM 埋め込み<br/>Qwen3-Embedding-8B"]
+    end
+    TAVILY["Tavily Web Search<br/>（サーキットブレーカー付き）"]
+
+    UI -- "POST /api/chat（SSE）" --> BE
+    BE -- "guided JSON / streaming" --> VLLM
+    VLLM -.-> PP2
+    BE -- "/v1/embeddings" --> EMB
+    BE -- "ベクトル検索" --> QD
+    BE -- "httpx" --> TAVILY
+    BE --> DB
+```
+
+1 つの質問に対しエージェントは `status`（思考実況）→ `token`（回答本文）→ `map`（経路カード）→
+`done`（出典・確認質問フラグ）の SSE イベントを流します。スキーマの正は
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3。
 
 ### 技術スタック
 
@@ -189,7 +216,7 @@ flowchart TD
 |---|---|
 | フロントエンド | Vue 3 + Vite + Tailwind CSS + Pinia + marked |
 | バックエンド | Python 3.11 / FastAPI / SSE |
-| エージェント制御 | LangGraph 1.2.9（StateGraph 定義＝実行・ReAct ハーネス v6） |
+| エージェント制御 | LangGraph 1.2.9（StateGraph 定義＝実行・ReAct ハーネス v6・interrupt/resume HITL） |
 | 生成 LLM | `google/gemma-4-31B-it-qat-w4a16-ct` — vLLM PP=2（ibera + nubia、16k 窓）。切り戻し先: 12B 単機 |
 | 埋め込み | `Qwen/Qwen3-Embedding-8B` — 別 GPU サーバーで vLLM serve（OpenAI 互換 `/v1/embeddings`） |
 | ベクトル DB | Qdrant |
@@ -279,10 +306,11 @@ oc_2026/
 
 | ドキュメント | 内容 |
 |---|---|
-| [`docs/SPEC.md`](docs/SPEC.md) | システム仕様書（FR-1〜FR-41 の全機能要件と改訂履歴） |
+| [`docs/SPEC.md`](docs/SPEC.md) | システム仕様書（FR-1〜FR-42 の全機能要件と改訂履歴） |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 技術選定・API / SSE イベントスキーマ・本番公開構成 |
 | [`docs/AGENT_ARCHITECTURE.md`](docs/AGENT_ARCHITECTURE.md) | エージェント全体のワークフロー図（mermaid） |
 | [`docs/AGENT_REACT.md`](docs/AGENT_REACT.md) | ReAct ハーネス v6 の仕様（decide ループ・ツール契約） |
+| [`docs/AGENT_HITL.md`](docs/AGENT_HITL.md) | ask_user の human-in-the-loop 化（interrupt/resume） |
 | [`docs/PP2_MULTINODE_GUIDE.md`](docs/PP2_MULTINODE_GUIDE.md) | 31B 2 筐体パイプライン並列の原理・構築・切り戻し runbook |
 | [`docs/MAP_CARD.md`](docs/MAP_CARD.md) | 経路案内マップカード（route / place / ask_origin） |
 | [`docs/UI_LOADING_ANIMATION.md`](docs/UI_LOADING_ANIMATION.md) | ローディング演出 Ver1.0 → Ver5.0 |
