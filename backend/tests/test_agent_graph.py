@@ -11,6 +11,7 @@ from openai import BadRequestError
 
 from app.agent.campus_map import resolve_location
 from app.agent.graph import (
+    ASK_USER_TOKEN_CHARS,
     DECIDE_SYSTEM_PROMPT,
     DUPLICATE_EVIDENCE_NOTE,
     FALLBACK_NOT_FOUND_RESPONSE,
@@ -237,14 +238,21 @@ _FIXED_TIME_CONTEXT = (
 )
 
 
-async def _collect(agent: RealCampusAgent, question: str, history: list[dict] | None = None):
+async def _collect(
+    agent: RealCampusAgent,
+    question: str,
+    history: list[dict] | None = None,
+    *,
+    thread_id: str = "thread-1",
+    message_id: str = "message-1",
+):
     return [
         event
         async for event in agent.stream(
             question,
             _user(),
-            "thread-1",
-            "message-1",
+            thread_id,
+            message_id,
             history=history,
         )
     ]
@@ -508,7 +516,7 @@ async def test_compiled_graph_matches_react_runtime() -> None:
     assert ("search", "decide") in edges
     assert ("get_docs", "decide") in edges
     assert ("web_search", "decide") in edges
-    assert ("ask_user", "__end__") in edges
+    assert ("ask_user", "decide") in edges
     assert ("respond_need_origin", "__end__") in edges
     assert ("generate", "__end__") in edges
 
@@ -1516,7 +1524,7 @@ async def test_navigator_streams_partial_thoughts_through_extended_callback() ->
     assert statuses[0] == ("キャンパスマップで候補を確認しています…", False)
 
 
-async def test_ask_user_is_terminal_and_records_clarification_metadata() -> None:
+async def test_ask_user_interrupt_streams_clarification_and_registers_pending() -> None:
     llm = FakeLLMClient(
         completions=[
             _decision(
@@ -1544,12 +1552,169 @@ async def test_ask_user_is_terminal_and_records_clarification_metadata() -> None
     done_index = next(index for index, (event, _) in enumerate(events) if event == "done")
     assert clarify_index < token_index < done_index
     assert events[clarify_index][1]["text"] == "案内に必要なことを少しだけ確認します。"
-    assert "".join(data["text"] for event, data in events if event == "token") == (
+    token_parts = [data["text"] for event, data in events if event == "token"]
+    assert "".join(token_parts) == (
         "参加したい学科は決まっていますか？"
     )
+    assert all(len(part) <= ASK_USER_TOKEN_CHARS for part in token_parts)
     assert events[-1][1]["sources"] == []
     assert events[-1][1]["kind"] == "clarification"
     assert agent.consume_message_metadata("message-1") == {"kind": "clarification"}
+    pending = agent._pending_clarifications["thread-1"]
+    assert pending.question == "参加したい学科は決まっていますか？"
+    assert pending.checkpoint_thread_id == "message-1"
+    assert pending.checkpoint_thread_id != "thread-1"
+    assert agent._checkpoint_exists(pending.config) is True
+
+
+async def test_resume_continues_same_run_with_answer_observation_and_evidence() -> None:
+    first_chunk = _chunk(
+        id="before-clarification",
+        file_id="event-general",
+        chunk_index=0,
+        title="学科別イベント概要",
+        text="オープンキャンパスの学科別イベント概要です。",
+        source_urls=["https://example.test/general"],
+        score=0.91,
+    )
+    search_chunk = _chunk(
+        id="after-clarification",
+        file_id="event-joho",
+        chunk_index=0,
+        title="情報工学科 出展",
+        text="情報工学科ではネットワークやAIに関する出展があります。",
+        source_urls=["https://example.test/joho"],
+        grep_hit=True,
+        grep_keywords=("情報工学科",),
+        score=1001.0,
+    )
+    lexical = FakeLexicalSearch(
+        LexicalSearchOutcome(
+            hits=[
+                SectionHit(
+                    chunk=search_chunk,
+                    distinct_keyword_hits=1,
+                    title_heading_keyword_hit=True,
+                    total_hits=1,
+                    body_length=len(search_chunk.text),
+                )
+            ],
+            searched_keywords=["情報工学科"],
+            variant_keywords=[],
+            variants_attempted=False,
+        )
+    )
+    llm = FakeLLMClient(
+        completions=[
+            _decision("retrieve", {"queries": ["おすすめ 学科別イベント"]}),
+            _decision("ask_user", {"question": "興味のある学科を教えてください。"}),
+            _decision("search", {"keywords": ["情報工学科"]}),
+            _decision("finish", {"reason": "学科が分かり根拠がそろった"}),
+        ],
+        tokens=["最終回答"],
+    )
+    agent = _agent(
+        llm=llm,
+        store=FakeKnowledgeStore([first_chunk]),
+        lexical=lexical,
+    )
+
+    first_events = await _collect(agent, "おすすめの出展は？", message_id="message-ask")
+    assert first_events[-1][1]["kind"] == "clarification"
+    assert agent._pending_clarifications["thread-1"].checkpoint_thread_id == "message-ask"
+
+    second_events = await _collect(
+        agent,
+        "情報工学科です",
+        message_id="message-answer",
+    )
+
+    assert second_events[-1][0] == "done"
+    assert second_events[-1][1] == {
+        "thread_id": "thread-1",
+        "message_id": "message-answer",
+        "sources": [
+            {
+                "title": "情報工学科 出展",
+                "url": "https://example.test/joho",
+                "type": "knowledge",
+            },
+            {
+                "title": "学科別イベント概要",
+                "url": "https://example.test/general",
+                "type": "knowledge",
+            },
+        ],
+        "kind": None,
+    }
+    assert "clarify" not in [
+        data["step"] for event, data in second_events if event == "status"
+    ]
+    resume_decide = llm.decide_calls[2]
+    resume_prompt = resume_decide["messages"][-1]["content"]
+    assert "来場者へ確認質問を行い、回答を得た。" in resume_prompt
+    assert "回答: 情報工学科です" in resume_prompt
+    assert "ask_user" not in resume_decide["schema"]["properties"]["action"]["enum"]
+    assert lexical.calls == [["情報工学科"]]
+    generation_prompt = llm.stream_calls[0]["messages"][-1]["content"]
+    assert "学科別イベント概要" in generation_prompt
+    assert "情報工学科 出展" in generation_prompt
+    assert "回答: 情報工学科です" in generation_prompt
+    assert agent._pending_clarifications == {}
+    assert agent._checkpoint_exists({"configurable": {"thread_id": "message-ask"}}) is False
+
+
+async def test_hitl_degrades_to_fresh_run_when_checkpoint_is_missing(
+    caplog,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_TRACE", "1")
+    caplog.set_level(logging.INFO, logger="agent.trace")
+    llm = FakeLLMClient(
+        completions=[
+            _decision("ask_user", {"question": "興味のある学科を教えてください。"}),
+            _decision("retrieve", {"queries": ["情報工学科です"]}),
+            _decision("finish", {"reason": "縮退後に回答"}),
+        ],
+        tokens=["縮退回答"],
+    )
+    agent = _agent(llm=llm, store=FakeKnowledgeStore([_chunk()]))
+
+    await _collect(agent, "おすすめは？", message_id="message-ask")
+    pending = agent._pending_clarifications["thread-1"]
+    await agent._delete_checkpoint_thread(pending.checkpoint_thread_id)
+
+    history = [
+        {
+            "role": "assistant",
+            "content": "（確認質問）興味のある学科を教えてください。",
+            "metadata": {"kind": "clarification"},
+        }
+    ]
+    events = await _collect(
+        agent,
+        "情報工学科です",
+        history=history,
+        message_id="message-fresh",
+    )
+
+    assert events[-1][0] == "done"
+    assert events[-1][1]["kind"] is None
+    assert "".join(data["text"] for event, data in events if event == "token") == "縮退回答"
+    assert agent._pending_clarifications == {}
+    fresh_prompt = llm.decide_calls[1]["messages"][-1]["content"]
+    assert "（確認質問）興味のある学科を教えてください。" in "\n".join(
+        message["content"] for message in llm.decide_calls[1]["messages"]
+    )
+    assert "情報工学科です" in fresh_prompt
+    records = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "agent.trace"
+    ]
+    degraded = next(record for record in records if record["event"] == "hitl_degraded")
+    assert degraded["reason"] == "missing_checkpoint"
+    assert degraded["checkpoint_thread_id"] == "message-ask"
 
 
 async def test_previous_clarification_removes_ask_user_from_menu() -> None:

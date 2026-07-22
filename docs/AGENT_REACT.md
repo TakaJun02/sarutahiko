@@ -8,6 +8,9 @@
 - 関連文書: `AGENT_ARCHITECTURE.md`（実装完了時に v2.0 へ全面改稿）、`AGENT_HARNESS.md` v5
   （プロンプトは実装時に v6 章を追加）、`MAP_CARD.md`（FR-26/27 の UX 契約 — 本 FR で不変）、
   `ARCHITECTURE.md` §3（SSE 契約 — 本 FR で互換維持）。
+- **改訂注記（2026-07-23, FR-42）**: ask_user の terminal 仕様（§2 の該当箇所）は
+  `docs/AGENT_HITL.md` v1.0 により **interrupt/resume の human-in-the-loop へ上書き**された。
+  ask_user は観測を decide へ返すツール実行ノードとなり、`ask_user → END` エッジは廃止。
 
 ## 0. 決定ログ（2026-07-18, 利用者との議論・合意事項）
 

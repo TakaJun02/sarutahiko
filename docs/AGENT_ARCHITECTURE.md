@@ -1,9 +1,12 @@
 # エージェント全体アーキテクチャ（ReAct ワークフローとツール）
 
-- 版: v2.0（2026-07-18, Fable — **FR-34 ReAct ハーネス v6 を反映して全面改稿**。
-  固定フロー（analyze→retrieve→search→evaluate→web_search）を **decide ループ＋ツール**へ刷新、
-  経路ドメインを campus_navigator サブエージェントへ切り出し。仕様と裁定の正は
-  `docs/AGENT_REACT.md` v1.0。旧 v1.2（FR-33 時点の固定フロー図）はコミット ecdae04 時点を参照）
+- 版: v2.1（2026-07-23, Fable — **FR-42 ask_user の human-in-the-loop 化を反映**。
+  ask_user を terminal から「観測を decide へ返すツール実行ノード」へ改稿
+  （LangGraph interrupt/resume・checkpoint 再開。仕様の正は `docs/AGENT_HITL.md` v1.0））
+  - v2.0（2026-07-18, Fable — **FR-34 ReAct ハーネス v6 を反映して全面改稿**。
+    固定フロー（analyze→retrieve→search→evaluate→web_search）を **decide ループ＋ツール**へ刷新、
+    経路ドメインを campus_navigator サブエージェントへ切り出し。仕様と裁定の正は
+    `docs/AGENT_REACT.md` v1.0。旧 v1.2（FR-33 時点の固定フロー図）はコミット ecdae04 時点を参照）
   - v1.2（2026-07-18, FR-33 定義＝実行一本化）/ v1.1・v1.0（2026-07-17）
 - 目的: AI エージェント（`backend/app/agent/graph.py` の `RealCampusAgent`）の**ワークフロー全体**と
   **各ノードで使用可能なツール**を一望できるようにする。
@@ -46,11 +49,14 @@ flowchart LR
 
 ## 2. エージェントワークフロー（ReAct decide ループ・FR-34）
 
-1 リクエスト = 1 実行。compile 済み `StateGraph` を `stream()` が
-`astream(state, stream_mode=["updates","custom"], config={"recursion_limit": 50})` で実行する
-（定義＝実行・FR-33 の原則は不変）。各ノードは SSE 形の custom イベント（status / token / map）を
+1 リクエスト = 1 実行。compile 済み `StateGraph`（**FR-42 より InMemorySaver 付き**）を `stream()` が
+`astream(state, stream_mode=["updates","custom"], config={"configurable": {"thread_id": <run_id>}, "recursion_limit": 50})`
+で実行する（定義＝実行・FR-33 の原則は不変）。各ノードは SSE 形の custom イベント（status / token / map）を
 `get_stream_writer()` で送出し、`stream()` は薄いアダプタとして転送・`updates` をマージ累積して
-終端で `done` を 1 回送出する。
+終端で `done` を 1 回送出する。**例外は ask_user（FR-42）**: `interrupt()` による中断をアダプタが
+`__interrupt__` で検知して質問ターンの SSE を送出し、次リクエストで `Command(resume=回答)` により
+同一実行を checkpoint から再開する（pending はチャット thread_id ごとに高々 1 件・
+`docs/AGENT_HITL.md` §2）。
 
 **v6 の本質**: どのツールをどの順で使うかを固定フローで決めず、**decide ノード（LLM・guided JSON）が
 毎ターン選択**する。探索の停止もカウンタではなく**コンテキスト予算**で決める。
@@ -64,7 +70,7 @@ flowchart LR
 flowchart TD
     Q(["ユーザー質問（origin_node 合成・履歴サニタイズは backend・FR-27）"]):::orch --> DE
 
-    DE["<b>decide</b>（ノード・LLM）<br/>guided JSON {thought, action, action_input}<br/>初回 status=analyze / 2回目以降 status=evaluate（thought 実況）<br/>不変条件: ツール0回の finish 無効・同一(action,input) 反復ガード・<br/>直前 clarification 時は ask_user をメニューから除外"]:::wfnode
+    DE["<b>decide</b>（ノード・LLM）<br/>guided JSON {thought, action, action_input}<br/>初回 status=analyze / 2回目以降 status=evaluate（thought 実況）<br/>不変条件: ツール0回の finish 無効・同一(action,input) 反復ガード・<br/>ask_user は 1 実行 1 回（asked_user_in_run）＋直前 clarification 時も除外"]:::wfnode
 
     DE --> RD{"_route_after_decide"}:::router
     RD -->|"retrieve(queries)"| RT["<b>retrieve</b>（ノード）<br/>意味ベクトル検索＋兄弟チャンク展開"]:::wfnode
@@ -83,8 +89,8 @@ flowchart TD
     RN -->|"need_origin（turn_terminated）"| AO["<b>respond_need_origin</b>（ノード）<br/>status→token[定型文]→map(ask_origin)<br/>FR-26/27/29 契約完全一致"]:::wfnode
     AO --> DONE
 
-    RD -->|"ask_user(question)"| AU["<b>ask_user</b>（ノード・terminal）<br/>status→token[質問文]→done・sources 空<br/>clarification メタを保存（履歴サニタイズ対象）"]:::wfnode
-    AU --> DONE
+    RD -->|"ask_user(question)"| AU["<b>ask_user</b>（ノード・HITL ツール・FR-42）<br/>interrupt({question}) で実行を checkpoint 中断<br/>SSE 送出はアダプタ（status clarify→token→done kind=clarification）<br/>来場者の回答 = Command(resume) で再開"]:::wfnode
+    AU -->|"観測（質問＋来場者の回答）<br/>※ターンを跨いで同一実行を再開"| DE
     RD -->|"finish(reason)"| GE["<b>generate</b>（ノード・v5 から無改修）<br/>コンテキスト組立→実トークン予算検査→<br/>token 逐次→map（あれば）→sources"]:::wfnode
     GE --> DONE(["done 送出（アダプタ）<br/>updates マージ state の sources・スレッド永続化"]):::orch
 
@@ -146,7 +152,7 @@ flowchart TD
 | ノード | web_search（`_web_search`） | Tavily 検索＋本文取得（queries 1..3）。**ドメイン制限なし**。CB 開放時は「利用不可」観測。soft 超過時 raw_content 抑制 | Tavily API＋httpx | — |
 | サブエージェント | campus_navigator（`_campus_navigator` → `navigator.py`） | 学内の場所・経路解決。fast path（`find_locations_in_text`＋`resolve_location`・LLM 0回）→ 失敗時のみ内部 decide（resolve_place / find_route / ask_origin・≤3手）。戻りは route / place / need_origin / not_navigable の構造化 4 種。**最終文章は書かない** | campus_map（純関数）、生成 vLLM（内部 decide 時のみ） | （✔） |
 | ノード | respond_need_origin（`_respond_need_origin`） | need_origin のターン終端。status→token[定型文]→map(ask_origin)。sources は位置インデックス出典（FR-29）。`turn_terminated` フラグの条件エッジで generate を構造的に迂回 | campus_map（payload は navigator が構築済み） | — |
-| ノード | ask_user（`_ask_user`） | 自由文の聞き返しでターン終端（terminal）。token は 8 文字刻みで FR-25 文字送り互換。sources 空。clarification メタ保存 → 次ターンで ask_user をメニューから除外＋履歴に「（確認質問）」プレフィックス | — | — |
+| ノード | ask_user（`_ask_user`・FR-42 HITL） | `interrupt({question})` で実行を checkpoint 中断（InMemorySaver・checkpoint thread = assistant message_id）。SSE（status clarify→token 8 文字刻み→done kind=clarification）はアダプタが `__interrupt__` 検知時に送出。次リクエストで `Command(resume=回答)` により**同一実行を再開**し、質問＋回答を観測として decide へ返す。1 実行 1 回（`asked_user_in_run`）。checkpoint 消失時は履歴付き fresh run へ無音縮退（trace: hitl_degraded）。詳細: `docs/AGENT_HITL.md` | LangGraph checkpointer（InMemorySaver） | — |
 | ノード | generate（`_generate`・v5 から無改修） | コンテキスト組立・出典 dedupe → 実トークン予算検査（超過時縮小再構築）→ token 逐次 → map_payload があれば map 送出（token 完了後・done 直前）。履歴由来出発地の冒頭明示（FR-26 §7-4） | 生成 vLLM（ストリーミング）、campus_map | ✔ |
 | アダプタ | done 送出（`stream()` 終端） | マージ state の sources で `done` を 1 回送出。ask_user の clarification メタを API 層へ受け渡し | — | — |
 

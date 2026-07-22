@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -9,9 +10,11 @@ from html.parser import HTMLParser
 from typing import Any, Literal, TypedDict
 
 import httpx
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.config import get_stream_writer
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 from openai import BadRequestError
 
 from app.agent.campus_map import (
@@ -165,8 +168,9 @@ class AgentState(TypedDict, total=False):
     tool_executions: int
     context_usage: dict[str, Any]
     turn_terminated: bool
-    terminal_kind: Literal["ask_user", "ask_origin"] | None
+    terminal_kind: Literal["ask_origin"] | None
     clarification_blocked: bool
+    asked_user_in_run: bool
     navigator_sources: list[Source]
     generation_messages: list[dict[str, str]]
     generation_token_budget: int
@@ -235,6 +239,27 @@ class _ContextMeasurementCache:
     evidence_has_text: bool = False
 
 
+@dataclass(frozen=True)
+class _PendingClarification:
+    checkpoint_thread_id: str
+    config: dict[str, Any]
+    question: str
+    message_id: str
+
+
+@dataclass
+class _GraphRunOutcome:
+    merged_state: dict[str, Any]
+    interrupted: bool = False
+    done_kind: Literal["clarification"] | None = None
+
+
+class _HitlResumeDegraded(RuntimeError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class RealCampusAgent:
     def __init__(
         self,
@@ -264,6 +289,8 @@ class RealCampusAgent:
         self.recursion_limit = recursion_limit
         self.navigator = CampusNavigator(llm_client)
         self._message_metadata: dict[str, dict[str, Any]] = {}
+        self._checkpointer = InMemorySaver()
+        self._pending_clarifications: dict[str, _PendingClarification] = {}
         self._graph = self._build_graph()
         self._fallback_graph = self._build_fallback_graph()
 
@@ -275,10 +302,101 @@ class RealCampusAgent:
         message_id: str,
         history: list[dict] | None = None,
     ) -> AsyncIterator[tuple[str, dict]]:
-        state: AgentState = {
+        pending = self._pending_clarifications.get(thread_id)
+        outcome: _GraphRunOutcome | None = None
+        checkpoint_thread_id = message_id
+
+        if pending is not None:
+            checkpoint_thread_id = pending.checkpoint_thread_id
+            try:
+                if not self._checkpoint_exists(pending.config):
+                    raise _HitlResumeDegraded("missing_checkpoint")
+                outcome = _GraphRunOutcome(self._checkpoint_state_values(pending.config))
+                self._trace(
+                    "hitl_resume",
+                    outcome.merged_state,
+                    {
+                        "chat_thread_id": thread_id,
+                        "checkpoint_thread_id": pending.checkpoint_thread_id,
+                    },
+                )
+                async for event in self._stream_main_graph_run(
+                    Command(resume=question.strip()),
+                    config=pending.config,
+                    outcome=outcome,
+                    chat_thread_id=thread_id,
+                    message_id=message_id,
+                    checkpoint_thread_id=pending.checkpoint_thread_id,
+                ):
+                    yield event
+            except GraphRecursionError:
+                if outcome is None:
+                    outcome = _GraphRunOutcome(self._checkpoint_state_values(pending.config))
+                async for event in self._stream_fallback_generate(outcome.merged_state):
+                    yield event
+            except Exception as exc:
+                degraded_reason = getattr(exc, "reason", exc.__class__.__name__)
+                self._trace(
+                    "hitl_degraded",
+                    {"trace_id": pending.checkpoint_thread_id},
+                    {
+                        "reason": degraded_reason,
+                        "chat_thread_id": thread_id,
+                        "checkpoint_thread_id": pending.checkpoint_thread_id,
+                    },
+                )
+                await self._clear_pending_clarification(thread_id, delete_checkpoint=True)
+                pending = None
+                outcome = None
+
+        if pending is None and outcome is None:
+            state = self._initial_state(question, message_id, history or [])
+            checkpoint_thread_id = message_id
+            config = self._checkpoint_config(checkpoint_thread_id)
+            outcome = _GraphRunOutcome(dict(state))
+            try:
+                async for event in self._stream_main_graph_run(
+                    state,
+                    config=config,
+                    outcome=outcome,
+                    chat_thread_id=thread_id,
+                    message_id=message_id,
+                    checkpoint_thread_id=checkpoint_thread_id,
+                ):
+                    yield event
+            except GraphRecursionError:
+                async for event in self._stream_fallback_generate(outcome.merged_state):
+                    yield event
+
+        assert outcome is not None
+        if not outcome.interrupted:
+            await self._clear_pending_clarification(thread_id, delete_checkpoint=False)
+            await self._delete_checkpoint_thread(checkpoint_thread_id)
+
+        yield "done", DonePayload(
+            thread_id=thread_id,
+            message_id=message_id,
+            sources=outcome.merged_state.get("sources", []),
+            kind=outcome.done_kind,
+        ).model_dump()
+
+    def consume_message_metadata(self, message_id: str) -> dict[str, Any] | None:
+        return self._message_metadata.pop(message_id, None)
+
+    @staticmethod
+    def format_sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+
+    def _initial_state(
+        self,
+        question: str,
+        message_id: str,
+        history: Sequence[dict],
+    ) -> AgentState:
+        return {
             "trace_id": message_id,
             "question": question.strip(),
-            "history": (history or [])[-MAX_HISTORY_MESSAGES:],
+            "history": list(history)[-MAX_HISTORY_MESSAGES:],
             "knowledge_results": [],
             "web_results": [],
             "decision_count": 0,
@@ -288,76 +406,187 @@ class RealCampusAgent:
             "known_file_ids": [],
             "tool_executions": 0,
             "turn_terminated": False,
-            "clarification_blocked": self._previous_assistant_was_clarification(history or []),
+            "clarification_blocked": self._previous_assistant_was_clarification(history),
+            "asked_user_in_run": False,
             "navigator_sources": [],
             "same_file_expanded_file_ids": [],
             "same_file_expanded_chunk_ids": [],
         }
-        merged_state = dict(state)
-        try:
-            async for mode, payload in self._graph.astream(
-                state,
-                stream_mode=["updates", "custom"],
-                config={"recursion_limit": self.recursion_limit},
-            ):
-                if mode == "custom":
-                    yield payload["event"], payload["data"]
-                    continue
-                if mode == "updates":
-                    for update in payload.values():
-                        if isinstance(update, dict):
-                            merged_state.update(update)
-        except GraphRecursionError:
-            knowledge_count = len(merged_state.get("knowledge_results") or [])
-            web_count = len(merged_state.get("web_results") or [])
-            self._trace(
-                "fallback_generate",
-                merged_state,
-                {
-                    "reason": "recursion_limit",
-                    "evidence_count": knowledge_count + web_count,
-                    "knowledge_count": knowledge_count,
-                    "web_count": web_count,
-                },
-            )
-            if knowledge_count == 0 and web_count == 0:
-                yield "status", self._status("generate")
-                for start in range(0, len(FALLBACK_NOT_FOUND_RESPONSE), ASK_USER_TOKEN_CHARS):
+
+    async def _stream_main_graph_run(
+        self,
+        graph_input: Any,
+        *,
+        config: dict[str, Any],
+        outcome: _GraphRunOutcome,
+        chat_thread_id: str,
+        message_id: str,
+        checkpoint_thread_id: str,
+    ) -> AsyncIterator[tuple[str, dict]]:
+        async for mode, payload in self._graph.astream(
+            graph_input,
+            stream_mode=["updates", "custom"],
+            config=self._with_recursion_limit(config),
+        ):
+            if mode == "custom":
+                yield payload["event"], payload["data"]
+                continue
+            if mode != "updates":
+                continue
+
+            question = self._interrupt_question(payload)
+            if question is not None:
+                await self._register_pending_clarification(
+                    chat_thread_id,
+                    checkpoint_thread_id=checkpoint_thread_id,
+                    config=config,
+                    question=question,
+                    message_id=message_id,
+                )
+                yield "status", self._status("clarify")
+                for start in range(0, len(question), ASK_USER_TOKEN_CHARS):
                     yield "token", TokenPayload(
-                        text=FALLBACK_NOT_FOUND_RESPONSE[start : start + ASK_USER_TOKEN_CHARS]
+                        text=question[start : start + ASK_USER_TOKEN_CHARS]
                     ).model_dump()
-                merged_state["sources"] = []
-            else:
-                async for mode, payload in self._fallback_graph.astream(
-                    merged_state,
-                    stream_mode=["updates", "custom"],
-                ):
-                    if mode == "custom":
-                        yield payload["event"], payload["data"]
-                        continue
-                    if mode == "updates":
-                        for update in payload.values():
-                            if isinstance(update, dict):
-                                merged_state.update(update)
+                outcome.done_kind = "clarification"
+                outcome.interrupted = True
+                break
 
-        done_kind: Literal["clarification"] | None = None
-        if merged_state.get("terminal_kind") == "ask_user":
-            done_kind = "clarification"
-            self._message_metadata[message_id] = {"kind": "clarification"}
+            self._merge_graph_updates(outcome.merged_state, payload)
 
-        yield "done", DonePayload(
-            thread_id=thread_id,
-            message_id=message_id,
-            sources=merged_state.get("sources", []),
-            kind=done_kind,
-        ).model_dump()
+    async def _stream_fallback_generate(
+        self,
+        merged_state: dict[str, Any],
+    ) -> AsyncIterator[tuple[str, dict]]:
+        knowledge_count = len(merged_state.get("knowledge_results") or [])
+        web_count = len(merged_state.get("web_results") or [])
+        self._trace(
+            "fallback_generate",
+            merged_state,
+            {
+                "reason": "recursion_limit",
+                "evidence_count": knowledge_count + web_count,
+                "knowledge_count": knowledge_count,
+                "web_count": web_count,
+            },
+        )
+        if knowledge_count == 0 and web_count == 0:
+            yield "status", self._status("generate")
+            for start in range(0, len(FALLBACK_NOT_FOUND_RESPONSE), ASK_USER_TOKEN_CHARS):
+                yield "token", TokenPayload(
+                    text=FALLBACK_NOT_FOUND_RESPONSE[start : start + ASK_USER_TOKEN_CHARS]
+                ).model_dump()
+            merged_state["sources"] = []
+            return
 
-    def consume_message_metadata(self, message_id: str) -> dict[str, Any] | None:
-        return self._message_metadata.pop(message_id, None)
+        async for mode, payload in self._fallback_graph.astream(
+            merged_state,
+            stream_mode=["updates", "custom"],
+        ):
+            if mode == "custom":
+                yield payload["event"], payload["data"]
+                continue
+            if mode == "updates":
+                self._merge_graph_updates(merged_state, payload)
 
     @staticmethod
-    def format_sse(event: str, data: dict) -> str:
-        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+    def _merge_graph_updates(merged_state: dict[str, Any], payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        for key, update in payload.items():
+            if key == "__interrupt__":
+                continue
+            if isinstance(update, dict):
+                merged_state.update(update)
+
+    @staticmethod
+    def _interrupt_question(payload: Any) -> str | None:
+        if not isinstance(payload, dict) or "__interrupt__" not in payload:
+            return None
+        interrupts = payload.get("__interrupt__")
+        if isinstance(interrupts, (list, tuple)) and interrupts:
+            interrupt_payload = interrupts[0]
+        else:
+            interrupt_payload = interrupts
+
+        value = getattr(interrupt_payload, "value", None)
+        if value is None and isinstance(interrupt_payload, dict):
+            value = interrupt_payload.get("value", interrupt_payload)
+        if isinstance(value, dict):
+            question = value.get("question")
+        else:
+            question = value
+        if question is None:
+            return ""
+        return str(question).strip()
+
+    def _checkpoint_config(self, checkpoint_thread_id: str) -> dict[str, Any]:
+        return {"configurable": {"thread_id": checkpoint_thread_id}}
+
+    def _with_recursion_limit(self, config: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **config,
+            "configurable": dict(config.get("configurable") or {}),
+            "recursion_limit": self.recursion_limit,
+        }
+
+    def _checkpoint_exists(self, config: dict[str, Any]) -> bool:
+        try:
+            snapshot = self._graph.get_state(self._with_recursion_limit(config))
+        except Exception:
+            return False
+        return bool(getattr(snapshot, "values", None) or getattr(snapshot, "next", None))
+
+    def _checkpoint_state_values(self, config: dict[str, Any]) -> dict[str, Any]:
+        snapshot = self._graph.get_state(self._with_recursion_limit(config))
+        values = getattr(snapshot, "values", None) or {}
+        return dict(values)
+
+    async def _register_pending_clarification(
+        self,
+        chat_thread_id: str,
+        *,
+        checkpoint_thread_id: str,
+        config: dict[str, Any],
+        question: str,
+        message_id: str,
+    ) -> None:
+        existing = self._pending_clarifications.get(chat_thread_id)
+        if existing is not None and existing.checkpoint_thread_id != checkpoint_thread_id:
+            await self._delete_checkpoint_thread(existing.checkpoint_thread_id)
+        pending_config = {
+            "configurable": dict(
+                config.get("configurable") or {"thread_id": checkpoint_thread_id}
+            )
+        }
+        self._pending_clarifications[chat_thread_id] = _PendingClarification(
+            checkpoint_thread_id=checkpoint_thread_id,
+            config=pending_config,
+            question=question,
+            message_id=message_id,
+        )
+        self._message_metadata[message_id] = {"kind": "clarification"}
+
+    async def _clear_pending_clarification(
+        self,
+        chat_thread_id: str,
+        *,
+        delete_checkpoint: bool,
+    ) -> None:
+        pending = self._pending_clarifications.pop(chat_thread_id, None)
+        if delete_checkpoint and pending is not None:
+            await self._delete_checkpoint_thread(pending.checkpoint_thread_id)
+
+    async def _delete_checkpoint_thread(self, checkpoint_thread_id: str) -> None:
+        delete_thread = getattr(self._checkpointer, "delete_thread", None)
+        if not callable(delete_thread):
+            return
+        try:
+            result = delete_thread(checkpoint_thread_id)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.debug("Checkpoint cleanup failed", exc_info=True)
 
     def _build_graph(self) -> Any:
         workflow = StateGraph(AgentState)
@@ -397,10 +626,10 @@ class RealCampusAgent:
                 "respond_need_origin": "respond_need_origin",
             },
         )
-        workflow.add_edge("ask_user", END)
+        workflow.add_edge("ask_user", "decide")
         workflow.add_edge("respond_need_origin", END)
         workflow.add_edge("generate", END)
-        return workflow.compile()
+        return workflow.compile(checkpointer=self._checkpointer)
 
     def _build_fallback_graph(self) -> Any:
         workflow = StateGraph(AgentState)
@@ -863,17 +1092,18 @@ class RealCampusAgent:
 
     async def _ask_user(self, state: AgentState) -> dict:
         question = str(state.get("action_input", {}).get("question") or "").strip()
-        _write_stream_event("status", self._status("clarify"))
-        for start in range(0, len(question), ASK_USER_TOKEN_CHARS):
-            _write_stream_event(
-                "token",
-                TokenPayload(text=question[start : start + ASK_USER_TOKEN_CHARS]).model_dump(),
-            )
+        answer = interrupt({"question": question})
+        answer_text = str(answer or "").strip()
+        observation = (
+            "来場者へ確認質問を行い、回答を得た。\n"
+            f"質問: {question}\n"
+            f"回答: {answer_text}"
+        )
         return {
-            "turn_terminated": True,
-            "terminal_kind": "ask_user",
-            "sources": [],
-            "actions_log": self._complete_action_log(state, "clarification を送出"),
+            "tool_executions": state.get("tool_executions", 0) + 1,
+            "observations": [*(state.get("observations") or []), observation],
+            "asked_user_in_run": True,
+            "actions_log": self._complete_action_log(state, observation),
         }
 
     async def _respond_need_origin(self, state: AgentState) -> dict:
@@ -935,7 +1165,7 @@ class RealCampusAgent:
                 "finish",
             ]
         )
-        if state.get("clarification_blocked"):
+        if state.get("clarification_blocked") or state.get("asked_user_in_run"):
             actions = [action for action in actions if action != "ask_user"]
         return actions
 
@@ -2517,7 +2747,7 @@ class RealCampusAgent:
         details = [
             f"{item.get('action')}: {item.get('result')}"
             for item in log
-            if item.get("action") not in {"finish", "ask_user"}
+            if item.get("action") != "finish"
         ]
         return f"調査ログ: {' / '.join(details)}\n\n" if details else ""
     @staticmethod
