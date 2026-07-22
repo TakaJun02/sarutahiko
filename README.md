@@ -136,6 +136,50 @@ flowchart TD
    レスポンス時間が伸びるため不採用。サブエージェント側も fast path（決定的・LLM 0 回）を
    先に試す設計で、速度と精度を両立している。
 
+### 🗺️ campus_navigator サブエージェントの内部アーキテクチャ
+
+`campus_navigator` 自体も 1 体の ReAct エージェントです。ただし**まず決定的な fast path
+（LLM 0 回）で解決を試み、失敗したときだけ内部 decide ループに落ちる** 2 段構えで、
+経路質問の大半を LLM なしで返します。
+
+```mermaid
+flowchart TD
+    IN(["依頼 = request + 原質問 + 直近履歴 + 解決済み事実<br/>（ハーネスが機械的に合成 — メイン LLM の言い換えに依存しない）"]) --> FP
+
+    FP["⚡ <b>fast path</b>（決定的・LLM 0回）<br/>find_locations_in_text + resolve_location で<br/>目的地・出発地を即時解決"]
+    FP -->|解決成立| OUT
+    FP -->|曖昧・解決失敗| ND
+
+    ND["<b>内部 decide</b>（LLM・guided JSON・上限 3 手）"]
+    ND -->|resolve_place| RP{{"resolve_location<br/>場所名 → 経路グラフのノード解決"}}
+    ND -->|find_route| FR{{"Dijkstra 経路探索＋ステップ文生成<br/>（campus_map.py 純関数）"}}
+    ND -->|ask_origin| VA["🛡️ 決定的バリデータ<br/>・目的地が未解決 → 差し戻し<br/>・出発地が履歴で既知 → 差し戻し（find_route を使え）"]
+    RP -->|観測| ND
+    FR -->|観測| ND
+    VA -->|不合格（エラー観測）| ND
+    VA -->|合格| NO["need_origin<br/>turn_terminated を構造伝播"]
+
+    ND --> OUT["構造化結果<br/>route / place / not_navigable"]
+    OUT --> MAIN(["メイン decide へ観測として返す<br/>map_payload / sources は state にマージ → generate が使う"])
+    NO --> AO(["respond_need_origin でターン終端<br/>→ マップタップで現在地申告（composer ロック）"])
+```
+
+戻り値は構造化 4 種のみ:
+
+| type | 内容 | メイン側の扱い |
+|---|---|---|
+| `route` | 経路ステップ文（決定的テンプレ由来）＋マップカード payload ＋出典 | 観測として decide へ。generate が回答に使う |
+| `place` | 所在ファクト＋マップカード payload ＋出典 | 同上 |
+| `need_origin` | 出発地確認のマップカード（ask_origin） | **ターン終端**。来場者がマップをタップして現在地を申告 |
+| `not_navigable` | 対象外・解決不能の理由 | 観測として decide へ（web_search 等で続行） |
+
+設計原則は 2 つ。**LLM に空間推論をさせない** — 場所解決・Dijkstra・ステップ文生成は
+すべて `campus_map.py` の純関数で、LLM は「どのツールを呼ぶか」しか決めない。
+**第二の話者にしない** — サブエージェントは構造化結果を返す専門家に徹し、来場者向けの
+最終文章は常にメインの generate が一本で書く（token→map→done の順序保証と出典組立を
+1 箇所に保つため）。ask_origin の発動も LLM の提案を決定的バリデータが裁く構造で、
+モデルの従順さに依存しません。
+
 ハーネスの仕様詳細は [`docs/AGENT_REACT.md`](docs/AGENT_REACT.md)、
 全体図は [`docs/AGENT_ARCHITECTURE.md`](docs/AGENT_ARCHITECTURE.md)。
 
