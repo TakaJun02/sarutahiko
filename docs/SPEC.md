@@ -497,6 +497,15 @@
 - **意匠は Fable がデザインリード**（R5 以降・利用者指示。掟: UI 側は Campus Signal トークンのみ・
   「AI が作ったような」デザイン禁止）。キャラは画像アセットなしのインライン SVG。
 
+### FR-42 ask_user の human-in-the-loop 化（2026-07-23 追加・利用者指示、詳細: `docs/AGENT_HITL.md`）
+- `ask_user` をターン終端型から **LangGraph interrupt/resume の human-in-the-loop** へ変更。
+  来場者の回答を search 等と同様に**観測として decide へ持ち帰り**、同一実行
+  （同一 evidence・同一予算文脈）で探索を継続する。グラフは `ask_user → decide` エッジ化。
+- checkpointer は `InMemorySaver`（実行単位の checkpoint thread = assistant message_id）。
+  プロセス再起動等で checkpoint を失った場合は履歴付き fresh run へ**無音で縮退**（v6 相当）。
+- SSE ワイヤ契約（status clarify → token → done kind=clarification）・API・FE は**完全不変**。
+  1 実行につき確認質問は 1 回まで（`asked_user_in_run` メニューガード）。
+
 ## 4. 非機能要件
 
 - **NFR-1**: LLM 推論はローカル GPU 群上の vLLM のみを使用し、外部 LLM API に依存しない
