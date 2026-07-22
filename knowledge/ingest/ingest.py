@@ -7,7 +7,7 @@ import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import yaml
 
@@ -81,6 +81,16 @@ def build_knowledge_chunks(document: ParsedDocument, chunks: list[str]) -> list[
     ]
 
 
+def build_embedding_text(document: ParsedDocument, chunk_text: str) -> str:
+    title = str(document.metadata["title"])
+    heading = _extract_heading(chunk_text)
+    return "\n".join((title, heading, chunk_text))
+
+
+def build_embedding_texts(document: ParsedDocument, chunks: Sequence[str]) -> list[str]:
+    return [build_embedding_text(document, chunk) for chunk in chunks]
+
+
 def load_documents(knowledge_dir: Path) -> list[ParsedDocument]:
     documents: list[ParsedDocument] = []
     for path in sorted(knowledge_dir.glob("*.md")):
@@ -95,14 +105,21 @@ async def ingest(*, recreate: bool = False, knowledge_dir: Path | None = None) -
     root = knowledge_dir or REPO_ROOT / "knowledge"
     documents = load_documents(root)
     chunks: list[KnowledgeChunk] = []
+    embedding_texts: list[str] = []
     for document in documents:
-        chunks.extend(build_knowledge_chunks(document, chunk_markdown(document.body)))
+        document_chunks = chunk_markdown(document.body)
+        chunks.extend(build_knowledge_chunks(document, document_chunks))
+        embedding_texts.extend(build_embedding_texts(document, document_chunks))
 
     if not chunks:
         return 0
 
-    embedding_model = EmbeddingModel(model_name=settings.embedding_model, device="cpu")
-    vectors = embedding_model.embed_documents([chunk.text for chunk in chunks])
+    embedding_model = EmbeddingModel(
+        model_name=settings.embedding_model,
+        device="cpu",
+        base_url=settings.embedding_base_url,
+    )
+    vectors = embedding_model.embed_documents(embedding_texts)
     store = CampusKnowledgeStore(
         url=settings.qdrant_url,
         collection_name=settings.qdrant_collection,
@@ -168,6 +185,13 @@ def _split_long_text(text: str, *, max_tokens: int, overlap_tokens: int) -> list
             break
         start_token = max(end_token - overlap_tokens, start_token + 1)
     return chunks
+
+
+def _extract_heading(text: str) -> str:
+    match = HEADING_PATTERN.search(text)
+    if not match:
+        return ""
+    return match.group(0).lstrip("#").strip()
 
 
 if __name__ == "__main__":

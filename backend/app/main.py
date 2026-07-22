@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI
@@ -14,12 +16,24 @@ from app.llm.client import VLLMClient
 from app.rag.embeddings import EmbeddingModel
 from app.rag.lexical import CampusLexicalSearch
 from app.rag.qdrant_store import CampusKnowledgeStore
-from app.search.ddgs import DDGSSearchProvider
+from app.search.tavily import TavilySearchProvider
 from app.services.auth import AuthService
 from app.services.threads import ThreadService
 
 
+def _configure_trace_logger() -> None:
+    if os.getenv("AGENT_TRACE", "1").strip() == "0":
+        return
+    trace_logger = logging.getLogger("agent.trace")
+    trace_logger.setLevel(logging.INFO)
+    if not trace_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(name)s %(message)s"))
+        trace_logger.addHandler(handler)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
+    _configure_trace_logger()
     app_settings = settings or load_settings()
     database = Database(app_settings.database_path)
 
@@ -67,13 +81,17 @@ def _configure_agent(app: FastAPI, settings: Settings) -> None:
         return
 
     llm_client = VLLMClient(base_url=settings.vllm_base_url, model=settings.llm_model)
-    embedding_model = EmbeddingModel(model_name=settings.embedding_model, device="cpu")
+    embedding_model = EmbeddingModel(
+        model_name=settings.embedding_model,
+        device="cpu",
+        base_url=settings.embedding_base_url,
+    )
     knowledge_store = CampusKnowledgeStore(
         url=settings.qdrant_url,
         collection_name=settings.qdrant_collection,
         embedding_model=embedding_model,
     )
-    search_provider = DDGSSearchProvider()
+    search_provider = TavilySearchProvider(api_key=settings.tavily_api_key)
     lexical_search = CampusLexicalSearch(settings.knowledge_dir)
 
     app.state.agent = RealCampusAgent(

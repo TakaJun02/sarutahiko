@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from knowledge.ingest.ingest import build_knowledge_chunks, chunk_markdown, count_tokens, parse_frontmatter
+from knowledge.ingest.ingest import (
+    build_embedding_text,
+    build_knowledge_chunks,
+    chunk_markdown,
+    count_tokens,
+    parse_frontmatter,
+)
 
 
 def test_parse_frontmatter_reads_required_metadata(tmp_path: Path) -> None:
@@ -75,3 +81,31 @@ confidence: medium
     assert first[0].file_id == "sample-topic"
     assert first[1].chunk_index == 1
     assert first[0].source_urls == ["https://example.test/access"]
+
+
+def test_build_embedding_text_includes_title_heading_and_chunk_text(tmp_path: Path) -> None:
+    path = tmp_path / "sample.md"
+    path.write_text(
+        """---
+id: sample-topic
+category: lab
+title: サイバーフィジカルシステム研究室（CPS研） メンバー一覧
+source_urls:
+  - https://example.test/members
+retrieved_at: 2026-07-12
+confidence: high
+---
+
+## 学生メンバー（Members）
+以下は学生メンバーの一覧です。
+""",
+        encoding="utf-8",
+    )
+    document = parse_frontmatter(path)
+    chunk = "## 学生メンバー（Members）\n以下は学生メンバーの一覧です。"
+
+    assert build_embedding_text(document, chunk) == (
+        "サイバーフィジカルシステム研究室（CPS研） メンバー一覧\n"
+        "学生メンバー（Members）\n"
+        "## 学生メンバー（Members）\n以下は学生メンバーの一覧です。"
+    )

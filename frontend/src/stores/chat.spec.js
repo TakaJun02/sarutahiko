@@ -18,6 +18,22 @@ function createSseResponse(blocks) {
   }
 }
 
+function createJsonResponse(payload, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(payload),
+  }
+}
+
+function stubLocalStorage() {
+  vi.stubGlobal('localStorage', {
+    getItem: vi.fn(() => 'test-token'),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+  })
+}
+
 describe('chat store SSE helpers', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -29,17 +45,84 @@ describe('chat store SSE helpers', () => {
   })
 
   it('parses documented SSE event blocks', () => {
-    const parsed = parseSseBlock('event: status\ndata: {"step":"analyze","text":"質問を分析しています…"}')
+    const parsed = parseSseBlock('event: status\ndata: {"step":"analyze","text":"質問を分析しています…","partial":false}')
     expect(parsed).toEqual({
       event: 'status',
       data: {
         step: 'analyze',
         text: '質問を分析しています…',
+        partial: false,
       },
     })
   })
 
-  it('switches from pending status to streamed tokens and done metadata', () => {
+  it('initializes status streaming metadata', () => {
+    const message = createMessage('assistant')
+
+    expect(message.statusPartial).toBe(false)
+    expect(message.statusRunId).toBe(0)
+    expect(message.clarificationExpected).toBe(false)
+  })
+
+  it('marks clarification as expected when a clarify status arrives', () => {
+    const message = createMessage('assistant', '', { pending: true })
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: {
+        step: 'clarify',
+        text: '案内に必要なことを少しだけ確認します。',
+        partial: false,
+      },
+    })
+
+    expect(message.pending).toBe(true)
+    expect(message.statusStep).toBe('clarify')
+    expect(message.statusText).toBe('案内に必要なことを少しだけ確認します。')
+    expect(message.clarificationExpected).toBe(true)
+  })
+
+  it('keeps one run id for partial growth and finalization, then increments on switches', () => {
+    const message = createMessage('assistant', '', {
+      statusText: 'ご質問を読み解いています…',
+      statusStep: 'analyze',
+      statusRunId: 3,
+    })
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: { step: 'analyze', text: '学内資料を確認…', partial: true },
+    })
+    expect(message.statusRunId).toBe(4)
+    expect(message.statusPartial).toBe(true)
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: { step: 'analyze', text: '学内資料を確認しています…', partial: true },
+    })
+    expect(message.statusRunId).toBe(4)
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: { step: 'analyze', text: '学内資料を確認しています', partial: false },
+    })
+    expect(message.statusRunId).toBe(4)
+    expect(message.statusPartial).toBe(false)
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: { step: 'retrieve', text: '学内資料を確認しています…', partial: false },
+    })
+    expect(message.statusRunId).toBe(5)
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: { step: 'retrieve', text: '別の資料を探しています…', partial: false },
+    })
+    expect(message.statusRunId).toBe(6)
+  })
+
+  it('switches from pending status to streamed tokens and defers done metadata', () => {
     const message = createMessage('assistant', '', {
       pending: true,
       statusText: '質問を分析しています…',
@@ -54,6 +137,8 @@ describe('chat store SSE helpers', () => {
     expect(message.pending).toBe(true)
     expect(message.statusText).toBe('学内ナレッジを検索しています…')
     expect(message.statusStep).toBe('retrieve')
+    expect(message.statusPartial).toBe(false)
+    expect(message.statusRunId).toBe(1)
 
     applyAssistantEvent(message, {
       event: 'token',
@@ -62,6 +147,7 @@ describe('chat store SSE helpers', () => {
     expect(message.pending).toBe(false)
     expect(message.streaming).toBe(true)
     expect(message.content).toBe('秋田県立大学')
+    expect(message.revealedLength).toBe(0)
 
     const threadId = applyAssistantEvent(message, {
       event: 'done',
@@ -73,9 +159,466 @@ describe('chat store SSE helpers', () => {
     })
     expect(threadId).toBe('thread-1')
     expect(message.id).toBe('message-1')
-    expect(message.streaming).toBe(false)
-    expect(message.sources).toHaveLength(1)
+    expect(message.streaming).toBe(true)
+    expect(message.sources).toHaveLength(0)
+    expect(message.doneReceived).toBe(true)
+    expect(message.finalSources).toHaveLength(1)
     expect(message.clientId).toBe('local-id')
+  })
+
+  it('defers sources and settled state until reveal reaches the full answer', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '', { pending: true })
+    store.messages = [message]
+
+    applyAssistantEvent(message, {
+      event: 'token',
+      data: { text: '学生ホールにあります。' },
+    })
+    applyAssistantEvent(message, {
+      event: 'done',
+      data: {
+        thread_id: 'thread-1',
+        message_id: 'message-1',
+        sources: [{ title: '公式', url: 'https://example.test', type: 'knowledge' }],
+      },
+    })
+
+    expect(message.streaming).toBe(true)
+    expect(message.sources).toEqual([])
+    expect(message.doneReceived).toBe(true)
+
+    message.revealedLength = message.content.length
+    store.advanceRevealFrame(0.016)
+
+    expect(message.streaming).toBe(false)
+    expect(message.sources).toEqual([
+      { title: '公式', url: 'https://example.test', type: 'knowledge' },
+    ])
+    expect(message.doneReceived).toBeUndefined()
+    expect(message.finalSources).toBeUndefined()
+  })
+
+  it('defers map metadata until smooth reveal completes', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '', { pending: true })
+    store.messages = [message]
+    const map = {
+      mode: 'ask_origin',
+      prompt: 'いまいる場所をマップでタップしてください',
+      question: 'D414 に行きたい',
+    }
+
+    applyAssistantEvent(message, { event: 'token', data: { text: '場所を教えてください' } })
+    applyAssistantEvent(message, { event: 'map', data: map })
+    applyAssistantEvent(message, {
+      event: 'done',
+      data: { thread_id: 'thread-1', message_id: 'message-1', sources: [] },
+    })
+
+    expect(message.map).toBeNull()
+    expect(message.mapInteractive).toBe(false)
+    expect(message.finalMap).toEqual(map)
+
+    message.revealedLength = message.content.length
+    store.advanceRevealFrame(0.016)
+
+    expect(message.map).toEqual(map)
+    expect(message.mapInteractive).toBe(true)
+    expect(message.finalMap).toBeUndefined()
+  })
+
+  it('defers clarification activation until smooth reveal completes', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '', { pending: true })
+    store.messages = [message]
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: {
+        step: 'clarify',
+        text: '案内に必要なことを少しだけ確認します。',
+        partial: false,
+      },
+    })
+    applyAssistantEvent(message, {
+      event: 'token',
+      data: { text: 'どの学科について知りたいですか？' },
+    })
+    applyAssistantEvent(message, {
+      event: 'done',
+      data: {
+        thread_id: 'thread-1',
+        message_id: 'message-1',
+        sources: [],
+        kind: 'clarification',
+      },
+    })
+
+    expect(message.clarificationExpected).toBe(true)
+    expect(message.finalClarification).toBe(true)
+    expect(message.clarificationActive).toBe(false)
+    expect(store.isClarificationPending).toBe(false)
+
+    message.revealedLength = message.content.length
+    store.advanceRevealFrame(0.016)
+
+    expect(message.clarificationActive).toBe(true)
+    expect(message.clarificationExpected).toBe(true)
+    expect(message.finalClarification).toBeUndefined()
+    expect(store.isClarificationPending).toBe(true)
+  })
+
+  it('drops clarification expected on finalize when done kind is not clarification', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '', {
+      pending: false,
+      streaming: true,
+      clarificationExpected: true,
+    })
+    store.messages = [message]
+
+    applyAssistantEvent(message, {
+      event: 'token',
+      data: { text: '通常回答です。' },
+    })
+    applyAssistantEvent(message, {
+      event: 'done',
+      data: {
+        thread_id: 'thread-1',
+        message_id: 'message-1',
+        sources: [],
+        kind: null,
+      },
+    })
+
+    message.revealedLength = message.content.length
+    store.advanceRevealFrame(0.016)
+
+    expect(message.clarificationExpected).toBe(false)
+    expect(message.clarificationActive).toBe(false)
+  })
+
+  it('sends the original question with origin metadata and deactivates the ask-origin card', async () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '現在地を選んでください', {
+      map: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      mapInteractive: true,
+    })
+    store.messages = [message]
+    store.sendMessage = vi.fn(() => Promise.resolve())
+
+    await store.selectMapOrigin(message, {
+      node: 'cafeteria',
+      label: 'カフェテリア（食堂）',
+    })
+
+    expect(message.mapInteractive).toBe(false)
+    expect(message.mapSelectedNode).toBe('cafeteria')
+    expect(store.isOriginSelectionPending).toBe(false)
+    expect(store.sendMessage).toHaveBeenCalledWith('D414 に行きたい', {
+      originNode: 'cafeteria',
+      originLabel: 'カフェテリア（食堂）',
+      originCardClientId: message.clientId,
+    })
+  })
+
+  it('locks ordinary store sends while an ask-origin card is active', async () => {
+    const store = useChatStore()
+    store.messages = [createMessage('assistant', '現在地を選んでください', {
+      map: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      mapInteractive: true,
+    })]
+    store.streamChatResponse = vi.fn()
+
+    await store.sendMessage('別の質問')
+
+    expect(store.isOriginSelectionPending).toBe(true)
+    expect(store.streamChatResponse).not.toHaveBeenCalled()
+    expect(store.messages).toHaveLength(1)
+  })
+
+  it('locks ordinary store sends while a clarification card is active', async () => {
+    const store = useChatStore()
+    store.messages = [createMessage('assistant', 'どの学科ですか？', {
+      clarificationActive: true,
+    })]
+    store.streamChatResponse = vi.fn()
+
+    await store.sendMessage('通常フォームからの回答')
+
+    expect(store.isClarificationPending).toBe(true)
+    expect(store.streamChatResponse).not.toHaveBeenCalled()
+    expect(store.messages).toHaveLength(1)
+  })
+
+  it('cancels the active ask-origin card without sending', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', '現在地を選んでください', {
+      map: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      mapInteractive: true,
+    })
+    store.messages = [message]
+
+    store.cancelMapOrigin(message)
+
+    expect(message.mapInteractive).toBe(false)
+    expect(message.mapCancelled).toBe(true)
+    expect(store.isOriginSelectionPending).toBe(false)
+  })
+
+  it('submits a clarification answer through the guarded card path', async () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', 'どの学科ですか？', {
+      clarificationExpected: true,
+      clarificationActive: true,
+    })
+    store.messages = [message]
+    store.sendMessage = vi.fn(() => Promise.resolve())
+
+    await store.submitClarificationAnswer(message, ' 情報工学科です ')
+
+    expect(message.clarificationActive).toBe(false)
+    expect(message.clarificationExpected).toBe(false)
+    expect(message.clarificationDraft).toBe('情報工学科です')
+    expect(store.isClarificationPending).toBe(false)
+    expect(store.sendMessage).toHaveBeenCalledWith('情報工学科です', {
+      clarificationCardClientId: message.clientId,
+    })
+  })
+
+  it('reactivates a clarification card after send failure and preserves retry metadata', async () => {
+    stubLocalStorage()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockRejectedValueOnce(new Error('network failure'))
+        .mockResolvedValueOnce(createSseResponse([
+          'event: token\ndata: {"text":"再試行に成功しました。"}',
+          'event: done\ndata: {"thread_id":"thread-1","message_id":"message-1","sources":[],"kind":null}',
+        ])),
+    )
+    const store = useChatStore()
+    const message = createMessage('assistant', 'どの学科ですか？', {
+      clarificationExpected: true,
+      clarificationActive: true,
+    })
+    store.messages = [message]
+
+    await store.submitClarificationAnswer(message, '情報工学科です')
+
+    expect(message.clarificationActive).toBe(true)
+    expect(message.clarificationExpected).toBe(true)
+    expect(store.isClarificationPending).toBe(true)
+    expect(store.lastFailedRequest).toMatchObject({
+      message: '情報工学科です',
+      originNode: null,
+      clarificationCardClientId: message.clientId,
+    })
+
+    await store.retryLast()
+
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({
+      message: '情報工学科です',
+      thread_id: null,
+    })
+    expect(message.clarificationActive).toBe(false)
+    expect(message.clarificationExpected).toBe(false)
+    expect(store.isClarificationPending).toBe(false)
+  })
+
+  it('cancels the active clarification card and clears its failed request', () => {
+    const store = useChatStore()
+    const message = createMessage('assistant', 'どの学科ですか？', {
+      clarificationExpected: true,
+      clarificationActive: true,
+    })
+    store.messages = [message]
+    store.error = '回答を受け取れませんでした'
+    store.lastFailedMessage = '情報工学科です'
+    store.lastFailedRequest = {
+      message: '情報工学科です',
+      clarificationCardClientId: message.clientId,
+    }
+
+    store.cancelClarification(message)
+
+    expect(message.clarificationActive).toBe(false)
+    expect(message.clarificationExpected).toBe(false)
+    expect(message.clarificationDraft).toBe('')
+    expect(store.isClarificationPending).toBe(false)
+    expect(store.error).toBe('')
+    expect(store.lastFailedMessage).toBe('')
+    expect(store.lastFailedRequest).toBeNull()
+  })
+
+  it('posts origin_node and creates a live origin-select chip without exposing synthetic copy', async () => {
+    stubLocalStorage()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(createSseResponse([
+        'event: token\ndata: {"text":"経路をご案内します。"}',
+      ]))),
+    )
+    const store = useChatStore()
+    const message = createMessage('assistant', '現在地を選んでください', {
+      map: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      mapInteractive: true,
+    })
+    store.messages = [message]
+
+    await store.selectMapOrigin(message, {
+      node: 'cafeteria',
+      label: 'カフェテリア（食堂）',
+    })
+
+    const request = JSON.parse(fetch.mock.calls[0][1].body)
+    expect(request).toEqual({
+      message: 'D414 に行きたい',
+      thread_id: null,
+      origin_node: 'cafeteria',
+    })
+    expect(store.messages[1]).toMatchObject({
+      role: 'user',
+      content: 'D414 に行きたい',
+      map: {
+        mode: 'origin_select',
+        origin: { node: 'cafeteria', label: 'カフェテリア（食堂）' },
+      },
+    })
+    expect(store.messages[1].content).not.toContain('現在地は')
+  })
+
+  it('reactivates the card after a failed tap and preserves origin_node on retry', async () => {
+    stubLocalStorage()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockRejectedValueOnce(new Error('network failure'))
+        .mockResolvedValueOnce(createSseResponse([
+          'event: token\ndata: {"text":"再試行に成功しました。"}',
+        ])),
+    )
+    const store = useChatStore()
+    const message = createMessage('assistant', '現在地を選んでください', {
+      map: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      mapInteractive: true,
+    })
+    store.messages = [message]
+
+    await store.selectMapOrigin(message, {
+      node: 'k',
+      label: '共通施設棟（総合受付）',
+    })
+
+    expect(message.mapInteractive).toBe(true)
+    expect(store.isOriginSelectionPending).toBe(true)
+    expect(store.lastFailedRequest).toMatchObject({
+      message: 'D414 に行きたい',
+      originNode: 'k',
+      originLabel: '共通施設棟（総合受付）',
+    })
+
+    await store.retryLast()
+
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({
+      message: 'D414 に行きたい',
+      thread_id: null,
+      origin_node: 'k',
+    })
+    expect(message.mapInteractive).toBe(false)
+    expect(store.isOriginSelectionPending).toBe(false)
+  })
+
+  it('prevents a pending ask-origin card from reactivating after another send', () => {
+    const store = useChatStore()
+    const previous = createMessage('assistant', '前の現在地確認', {
+      map: { mode: 'ask_origin', question: 'D404 に行きたい' },
+      mapInteractive: true,
+    })
+    const latest = createMessage('assistant', '新しい現在地確認', {
+      streaming: true,
+      revealedLength: 0,
+      doneReceived: true,
+      finalSources: [],
+      finalMap: { mode: 'ask_origin', question: 'D414 に行きたい' },
+      finalMapInteractive: true,
+    })
+    store.messages = [previous, latest]
+
+    store.deactivateMapCards()
+    store.snapStreamingMessages()
+
+    expect(previous.mapInteractive).toBe(false)
+    expect(latest.revealedLength).toBe(latest.content.length)
+    expect(latest.map).toEqual({ mode: 'ask_origin', question: 'D414 に行きたい' })
+    expect(latest.mapInteractive).toBe(false)
+  })
+
+  it('clears pending clarification state during the shared deactivation pass', () => {
+    const store = useChatStore()
+    const previous = createMessage('assistant', 'どの学科ですか？', {
+      clarificationExpected: true,
+      clarificationActive: true,
+      finalClarification: true,
+    })
+    store.messages = [previous]
+
+    store.deactivateMapCards()
+
+    expect(previous.clarificationExpected).toBe(false)
+    expect(previous.clarificationActive).toBe(false)
+    expect(previous.finalClarification).toBe(false)
+    expect(store.isClarificationPending).toBe(false)
+  })
+
+  it('snaps revealed length on assistant error events', () => {
+    const message = createMessage('assistant', '', { pending: true })
+
+    applyAssistantEvent(message, {
+      event: 'token',
+      data: { text: '途中まで' },
+    })
+    applyAssistantEvent(message, {
+      event: 'error',
+      data: { message: '回答生成中にエラーが発生しました。' },
+    })
+
+    expect(message.streaming).toBe(false)
+    expect(message.content).toBe('回答生成中にエラーが発生しました。')
+    expect(message.revealedLength).toBe(message.content.length)
+  })
+
+  it('cleans pending clarification flags on assistant error events', () => {
+    const message = createMessage('assistant', '', { pending: true })
+
+    applyAssistantEvent(message, {
+      event: 'status',
+      data: {
+        step: 'clarify',
+        text: '案内に必要なことを少しだけ確認します。',
+      },
+    })
+    applyAssistantEvent(message, {
+      event: 'done',
+      data: {
+        thread_id: 'thread-1',
+        message_id: 'message-1',
+        sources: [],
+        kind: 'clarification',
+      },
+    })
+    expect(message.finalClarification).toBe(true)
+    expect(message.clarificationExpected).toBe(true)
+
+    applyAssistantEvent(message, {
+      event: 'error',
+      data: { message: '回答生成中にエラーが発生しました。' },
+    })
+
+    expect(message.finalClarification).toBeUndefined()
+    expect(message.clarificationExpected).toBe(false)
+    expect(message.clarificationActive).toBe(false)
   })
 
   it('consumes complete SSE blocks and preserves incomplete buffers', () => {
@@ -138,5 +681,281 @@ describe('chat store SSE helpers', () => {
     expect(contentSnapshots).toContain('本荘キャンパス')
     expect(store.messages[1].content).toBe('本荘キャンパス')
     expect(store.messages[1].statusStep).toBe('retrieve')
+  })
+})
+
+describe('chat store thread history actions', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    stubLocalStorage()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('loads the thread list from the API', async () => {
+    const threads = [
+      { id: 'thread-2', title: '図書館について', created_at: 'c2', updated_at: 'u2' },
+      { id: 'thread-1', title: '食堂について', created_at: 'c1', updated_at: 'u1' },
+    ]
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(createJsonResponse({ threads }))))
+
+    const store = useChatStore()
+    await store.loadThreads()
+
+    expect(fetch).toHaveBeenCalledWith('/api/threads', expect.any(Object))
+    expect(store.threads).toEqual(threads)
+  })
+
+  it('restores a persisted thread with settled assistant messages and sources', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          createJsonResponse({
+            thread: { id: 'thread-1', title: '食堂について', created_at: 'c1', updated_at: 'u1' },
+            messages: [
+              { id: 'm1', role: 'user', content: '食堂はどこですか？', sources: [], created_at: 't1' },
+              {
+                id: 'm2',
+                role: 'assistant',
+                content: '学生ホールにあります。',
+                sources: [{ title: '公式', url: 'https://example.test', type: 'knowledge' }],
+                map: {
+                  mode: 'place',
+                  destination: { node: 'g1', label: '学部棟Ⅰ', room: 'GI512', floor: 5 },
+                },
+                created_at: 't2',
+              },
+            ],
+          }),
+        ),
+      ),
+    )
+
+    const store = useChatStore()
+    await store.openThread('thread-1')
+
+    expect(store.threadId).toBe('thread-1')
+    expect(store.messages).toHaveLength(2)
+    expect(store.messages[0].role).toBe('user')
+    expect(store.messages[0].content).toBe('食堂はどこですか？')
+    expect(store.messages[1]).toMatchObject({
+      id: 'm2',
+      role: 'assistant',
+      content: '学生ホールにあります。',
+      revealedLength: '学生ホールにあります。'.length,
+      pending: false,
+      streaming: false,
+    })
+    expect(store.messages[1].sources).toEqual([
+      { title: '公式', url: 'https://example.test', type: 'knowledge' },
+    ])
+    expect(store.messages[1].map.mode).toBe('place')
+    expect(store.messages[1].mapInteractive).toBe(false)
+    expect(store.messages.every((message) => message.revealedLength === message.content.length)).toBe(true)
+  })
+
+  it('restores an ask-origin card as inactive after history reload', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          createJsonResponse({
+            thread: { id: 'thread-ask', title: 'D414', created_at: 'c1', updated_at: 'u1' },
+            messages: [
+              {
+                id: 'm-ask',
+                role: 'assistant',
+                content: 'いまいる場所を教えてください。',
+                sources: [],
+                map: {
+                  mode: 'ask_origin',
+                  question: 'D414 に行きたい',
+                  destination: { node: 'd', label: '大学院棟', room: 'D414', floor: 4 },
+                },
+                created_at: 't1',
+              },
+            ],
+          }),
+        ),
+      ),
+    )
+
+    const store = useChatStore()
+    await store.openThread('thread-ask')
+
+    expect(store.messages[0].map.mode).toBe('ask_origin')
+    expect(store.messages[0].mapInteractive).toBe(false)
+    expect(store.isOriginSelectionPending).toBe(false)
+  })
+
+  it('restores a persisted clarification assistant message as inactive', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          createJsonResponse({
+            thread: { id: 'thread-clarify', title: '学科確認', created_at: 'c1', updated_at: 'u1' },
+            messages: [
+              {
+                id: 'm-clarify',
+                role: 'assistant',
+                content: 'どの学科について知りたいですか？',
+                sources: [],
+                metadata: { kind: 'clarification' },
+                created_at: 't1',
+              },
+            ],
+          }),
+        ),
+      ),
+    )
+
+    const store = useChatStore()
+    await store.openThread('thread-clarify')
+
+    expect(store.messages[0].content).toBe('どの学科について知りたいですか？')
+    expect(store.messages[0].clarificationExpected).toBe(false)
+    expect(store.messages[0].clarificationActive).toBe(false)
+    expect(store.isClarificationPending).toBe(false)
+  })
+
+  it('restores a persisted origin-select user message for identical chip rendering', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(createJsonResponse({
+        thread: { id: 'thread-origin', title: 'D414', created_at: 'c1', updated_at: 'u1' },
+        messages: [{
+          id: 'm-origin',
+          role: 'user',
+          content: '現在地はカフェテリア（食堂）です。D414 に行きたい',
+          sources: [],
+          map: {
+            mode: 'origin_select',
+            origin: { node: 'cafeteria', label: 'カフェテリア（食堂）' },
+          },
+          created_at: 't1',
+        }],
+      }))),
+    )
+
+    const store = useChatStore()
+    await store.openThread('thread-origin')
+
+    expect(store.messages[0].map).toEqual({
+      mode: 'origin_select',
+      origin: { node: 'cafeteria', label: 'カフェテリア（食堂）' },
+    })
+    expect(store.messages[0].content).toContain('現在地は')
+  })
+
+  it('starts a new chat without dropping the sidebar list', () => {
+    const store = useChatStore()
+    store.threads = [{ id: 'thread-1', title: 't', created_at: 'c', updated_at: 'u' }]
+    store.threadId = 'thread-1'
+    store.messages = [createMessage('user', 'こんにちは')]
+    store.error = '一時的なエラー'
+
+    store.newChat()
+
+    expect(store.messages).toEqual([])
+    expect(store.threadId).toBeNull()
+    expect(store.error).toBe('')
+    expect(store.threads).toHaveLength(1)
+  })
+
+  it('renames a thread and updates the sidebar entry', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          createJsonResponse({
+            thread: { id: 'thread-1', title: '学食まとめ', created_at: 'c1', updated_at: 'u1' },
+          }),
+        ),
+      ),
+    )
+
+    const store = useChatStore()
+    store.threads = [
+      { id: 'thread-1', title: '食堂について', created_at: 'c1', updated_at: 'u1' },
+      { id: 'thread-2', title: '図書館について', created_at: 'c2', updated_at: 'u2' },
+    ]
+
+    await store.renameThread('thread-1', '学食まとめ')
+
+    const [url, options] = fetch.mock.calls[0]
+    expect(url).toBe('/api/threads/thread-1')
+    expect(options.method).toBe('PATCH')
+    expect(JSON.parse(options.body)).toEqual({ title: '学食まとめ' })
+    expect(store.threads[0].title).toBe('学食まとめ')
+    expect(store.threads[1].title).toBe('図書館について')
+  })
+
+  it('deletes a thread and resets the conversation when it was open', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(createJsonResponse(null, 204))))
+
+    const store = useChatStore()
+    store.threads = [
+      { id: 'thread-1', title: '食堂について', created_at: 'c1', updated_at: 'u1' },
+      { id: 'thread-2', title: '図書館について', created_at: 'c2', updated_at: 'u2' },
+    ]
+    store.threadId = 'thread-1'
+    store.messages = [createMessage('user', '食堂はどこですか？')]
+
+    await store.deleteThread('thread-1')
+
+    const [url, options] = fetch.mock.calls[0]
+    expect(url).toBe('/api/threads/thread-1')
+    expect(options.method).toBe('DELETE')
+    expect(store.threads.map((thread) => thread.id)).toEqual(['thread-2'])
+    expect(store.threadId).toBeNull()
+    expect(store.messages).toEqual([])
+  })
+
+  it('keeps the current conversation when deleting another thread', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(createJsonResponse(null, 204))))
+
+    const store = useChatStore()
+    store.threads = [
+      { id: 'thread-1', title: '食堂について', created_at: 'c1', updated_at: 'u1' },
+      { id: 'thread-2', title: '図書館について', created_at: 'c2', updated_at: 'u2' },
+    ]
+    store.threadId = 'thread-2'
+    store.messages = [createMessage('user', '図書館は使えますか？')]
+
+    await store.deleteThread('thread-1')
+
+    expect(store.threads.map((thread) => thread.id)).toEqual(['thread-2'])
+    expect(store.threadId).toBe('thread-2')
+    expect(store.messages).toHaveLength(1)
+  })
+
+  it('refreshes the thread list after a send resolves a thread id', async () => {
+    const threads = [{ id: 'thread-1', title: '食堂はどこですか？', created_at: 'c1', updated_at: 'u1' }]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url) => {
+        if (url === '/api/chat') {
+          return Promise.resolve(
+            createSseResponse([
+              'event: token\ndata: {"text":"学生ホールです。"}',
+              'event: done\ndata: {"thread_id":"thread-1","message_id":"message-1","sources":[]}',
+            ]),
+          )
+        }
+        return Promise.resolve(createJsonResponse({ threads }))
+      }),
+    )
+
+    const store = useChatStore()
+    await store.sendMessage('食堂はどこですか？')
+
+    expect(store.threadId).toBe('thread-1')
+    expect(fetch).toHaveBeenCalledWith('/api/threads', expect.any(Object))
+    expect(store.threads).toEqual(threads)
   })
 })

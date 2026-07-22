@@ -27,11 +27,37 @@ class CampusKnowledgeStore:
         points = await asyncio.to_thread(self._search_sync, query_vector, limit)
         return [self._point_to_chunk(point) for point in points]
 
-    async def upsert_chunks(self, chunks: Sequence[KnowledgeChunk], vectors: Sequence[Sequence[float]]) -> None:
+    async def get_file_chunks(self, file_ids: Sequence[str]) -> list[KnowledgeChunk]:
+        points = await asyncio.to_thread(self._get_file_chunks_sync, file_ids)
+        chunks = [self._point_to_chunk(point) for point in points]
+        file_order = {file_id: index for index, file_id in enumerate(file_ids)}
+        return sorted(
+            chunks,
+            key=lambda chunk: (
+                file_order.get(chunk.file_id or "", len(file_order)),
+                chunk.chunk_index is None,
+                chunk.chunk_index if chunk.chunk_index is not None else 0,
+                chunk.id,
+            ),
+        )
+
+    async def upsert_chunks(
+        self,
+        chunks: Sequence[KnowledgeChunk],
+        vectors: Sequence[Sequence[float]],
+        *,
+        batch_size: int = 100,
+    ) -> None:
         if len(chunks) != len(vectors):
             raise ValueError("chunks and vectors must have the same length")
         points = [self._to_point(chunk, vector) for chunk, vector in zip(chunks, vectors, strict=True)]
-        await asyncio.to_thread(self._client.upsert, collection_name=self.collection_name, points=points)
+        # Qdrant rejects JSON payloads over 32MB; 4096-dim vectors require batching.
+        for start in range(0, len(points), batch_size):
+            await asyncio.to_thread(
+                self._client.upsert,
+                collection_name=self.collection_name,
+                points=points[start : start + batch_size],
+            )
 
     async def recreate_collection(self, vector_size: int) -> None:
         await asyncio.to_thread(self._recreate_collection_sync, vector_size)
@@ -60,6 +86,36 @@ class CampusKnowledgeStore:
             with_payload=True,
         )
         return list(getattr(response, "points", response))
+
+    def _get_file_chunks_sync(self, file_ids: Sequence[str]) -> list[Any]:
+        from qdrant_client.models import FieldCondition, Filter, MatchAny
+
+        if not file_ids:
+            return []
+
+        scroll_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="file_id",
+                    match=MatchAny(any=list(file_ids)),
+                )
+            ]
+        )
+        points: list[Any] = []
+        offset: Any | None = None
+        while True:
+            batch, offset = self._client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=scroll_filter,
+                limit=128,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            points.extend(batch)
+            if offset is None:
+                break
+        return points
 
     def _recreate_collection_sync(self, vector_size: int) -> None:
         from qdrant_client.models import Distance, VectorParams

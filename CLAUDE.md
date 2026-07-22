@@ -39,6 +39,7 @@
 
 - ブランチ: `main`（リリース）← `develop`（統合）← `feature/*`（作業）。PR は `develop` 向け。
 - `chat.mov`（約 800MB の参考画面録画）と `app-icon.png` はルートに置いてあるが、**chat.mov は絶対にコミットしない**（.gitignore 済み）。
+- `referenceUI/`（FR-14 意匠の正となる Gemini アプリ実スクショ）も**ローカル保持のみ・コミットしない**（.gitignore 済み。実測値は `docs/UI_POLISH_V2.md` §10-2 に転記済み）。
 - `app-icon.png` はローディング演出の中央アイコンとして frontend の public/ にコピーして使う。
 - ドキュメント・コミットメッセージは日本語でよい。コード内の識別子・コメントは英語。
 - 参照実装 guidanceLLM2 はリポジトリに含めない。必要なら都度 clone する（演出の該当コードは `docs/UI_LOADING_ANIMATION.md` に全文転記済み）。

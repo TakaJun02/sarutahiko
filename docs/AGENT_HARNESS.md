@@ -1,4 +1,382 @@
-# エージェントハーネス v3 仕様
+# エージェントハーネス仕様 v6（ReAct 化・FR-34）
+
+- 版: v6.0（2026-07-18, Fable — **FR-34 ReAct 刷新**。制御フローは decide ループへ全面移行。
+  本章（V6）が現行実装の正。以下の v5 章は**基底**として保持し、V6 で明示的に置換した箇所を除き
+  有効（generate プロンプト・検索スコアリング・兄弟チャンク展開・trace 等は v6 でも現役）。
+  アーキテクチャ図は `docs/AGENT_ARCHITECTURE.md` v2.0、仕様・裁定は `docs/AGENT_REACT.md` v1.0）
+
+## V6-0. v5 からの構造変更（要約）
+
+| v5（固定フロー） | v6（ReAct） |
+|---|---|
+| analyze / evaluate ノード（専用プロンプト） | 単一の **decide** ノード（guided JSON・下記 V6-1） |
+| retrieve→search→evaluate→(web)→… の固定順序 | decide が毎ターン 6 アクションから選択 |
+| 周回カウンタ（`MAX_*_FOLLOWUPS` / `MAX_WEB_SEARCH_ROUNDS` 等） | **全廃**。停止はコンテキスト予算（V6-3） |
+| Web 第1R akita-pu.ac.jp 限定 | **ドメイン制限なし**（Tavily CB は存続） |
+| ask_origin ノード（analyze の route 意図で分岐） | **campus_navigator サブエージェント**内の terminal（決定的バリデータが裁く）。ワイヤ契約は不変 |
+| —（逆質問なし） | **ask_user** terminal ツール（clarification メタ＋履歴サニタイズ＋連続逆質問禁止） |
+| `chat()` 汎用 JSON 応答 | `VLLMClient.decide(messages, schema)`（response_format json_schema）＋寛容パース床 |
+
+- 廃止した実装: `_analyze` / `_evaluate` / `_route_after_analyze` / `_route_after_retrieve` /
+  `_route_after_evaluate`・周回カウンタ state・Qwen `enable_thinking` 分岐（遺物）。
+  よって基底章のうち **v3 §2（analyze）・§5（evaluate）・V4-2（include_domains）・V4-4（柔軟再試行
+  ループ）は v6 で失効**。それ以外の基底（generate プロンプト＝V5-1 系・V5-2 スコアリング・
+  V5-7 兄弟チャンク・V5-8/9 経路系プロンプト方針・V5-5 trace）は v6 でも有効。
+
+## V6-1. decide システムプロンプト（全文・実装 `graph.py: DECIDE_SYSTEM_PROMPT`）
+
+大学アイデンティティの明示は**必須**（PoC P3 で「APU」単独表記が立命館アジア太平洋大学と
+誤解された実測による。`AGENT_REACT.md` §0-2 #12。ブランド名「APU-Navi」は generate 側のみ・#15）。
+
+```
+あなたは秋田県立大学 本荘キャンパス（秋田県由利本荘市）のオープンキャンパス来場者案内 AI
+「キャンパスガイド」の探索判断（decide）コンポーネントです。来場者は主に高校生とその保護者です。
+質問とこれまでの観測を読み、次の action を必ず 1 つだけ選び、JSON のみを返してください。
+
+注意: 本学を「APU」と略さないこと。他大学（立命館アジア太平洋大学など）と混同しないこと。
+学外の一般情報（交通・宿泊・気象・比較情報など）は web_search で調べてよい。
+
+ツール:
+- retrieve {queries: string[1..3]}: 意味ベクトルで学内ナレッジを探す（言い換えに強い）
+- search {keywords: string[1..6]}: 部屋番号・研究室名・固有名詞を字句一致で探す
+- web_search {queries: string[1..3]}: ドメイン制限なしの Web 検索（学外・最新情報）
+- campus_navigator {request: string}: 学内の場所・経路の専門機構へ依頼（空間推論を自分でしない）
+- ask_user {question: string}: 回答が実質的に変わる場合だけ、来場者に短く聞き返す
+- finish {reason: string}: 根拠がそろったら探索を終えて回答生成へ進む
+
+方針:
+- ツール実行 0 回のまま finish しない。
+- 学内の場所・経路・「どこ」「行き方」は campus_navigator に任せる。
+- 推測で答えられる場合は推測と明示して答える方を優先し、ask_user を乱用しない。
+- 同一の action と action_input を繰り返さない。0 件なら言い換えるか別ツールに切り替える。
+- 予算注記が「まとめに入れ」の場合は新規探索を広げず finish を優先する。
+- thought は短い日本語 1〜2 文。
+```
+
+ランタイムで system 末尾に「現在選択可能な action: …」と予算注記（soft/hard 超過時）を注入。
+user メッセージは「質問／行動ログ（JSON）／観測（連番）／予算状態（JSON）」の 4 部構成。
+
+## V6-2. campus_navigator 内部 decide プロンプト（全文・実装 `navigator.py: NAVIGATOR_SYSTEM_PROMPT`）
+
+```
+あなたは秋田県立大学 本荘キャンパス（秋田県由利本荘市）の学内場所・経路を扱う campus_navigator です。
+本学を「APU」と略さず、他大学と混同しないでください。空間推論や道順の創作はせず、必ず決定的ツールを使います。
+JSON {thought, action, action_input} のみを返し、来場者向けの最終文章は書かないでください。
+
+内部ツール:
+- resolve_place {expression: string, role: "origin"|"destination"}: 名称を場所データで解決する
+- find_route {origin: string, destination: string}: 解決済み両端の決定的経路を求める
+- ask_origin {destination: string}: 目的地は解決済みだが出発地が不明な場合だけ現在地選択を提案する
+
+目的地が未解決なら ask_origin を使わず名称を変えて resolve_place してください。出発地が既知なら ask_origin を使わず find_route してください。thought は短い日本語1〜2文です。
+```
+
+- **fast path が先**（`find_locations_in_text` による決定的抽出＋意図判定。実 LLM E2E では
+  経路系 5 件全てが fast path で解決＝内部 decide 0 回）。内部 decide は上限 3 手。
+- ask_origin は**提案**であり、発動は決定的バリデータが裁く（目的地未解決→差し戻し・出発地既知→
+  差し戻し）。need_origin 成立時の SSE・map・sources・composer ロックは v5 の ask_origin ノードと
+  完全一致（実 LLM E2E 確認済み）。
+
+## V6-3. 定数（`AGENT_REACT.md` §7 の確定値・実装値）
+
+| 定数 | 値 | 意味 |
+|---|---|---|
+| `SOFT_CONTEXT_RATIO` / `HARD_CONTEXT_RATIO` | 0.70 / 0.85 | 実効窓（`VLLM_MAX_MODEL_LEN`、旧 `LLM_CONTEXT_WINDOW` フォールバック・既定 16384）に対する比。16k 時 11,468 / 13,926 トークン |
+| `OBSERVATION_TOKEN_LIMIT` | ~~120~~ → 500（2026-07-18 FR-37） | 観測 1 件の圧縮上限（タイトル＋断片 400 字/件）。緩和の経緯は `AGENT_REACT.md` §2-4 改訂。断片はヒット中心 ±200 字＋truncated/file_id 明示（FR-38 §2-5） |
+| get_docs 観測本文上限（FR-38・定数名は実装裁量） | 1,500 tok | get_docs 観測の本文部分の上限。file_ids は 1..2 件/アクション（`AGENT_REACT.md` §2-5） |
+| `NAVIGATOR_MAX_STEPS` | 3 | navigator 内部 decide の上限手数 |
+| decide 温度 / max_tokens | 0.2 / 300 | `VLLMClient.decide()` 固定（実測 completion 43〜80 tok） |
+| `recursion_limit` | 50 | LangGraph 安全弁（FR-33 踏襲）。FR-37 で到達時フォールバック追加（値は不変・テスト用にインスタンス属性化） |
+| `ASK_USER_TOKEN_CHARS` | 8 | ask_user の token 分割幅（FR-25 文字送り互換） |
+| `MAX_WEB_RESULTS_PER_ACTION` / `MAX_WEB_PAGES_PER_ACTION` | 5 / 3 | web_search 1 アクションあたりの取り込み上限 |
+
+## V6-4. 検収記録（2026-07-18, Fable）
+
+- pytest 133 / Vitest 89 / build green（Fable 再実行で確認）。
+- 実 LLM E2E（31B PP=2・6 シナリオ＋origin 再送の 7 リクエスト）: **全合格**。SSE 順序契約 7/7、
+  全件 60 秒以内（2.1〜44.4s）。ReAct 挙動: E6「学食」で retrieve 空振り→クエリ変更→字句→Web→
+  自発的 campus_navigator の 5 種ツール連鎖を確認。Web クエリの大学誤解（APU 混同）ゼロ。
+  trace: decide 19 件（全件予算付き）・navigator 5 件（全件 fast path）。
+- 実装: Codex/GPT-5.6Sol xhigh（コミット 1a0caaf）。
+
+---
+
+# （基底その0）エージェントハーネス仕様（v5 = v4 + 検索品質改善・モデル構成変更）
+
+- 版: v5.1（2026-07-13, Fable 改訂 — SPEC §2 の口調変更に伴い、①generate 用システムプロンプトを「学生ガイド」ペルソナ＋時間コンテキスト注入（FR-8、ARCHITECTURE.md §7）に更新、②ステータス実況の文言をガイド調に改稿。**step enum・SSE スキーマ・ハーネス制御フローは不変**。本文中の旧文言例は現行実装の文言に置換済み）
+- v5.0（2026-07-12, Fable 起草）。**v4（= v3 + §V4）を基底とし、§V5 のデルタを適用する。矛盾時は §V5 > §V4 > v3 の順で優先。**
+- v5 の背景（利用者フィードバック 2026-07-12・Fable 実測検証済み）:
+  ナレッジに存在する情報（CPS 研の OC 出展・学生メンバー）に「記載がない」と回答する事象。
+  埋め込みモデルを Qwen3-Embedding-8B（第2GPUサーバー・vLLM）へ、生成 LLM を小型 Gemma 4 へ変更する
+  利用者指示を含む（ARCHITECTURE.md v0.3）。
+
+## V5-0. v4 の敗因分析（Fable 実測、2026-07-12）
+
+失敗質問①「サイバーフィジカルシステム研究室では、どんな出展がありますか？」
+失敗質問②「サイバーフィジカルシステム研究室の学生メンバーについて教えてください」
+
+対象ナレッジ（`lab-cps-open-lab-2026.md`・`lab-cps-members.md`）は **Qdrant に取り込み済み**
+（609 点中 10+9 チャンク確認）。取り込み漏れではなく検索・ランキングの欠陥:
+
+1. **ナレッジの語彙欠落（②の主因）**: `lab-cps-members.md` は本文・見出しに
+   「サイバーフィジカルシステム研究室」「メンバー」「学生」を**一語も含まない**
+   （見出しが英語 "Members"、本文は氏名表のみ）。ベクトル top-6・grep（キーワード
+   「サイバーフィジカルシステム研究室」「メンバー」）の**双方で圏外**を実測で再現。
+2. **チャンク埋め込みに title/heading の文脈が無い**: ingest は `chunk.text` のみを埋め込むため、
+   表だけのチャンクは何の表か分からないベクトルになる（lexical は title+heading+text を対象に
+   しており非対称）。
+3. **grep 同点処理の「本文が短い方優先」（①の主因）**: analyze の keywords が
+   「サイバーフィジカルシステム研究室」1 語のとき、60〜94 字のブログ断片 4 件が
+   本命の出展セクション（524 字）を top-4 から押し出す（実測再現。失敗回答の
+   「パソコンの組み立て・高大連携授業」はまさにこの 4 断片）。
+   キーワードに「出展」が入れば本命が 1 位になることも実測確認。
+4. **analyze keywords の固有名詞限定**: §2 が「一般語を含めない」ため「出展」「メンバー」の
+   ような**質問の中核名詞**が grep に使われない。
+5. **コンテキスト 2816 の窮屈さ**: 31B の KV 制約により top-k・チャンク数・evaluate 要約長が
+   強く制限され、ヒットしても generate まで届きにくい。
+6. **可観測性の欠如**: 本番実行の各ステップ（検索ヒット・evaluate 判定・詰め込み内訳）が
+   ログに残らず、失敗の事後解析ができない（本分析もオフライン再現に頼った）。
+
+## V5-1. 埋め込みの変更: Qwen3-Embedding-8B（vLLM リモート）
+
+- `EmbeddingModel` に **OpenAI 互換 `/v1/embeddings` バックエンド**を追加する:
+  - 環境変数 `EMBEDDING_BASE_URL`（例 `http://<gpu2-host>:8001/v1`）が設定されていれば
+    リモート API を使用（httpx または openai クライアント。既存依存の範囲で）。
+    未設定なら従来の bge-m3(CPU) ローカルパスにフォールバック（開発用・テスト用に残す）。
+  - `EMBEDDING_MODEL` 既定値を `Qwen/Qwen3-Embedding-8B` に変更（compose も更新）。
+  - バッチ埋め込み対応（ingest で 1 リクエスト複数入力）。タイムアウトはクエリ 8 秒・ingest 60 秒。
+- **Qwen3-Embedding の利用規約**（実装時に公式モデルカードで最終確認）:
+  - **クエリ側のみ** instruct プレフィックスを付ける:
+    `Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: <query>`
+    ドキュメント側はプレフィックスなし。
+  - `embed_query` / `embed_documents` でプレフィックス有無を分岐（現行は同一処理なので要改修）。
+- **埋め込み対象テキストの変更（V5-0 敗因2 の修正）**: ingest・検索の別なくドキュメント側は
+  `title + "\n" + heading + "\n" + chunk.text` を埋め込む（lexical の searchable と同一規則に揃える）。
+- **Qdrant コレクション再作成**: ベクトル次元 1024 → **4096**。`ingest --recreate` で全件再投入。
+  再投入後、点数がチャンク総数と一致することを検収。
+
+## V5-2. Agentic Search のスコアリング改訂（敗因3 の修正）
+
+- §3.2 のソートキーを次に置換（「本文が短い方優先」を廃止。短文断片が本命の長文セクションを
+  押し出す実測欠陥の修正。密度系の基準も同じ病理を再導入するため採用しない）:
+  1. ヒットした異なりキーワード数（多いほど上位）
+  2. **title または heading にいずれかのキーワードがヒット**（真が上位）
+  3. 総ヒット回数（多いほど上位）
+  4. **本文が長い方**（情報量優先 — 従来と逆）
+- `MAX_LEXICAL_HITS` を 4 → **6** に拡大（コンテキスト拡大（V5-4）とセット）。
+- 既存ユニットテスト（スコアリング）を新基準に更新。回帰:
+  - keywords=[サイバーフィジカルシステム研究室, 出展] で `lab-cps-open-lab-2026` の
+    出展セクションが 1 位（現状ナレッジでも成立することを実測確認済み）。
+  - KNOWLEDGE.md §2.1 の総点検（title への正式名称付与）完了後は、
+    keywords=[サイバーフィジカルシステム研究室] 単独でも同セクションが top-6 に入ること
+    （基準2の title 一致で浮上）。
+
+## V5-3. analyze keywords の拡張（敗因4 の修正）
+
+- §2 の `keywords` 仕様を改訂: 固有名詞・専門用語に加えて、
+  **「質問が求める対象を表す中核名詞」を最大 2 語**含める（例: 出展、メンバー、学費、日程、部活）。
+  依然として助詞・動詞・「先生」「場所」のような漠然語は禁止。
+- `MAX_ANALYZE_KEYWORDS` 4 → **6**。プロンプト例示に
+  「〜研究室では、どんな出展がありますか？ → keywords: [〜研究室, 出展]」を追加。
+
+## V5-4. コンテキスト予算の拡大（小型 Gemma 4 前提。敗因5 の修正）
+
+生成モデル確定（ARCHITECTURE.md §5.1、`LLM_CONTEXT_WINDOW≥8192`）後に適用:
+
+| 定数 | v4 | v5 |
+|---|---|---|
+| `top_k`（ベクトル検索） | 6 | **8** |
+| `MAX_KNOWLEDGE_CONTEXT_CHUNKS` | 10 | **16** |
+| `MAX_LEXICAL_HITS` | 4 | **6**（V5-2） |
+| evaluate 各根拠の要約長 | 400 字 | **600 字** |
+| `LLM_ANSWER_MAX_TOKENS` | 640 | **1024** |
+| `MAX_HISTORY_CHARS` | 500 | 500（据え置き） |
+| `MAX_HISTORY_MESSAGES` | 4 | 4 → **8**（2026-07-14 FR-18-5・履歴 4 ターン化。`docs/RELEASE_PREP.md` §5） |
+
+- 予算管理ロジック（§5 ルール6・強制予算パス）は変更しない。定数のみ環境変数/定数更新。
+- `LLM_CONTEXT_WINDOW` が 2816 のままでも動作が壊れないこと（定数はあくまで上限であり、
+  予算パスが従来どおり切り詰める）。
+
+## V5-5. 実行トレースの構造化ログ（敗因6 の修正）
+
+- リクエストごとに 1 つの JSON Lines トレースを INFO ログへ出力する（`logger("agent.trace")`）:
+  - analyze の出力（retrieval_queries / keywords）
+  - retrieve: 実行クエリごとの top-k `(file_id, chunk_index, score)`
+  - search: 検索キーワード・変種・ヒット `(file_id, chunk_index, distinct, total)`
+  - evaluate 各回: sufficient / missing / 各指示配列
+  - web_search 各周: クエリと取得 URL
+  - generate: **詰め込みに採用されたチャンク ID 一覧と落選したチャンク ID 一覧**、
+    実測プロンプトトークン数
+- 個人情報は含まれない（質問文はログ済みの範囲）。ログ肥大が問題になれば環境変数で off にできる
+  （`AGENT_TRACE=0`）。
+- 受け入れ: 失敗質問を再実行したとき、どの段で本命チャンクが落ちたかがログだけで特定できること。
+
+## V5-7. 兄弟チャンク展開（same-file expansion。2026-07-12 検収で追加）
+
+- 実測の残欠陥: 「学生メンバー」質問で `lab-cps-members` の直接ヒットは 3 チャンクだが、
+  一覧の続き（分割された表の後半＝鈴木晴人の行）は**どのクエリでも直接ヒットせず**、
+  回答から 1 名だけ欠落した。一覧・時間割・業績のような「ファイル全体で 1 つの答え」を
+  持つ資料はチャンク単位の検索と本質的に相性が悪い。
+- 仕様: retrieve / search の各マージ後、`knowledge_results` に**同一 `file_id` のチャンクが
+  2 件以上**あるファイル F について、F の残り全チャンクを lexical コーパス
+  （`CampusLexicalSearch._load_sections()`、メモリ常駐）から取得して追加する。
+  - 追加チャンクの score は「F の直接ヒットの最小 score − 0.01」（packing 順で直接ヒットの直後に並ぶ）。
+    `grep_hit` は立てない。
+  - 直接ヒット（両アーム由来）は展開によって**絶対に押し出さない**。展開分は残り枠にのみ入れる。
+  - ファイルあたりの展開上限 12 チャンク。展開は 1 リクエスト内で何度マージしても冪等（ID 重複排除は既存規則）。
+- `MAX_KNOWLEDGE_CONTEXT_CHUNKS` を 16 → **24** に拡大（16k コンテキストで実測 8.6k しか
+  使っておらず余裕がある。evaluate 要約 600 字 ×24 も予算内）。
+- トレース: 展開が発生したら `event:"expand"` で `{file_id, added_chunk_indices}` を出力。
+- 受け入れ: 「サイバーフィジカルシステム研究室の学生メンバーについて教えてください」で
+  在籍学生 **10 名全員**（修士: 佐藤翔真・高橋潤大・小川春翔・山根拓真・高橋夢叶、
+  学部4年: 及川麻菜・山崎菜々・片山優大・藤嶋宏斗・鈴木晴人）の氏名が回答に含まれること。
+
+## V5-8. 経路案内プロンプト拡張（2026-07-13 追加。FR-11 / docs/ROUTE_GUIDANCE.md）
+
+グラフ構造・定数・ルーティングは変更しない。`graph.py` のプロンプト 2 箇所のみ（正確な文言は ROUTE_GUIDANCE.md §4）:
+
+1. **analyze**: 場所・行き方質問（「〜はどこ」「〜への行き方」「どの部屋」）では、目的地の施設名・
+   部屋番号（GI512、K321 のような英数字コード）・ゾーン名（G1ゾーン等）を言い換えずに
+   keywords / retrieval_queries に含める指示を追記。
+   （部屋番号はレアトークンのため grep が決定的に当たる。normalize_text の NFKC + casefold により
+   全角・小文字表記も吸収済み）
+2. **generate（GENERATE_SYSTEM_PROMPT）**: ルール 8 を追加 — 場所回答は棟・ゾーン・階・部屋番号まで
+   具体的に示す。順路・曲がる方向・徒歩分数は根拠に記載がある場合のみ。細かい道順が根拠にない場合は
+   場所を特定した上で棟内案内表示・当日スタッフへ誘導してよい（ルール 1 の丸投げには当たらない）。
+
+受け入れ: EVAL_QUESTIONS.md §H（経路案内）の全問で、該当ナレッジが検索で当たり、
+棟・ゾーン・階・部屋番号まで含む回答が返ること。
+
+## V5-9. 経路マップカード判定（2026-07-17 追加。FR-26 / docs/MAP_CARD.md）
+
+グラフのノード・エッジ・ルーティングは変更せず、analyze の構造化出力と `stream()` のターン終端分岐に
+次を追加する。経路・階・徒歩分数は LLM に生成させず、`ROUTE_GUIDANCE.md` §7.2 の構造化データから
+純 Python の決定的計算で作る。
+
+1. **analyze 出力**: 従来の `intent` / `retrieval_queries` / `keywords` に、
+   `route: {type: route|place|null, origin: string|null, destination: string|null}` を追加する。
+   `origin` は質問文または直近4ターン履歴で明示された場合だけユーザー表現のまま返し、推測しない。
+2. **resolver**: analyze の地点表現は NFKC + casefold 正規化した辞書引きだけで、9ノードと部屋・階へ
+   解決する。部屋番号から棟・階を推測しない。
+3. **出発地不明のターン終端**: `type=route`、目的地解決済み、出発地未解決のときは retrieve / search /
+   evaluate / Web Search / LLM generate を実行しない。`status(generate, 現在地を確認しています…)` → 定型 `token` →
+   `map(mode=ask_origin)` → `done` の順で終了し、通常どおり履歴保存する。
+4. **カード付与**: 両端解決済みの route と目的地解決済みの place は従来フローを完走し、全 token の後・
+   `done` 直前に `map` を最大1回送る。解決不能・通常質問・学外アクセスは `map` を送らず、従来イベント列を維持する。
+5. **履歴由来の出発地**: 今回の質問文に出発地表現がなく直近履歴から継承した場合、generate にその事実を
+   明示し、回答冒頭で出発地を示すようルール8へ追記する。
+
+受け入れ: `EVAL_QUESTIONS.md` §I と `MAP_CARD.md` §9 の全項目。特に D404 の階を補完しないこと、
+総合受付→学部棟Ⅱが E5+E6c の前面通路系となること、通常質問・学外アクセスに `map` が混入しないこと。
+
+## V5-6. テスト・受け入れ基準（v4 §V4-5 に追加）
+
+1. ユニット: リモート埋め込みバックエンド（プレフィックス分岐・フォールバック・バッチ）／
+   新 grep スコアリング／analyze keywords 拡張のプロンプト整形／トレースログの構造。
+2. 実測（Fable 検収・EVAL_QUESTIONS.md §G に追加する回帰質問）:
+   - 「サイバーフィジカルシステム研究室では、どんな出展がありますか？」→
+     人間タワーバトル等の**出展一覧と時間帯**を根拠つきで回答（「記載がない」は不合格）。
+   - 「サイバーフィジカルシステム研究室の学生メンバーについて教えてください」→
+     修士・学部の**氏名を含む**回答（「記載がない」は不合格）。
+   - v4 受け入れ基準（V4-5）の全項目を維持。
+3. 実装順の依存: V5-2/V5-3/V5-5 は**即時実装可**（モデル変更に依存しない）。
+   V5-1 は第2GPUサーバー稼働後、V5-4 は生成モデル確定後。
+
+---
+
+# （基底その1）エージェントハーネス v4 仕様（= v3 + Tavily 移行・柔軟再試行）
+
+- 版: v4.0（2026-07-12, Fable 起草）。**v3 本文（下記）を基底とし、§V4 のデルタを適用する。矛盾時は §V4 が優先。**
+- v4 の背景（利用者指示 2026-07-12）:
+  1. Web Search プロバイダを ddgs（DuckDuckGo）から **Tavily** に移行する。API キーは `.env` に記載済み。
+  2. 試行順序は **Agentic RAG → Agentic Search → Web Search**（v3 の逐次順を維持・明文化）。
+  3. **「回答不可」を避ける**ため、evaluate 主導でローカル/Web の再試行を柔軟に行えるループにする。
+
+## V4. デルタ仕様
+
+### V4-1. TavilySearchProvider（ddgs 廃止）
+
+- 新規 `backend/app/search/tavily.py` に `TavilySearchProvider` を実装。`backend/app/search/ddgs.py`・`ddgs` 依存・関連テストは削除（テストは Tavily 版に置換）。
+- インターフェース（`SearchProvider` 抽象は踏襲・拡張）:
+  `async def search(query: str, *, max_results: int = 3, include_domains: Sequence[str] | None = None) -> list[WebSearchResult]`
+- 実装は **httpx 直叩き**（新規依存を増やさない。tavily-python は使わない）:
+  - `POST https://api.tavily.com/search`、認証は `Authorization: Bearer <TAVILY_API_KEY>` ヘッダ
+    （Tavily 現行 API の推奨形式。実装時に公式ドキュメントで最終確認し、異なれば body の `api_key` 形式に合わせる）。
+  - body: `{"query", "max_results", "search_depth": "basic", "include_answer": false, "include_raw_content": true, "include_domains": [...]（指定時のみ）}`
+  - タイムアウト 8 秒（既存の fetch と同じ）。
+- レスポンスマッピング: `results[]` の `title`→title、`url`→url、`content`→snippet、
+  `raw_content`（存在すれば）→ `WebSearchResult.text`（全文として保持。窓切り出しはハーネス側 §4.3）。
+- `include_answer` は **false 固定**（Tavily の生成回答は使わない。回答生成の主導権と「ナレッジ優先」ルール（§5 ルール5）を守るため）。
+- **エラーの飲み込み（回答不可回避の要）**: HTTP エラー・タイムアウト・JSON 不正・キー未設定は
+  **例外を投げず `[]` を返す**（warning ログ）。0 件扱いになれば既存の 0 件リフォーミュレーション（§4.2）と
+  諦めゲート（§5）がそのまま機能する。ハーネスを 500 で落とすことは決して無いこと。
+- 設定: `Settings.tavily_api_key`（`os.getenv("TAVILY_API_KEY", "")`）。
+  `.env` に記載のキー名が正（標準名 `TAVILY_API_KEY` を想定。実物が別名ならコードを .env に合わせる）。
+  docker-compose.yml の backend `environment:` に `TAVILY_API_KEY: ${TAVILY_API_KEY:-}` を追加
+  （compose はルートの `.env` を自動で補間に使う）。
+- requirements.txt: `ddgs==9.14.4` を削除。`httpx==0.28.1` の pin は維持し、ddgs 由来のコメントを更新。
+
+### V4-2. `site:` 制限の廃止 → `include_domains`
+
+- v3 §4.1 の 1 周目 `site:akita-pu.ac.jp <query>` を廃止し、
+  **1 周目は `include_domains=["akita-pu.ac.jp"]`** を渡す（サブドメイン cps.akita-pu.ac.jp 等も含まれる）。
+  クエリ文字列自体は変形しない。2 周目以降はドメイン制限なし（v3 どおり「秋田県立大学」自動付与は維持）。
+- 使用済みクエリの重複判定は **（正規化クエリ, ドメイン制限の有無）の組**で行う
+  （同一文言でも 1 周目の制限付きと 2 周目の制限なしは別試行として許可）。
+- 0 件リフォーミュレーション（v3 §4.2）は維持。「`site:` を外す」は「`include_domains` を外す」に読み替え。
+
+### V4-3. raw_content の活用（focused extraction は維持）
+
+- ページ本文は **Tavily の `raw_content` を第一ソース**とし、`raw_content` が無い結果だけ従来の httpx fetch を行う
+  （fetch 回数が減る分レイテンシと取得失敗が減る）。
+- どちら由来でも v3 §4.3 の focused extraction（キーワード窓 1,400 字）をそのまま適用する。
+- フェッチ前 URL 選別（v3 §4.3 後段）も不変。
+
+### V4-4. 柔軟な再試行ループ（回答不可の回避）
+
+- **初回パスの順序は不変**: analyze → retrieve（Agentic RAG）→ search（Agentic Search）→ evaluate。
+- evaluate の出力 JSON に `retrieval_queries` を追加（不足時のみ・最大 2・既出と別観点の言い換え）:
+
+```json
+{"sufficient": true|false, "missing": "...",
+ "grep_keywords": ["..."], "retrieval_queries": ["..."], "web_queries": ["...", "..."]}
+```
+
+- ルーティングを優先度型に統一（`_route_after_evaluate` を置換）:
+  1. `sufficient=true` → generate
+  2. `grep_keywords` 非空 かつ search 追加ラウンド未消化（最大 1、v3 踏襲）→ **search**
+  3. `retrieval_queries` 非空 かつ **re-retrieve 未消化（最大 1、v4 新規）** → **retrieve**
+     （使用済み retrieval クエリを正規化して記録し、全て既出ならこの分岐はスキップ）
+  4. Web ラウンド条件（v3 §4.1、最大 3）→ **web_search**
+  5. generate（諦めゲート v3 §5 不変: retrieve・search（変種込み）・web 2 周以上を消化するまで
+     「確認できなかった」系回答を出さない）
+- retrieve 再実行時のステータス実況: `FOLLOWUP_STATUS_TEXTS["retrieve"] = "観点を変えて資料を探し直しています…"`（v5.1 文言）。
+  step enum・SSE スキーマの変更はなし。
+- LLM 呼び出し上限: analyze 1 + evaluate 最大 6 + generate 1 = **8**（v3 は 7）。
+  全体レイテンシ目標 60 秒以内は維持（V4-3 の fetch 削減分を充てる）。
+- アームが例外で落ちた場合も**残りのアームは必ず実行**して generate に進む（v3 §5 踏襲・スキップ理由はログ）。
+- 制御は引き続き `stream()` 内の逐次制御が正（Q-006 裁定）。LangGraph のノード定義は
+  stream() と矛盾しない範囲で現状維持でよい（v4 で書き換え必須なのは stream() 側のみ）。
+  **（2026-07-18 追記: FR-33 で LangGraph 実行一本化済み — 本記述は v4 当時の経緯として保持。
+  現行の制御は `docs/LANGGRAPH_MIGRATION.md` / `docs/AGENT_ARCHITECTURE.md` §2 が正）**
+
+### V4-5. テスト・受け入れ基準（v3 §9 に追加）
+
+- ユニットテスト:
+  1. Tavily レスポンス → `WebSearchResult` マッピング（raw_content の text 反映含む）
+  2. 1 周目のみ `include_domains` が付くこと・2 周目以降は付かないこと
+  3. raw_content があるページは httpx fetch しないこと
+  4. API エラー・タイムアウト・キー未設定 → `[]`（例外にならない）
+  5. evaluate の `retrieval_queries` による re-retrieve（最大 1・使用済みクエリのスキップ）
+  6. ルーティング優先度（search > retrieve > web_search > generate）
+- 実測受け入れ（Fable が実施）:
+  1. v3 §9 の全基準を維持（CPS 研の先生・学長名・サークル列挙・OC プログラム・天気の誠実回答）。
+  2. ナレッジに無く Web にある情報が Tavily 経由で回答に入ること。
+  3. `TAVILY_API_KEY` 未設定でも 500 にならず、ローカル 2 アーム＋誠実回答で完結すること。
+
+---
+
+# （基底）エージェントハーネス v3 仕様
 
 - 版: v3.0（2026-07-12, Fable 起草）。v2.0（2026-07-11）を全面改訂。
 - 背景（利用者フィードバック）:
@@ -40,6 +418,8 @@ analyze（LLM: 意図・キーワード・検索クエリ）
 
 - 制御は v2 と同じく**明示的な逐次制御**（LangGraph のノード定義は維持してよいが、
   `stream()` 内のループが正。Q-006 の裁定を継承）。
+  **（2026-07-18 追記: FR-33 で LangGraph 実行一本化済み — 本記述は v5 当時の経緯として保持。
+  現行の制御は `docs/LANGGRAPH_MIGRATION.md` / `docs/AGENT_ARCHITECTURE.md` §2 が正）**
 - ローカル 2 アーム（retrieve + search）を先に尽くし、それでも不足なら Web へ。
   **ローカル追加ラウンドは最大 1 回**（evaluate が新キーワード/新クエリを出した場合のみ）。
 - **Web ラウンドは最大 3**（v2 は 2）。3 周目は「固有名詞が未解決」の場合のみ発火（§4.2）。
@@ -103,8 +483,8 @@ analyze（LLM: 意図・キーワード・検索クエリ）
 
 ### 3.4 ステータス実況
 
-- step: `search`、テキスト: 「学内資料を全文検索しています…」
-- 追加ラウンド時: 「別のキーワードで学内資料を調べています…」
+- step: `search`、テキスト: 「学内資料をすみずみまで調べています…」（v5.1 文言）
+- 追加ラウンド時: 「別のキーワードで調べ直しています…」
 
 ## 4. Web Search（強化）
 
@@ -149,11 +529,30 @@ v2 のルール 1〜4 を維持し、以下を追加:
   ハーネスが実際の実行履歴から生成した 1 行（例:
   `調査ログ: 学内ナレッジ検索2回・全文検索(キーワード: …)・Web検索3回(クエリ: …)`）を
   プロンプトに渡し、それを根拠に書かせる。捏造防止。
-- **コンテキスト詰め込み順**（予算逼迫時の優先順）:
+- **コンテキスト詰め込み順**（予算逼迫時の優先順。2026-07-12 改訂）:
   1. **grep ヒットのセクション**（字句一致 = 精度最高）
-  2. Web 結果（focused extraction 済み。Web を回した質問では鮮度・補完価値が高い）
-  3. ベクトル検索のみのチャンク（スコア順）
-  ※ v2 の「web が存在すれば web 優先」を上記 3 段階に置き換える。
+  2. **高関連度のベクトルチャンク**（score ≥ `HIGH_RELEVANCE_CONTEXT_THRESHOLD = 0.60`、スコア順）
+  3. Web 結果（focused extraction 済み）
+  4. 残りのベクトルチャンク（スコア順）
+  ※ 旧順序（grep → Web → ベクトル全部）は、evaluate が誤って不足判定し Web を回した場合に、
+  正解を含む高スコアの学内ナレッジ（一次情報）が Web の薄いページに予算を奪われて
+  generate に届かない実測欠陥があった（CPS 研出展質問で再現、2026-07-12 検収）。
+  ルール5（ナレッジ優先）とも整合させ、高関連度ナレッジを Web より先に確保する。
+- **ルール6（会話履歴の常時保持）**: 会話履歴（`_format_history` 済み、
+  最大 `MAX_HISTORY_MESSAGES` 件・各 `MAX_HISTORY_CHARS` 字）は生成プロンプトに**常に含める**。
+  プロンプトが予算超過しても履歴を丸ごと落とすことは禁止（マルチターン会話が成立しなくなるため）。
+  縮退は次の順で行う:
+  1. 根拠コンテキストを縮小して再組み立て
+     （コンテキスト予算 = プロンプト予算 − system − **履歴** − user 骨格）。
+  2. 残余コンテキスト予算が `MIN_GENERATION_CONTEXT_TOKENS = 384`（推定トークン）を下回る場合、
+     履歴の**件数は維持**したまま各メッセージの文字上限を段階的に縮めて根拠予算を確保する
+     （500 → 250 → 120 字。下限 120 字。下限でも届かなければ残余予算で妥協し、根拠 0 も許容）。
+  3. それでも超過する場合は最後の user メッセージ（根拠部分）を切り詰める。
+  この順序は強制コンテキスト予算パス（実トークン計測後の再構築・リトライ）にも同様に適用するが、
+  強制パスでは実測由来の予算を 384 へ単純に押し上げてはならない（実超過から回復不能になる）。
+  強制パスでの 384 確保は履歴短縮で捻出した推定トークン分の加算のみ
+  （最終予算 = min(残余推定予算, 強制予算 + 履歴短縮で浮いた分)）。
+  evaluate モードのプロンプト構築はこの最低根拠保証の対象外（詳細は QUESTIONS.md Q-011 裁定）。
 
 ### 諦めゲート（丸投げ・不明回答の機械的抑制）
 
@@ -176,8 +575,8 @@ v2 のルール 1〜4 を維持し、以下を追加:
 
 | step | 初回 | 2回目以降 |
 |---|---|---|
-| search | 学内資料を全文検索しています… | 別のキーワードで学内資料を調べています… |
-| web_search | Webで最新情報を確認しています… | 別の観点でWebを調べています…（3周目: さらに手掛かりを探しています…） |
+| search | 学内資料をすみずみまで調べています… | 別のキーワードで調べ直しています… |
+| web_search | Webで最新情報を探検しています… | 別の角度からWebを調べています…（3周目: もうひと粘り、手掛かりを探しています…） |
 
 他は v2 のまま。
 

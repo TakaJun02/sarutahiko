@@ -1,0 +1,197 @@
+{
+  "event_date": "2026-07-19",
+  "open_time": "09:30",
+  "close_time": "15:00",
+  "campus": "本荘キャンパス",
+  "events": [
+    {
+      "title": "当日案内",
+      "location": "K205・AVホール",
+      "start": "09:30",
+      "end": "09:50",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "研究室公開",
+      "location": "学部棟・特別実験棟・大学院棟ほか",
+      "start": "09:30",
+      "end": "15:00",
+      "note": "公開場所や内容は学科ガイドを参照",
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "図書館自由見学",
+      "location": "図書館",
+      "start": "09:30",
+      "end": "15:00",
+      "note": "自由に見学可",
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "学科説明会",
+      "location": "機械K316・知メカK318・情報K321・建築K323・経営K325",
+      "start": "10:00",
+      "end": "10:20",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "進学相談申込受付",
+      "location": "Kゾーン（共通施設棟）",
+      "start": "10:00",
+      "end": "15:00",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "学科別模擬講義",
+      "location": null,
+      "start": "10:30",
+      "end": "11:30",
+      "note": "各学科の会場は当日配布のガイドで確認",
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "保護者向け説明会",
+      "location": "AVホール",
+      "start": "10:30",
+      "end": "11:30",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "キャンパスツアー①",
+      "location": "受付: 正面エントランス",
+      "start": "10:30",
+      "end": "11:30",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "スチューデントカフェ・サークル紹介",
+      "location": "ラーニングコモンズ",
+      "start": "11:00",
+      "end": "15:00",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "無料昼食体験",
+      "location": "カフェテリア",
+      "start": "11:30",
+      "end": "13:30",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "サークルパフォーマンス（アカペラサークル）",
+      "location": null,
+      "start": "11:30",
+      "end": "12:00",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "個別進学相談",
+      "location": "Kゾーン（共通施設棟）",
+      "start": "12:00",
+      "end": "15:00",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "サークルパフォーマンス（ジャズバンドサークル）",
+      "location": null,
+      "start": "12:10",
+      "end": "12:40",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "合同学科説明会",
+      "location": "K205",
+      "start": "13:00",
+      "end": "13:30",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "キャンパスツアー②",
+      "location": "受付: 正面エントランス",
+      "start": "13:30",
+      "end": "14:30",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "総合型選抜プレゼン対策講座",
+      "location": "K205",
+      "start": "13:45",
+      "end": "14:30",
+      "note": null,
+      "source": "https://www.akita-pu.ac.jp/up/files/www/oshirase/oshirase2026/OC2026%E3%82%BF%E3%82%A4%E3%83%A0%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB.pdf",
+      "category": "program"
+    },
+    {
+      "title": "無料送迎バス 第1便（秋田駅東口→本荘キャンパス）",
+      "location": "秋田駅東口5番乗り場 8:00発 → 羽後本荘駅 9:10 → 本荘キャンパス 9:20着",
+      "start": "08:00",
+      "end": "09:20",
+      "note": "要予約",
+      "source": "knowledge/event-open-campus-2026-systems.md",
+      "category": "bus"
+    },
+    {
+      "title": "無料送迎バス 第2便（羽後本荘駅→本荘キャンパス）",
+      "location": "羽後本荘駅 10:05発 → 本荘キャンパス 10:15着",
+      "start": "10:05",
+      "end": "10:15",
+      "note": null,
+      "source": "knowledge/event-open-campus-2026-systems.md",
+      "category": "bus"
+    },
+    {
+      "title": "無料送迎バス 第3便（本荘キャンパス→羽後本荘駅）",
+      "location": "本荘キャンパス 12:45発 → 羽後本荘駅 12:55着",
+      "start": "12:45",
+      "end": "12:55",
+      "note": null,
+      "source": "knowledge/event-open-campus-2026-systems.md",
+      "category": "bus"
+    },
+    {
+      "title": "無料送迎バス 第4便（羽後本荘駅→本荘キャンパス）",
+      "location": "羽後本荘駅 13:05発 → 本荘キャンパス 13:15着",
+      "start": "13:05",
+      "end": "13:15",
+      "note": null,
+      "source": "knowledge/event-open-campus-2026-systems.md",
+      "category": "bus"
+    },
+    {
+      "title": "無料送迎バス 第5便（本荘キャンパス→秋田駅東口）",
+      "location": "本荘キャンパス 15:00発 → 羽後本荘駅 15:10 → 秋田駅東口5番乗り場 16:15着",
+      "start": "15:00",
+      "end": "16:15",
+      "note": "要予約",
+      "source": "knowledge/event-open-campus-2026-systems.md",
+      "category": "bus"
+    }
+  ]
+}

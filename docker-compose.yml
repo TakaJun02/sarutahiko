@@ -3,23 +3,22 @@ services:
     image: vllm/vllm-openai:latest
     gpus: all
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
     environment:
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
     command: >-
-      --model google/gemma-4-31B-it-qat-w4a16-ct
-      --max-model-len 2816
-      --max-num-seqs 4
-      --gpu-memory-utilization 0.95
-      --enforce-eager
+      --model google/gemma-4-12B-it-qat-w4a16-ct
+      --max-model-len 16384
+      --max-num-seqs 8
+      --gpu-memory-utilization 0.92
       --limit-mm-per-prompt '{"image": 0}'
 
   qdrant:
     image: qdrant/qdrant:latest
     ports:
-      - "6333:6333"
+      - "127.0.0.1:6333:6333"
     volumes:
       - ./qdrant_data:/qdrant/storage
 
@@ -28,20 +27,26 @@ services:
       context: ./backend
     depends_on:
       - qdrant
-      - vllm
-    ports:
-      - "8080:8080"
+    # Host networking makes http://127.0.0.1:8000/v1 reach whichever generation
+    # server is up: the PP=2 31B serve (host, FR-35 default) or the compose vllm
+    # service above (12B fallback publishes the same 127.0.0.1:8000). Fallback
+    # therefore needs no URL change - only LLM_MODEL and which server runs.
+    network_mode: host
     environment:
       AGENT_MODE: ${AGENT_MODE:-real}
       DATABASE_PATH: /app/data/campus-guide.sqlite3
-      VLLM_BASE_URL: http://vllm:8000/v1
+      VLLM_BASE_URL: http://127.0.0.1:8000/v1
       LLM_MODEL: ${LLM_MODEL:-google/gemma-4-31B-it-qat-w4a16-ct}
-      LLM_CONTEXT_WINDOW: ${LLM_CONTEXT_WINDOW:-2816}
-      LLM_ANSWER_MAX_TOKENS: ${LLM_ANSWER_MAX_TOKENS:-640}
-      QDRANT_URL: http://qdrant:6333
+      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-16384}
+      LLM_ANSWER_MAX_TOKENS: ${LLM_ANSWER_MAX_TOKENS:-1024}
+      QDRANT_URL: http://127.0.0.1:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-campus_knowledge}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
+      EMBEDDING_BASE_URL: http://${Second_GPUsever}:8001/v1
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-8B}
       KNOWLEDGE_DIR: /app/knowledge
+      AGENT_TRACE: ${AGENT_TRACE:-1}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      tavily_API: ${tavily_API:-}
       CORS_ALLOW_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
     volumes:
       - ./backend/data:/app/data
@@ -54,4 +59,4 @@ services:
     depends_on:
       - backend
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"

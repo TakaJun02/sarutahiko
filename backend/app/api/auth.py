@@ -16,7 +16,7 @@ async def register(
     payload: RegisterRequest,
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> AuthResponse:
-    token, user = auth_service.register(payload.name, payload.role)
+    token, user = auth_service.register(payload.name)
     return AuthResponse(token=token, user=user)
 
 

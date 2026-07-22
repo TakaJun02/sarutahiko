@@ -7,21 +7,21 @@ import uuid
 from fastapi import HTTPException, status
 
 from app.core.database import Database
-from app.models.auth import Role, User
+from app.models.auth import User
 
 
 class AuthService:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def register(self, name: str, role: Role) -> tuple[str, User]:
+    def register(self, name: str) -> tuple[str, User]:
         user_id = str(uuid.uuid4())
         token = self._new_token()
         try:
             with self.database.connect() as connection:
                 connection.execute(
-                    "INSERT INTO users (id, name, role) VALUES (?, ?, ?)",
-                    (user_id, name, role),
+                    "INSERT INTO users (id, name) VALUES (?, ?)",
+                    (user_id, name),
                 )
                 connection.execute(
                     "INSERT INTO sessions (token, user_id) VALUES (?, ?)",
@@ -34,13 +34,13 @@ class AuthService:
                     detail="このニックネームはすでに登録されています。",
                 ) from exc
             raise
-        return token, User(id=user_id, name=name, role=role)
+        return token, User(id=user_id, name=name)
 
     def login(self, name: str) -> tuple[str, User]:
         token = self._new_token()
         with self.database.connect() as connection:
             row = connection.execute(
-                "SELECT id, name, role FROM users WHERE name = ?",
+                "SELECT id, name FROM users WHERE name = ?",
                 (name,),
             ).fetchone()
             if row is None:
@@ -58,7 +58,7 @@ class AuthService:
         with self.database.connect() as connection:
             row = connection.execute(
                 """
-                SELECT users.id, users.name, users.role
+                SELECT users.id, users.name
                 FROM sessions
                 JOIN users ON users.id = sessions.user_id
                 WHERE sessions.token = ?
@@ -83,4 +83,4 @@ class AuthService:
 
     @staticmethod
     def _row_to_user(row: sqlite3.Row) -> User:
-        return User(id=row["id"], name=row["name"], role=row["role"])
+        return User(id=row["id"], name=row["name"])

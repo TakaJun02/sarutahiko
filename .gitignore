@@ -2,6 +2,9 @@
 chat.mov
 *.mov
 
+# 参考用 Gemini アプリ実スクショ（FR-14 意匠の正）— ローカル保持のみ
+referenceUI/
+
 # secrets
 .env
 .env.local
@@ -21,7 +24,7 @@ node_modules/
 dist/
 
 # tools
-.serena/cache/
+.serena/
 .codex/
 .claude/settings.local.json
 
@@ -30,3 +33,4 @@ dist/
 
 # playwright artifacts
 .playwright-mcp/
+infra/pp2/results/

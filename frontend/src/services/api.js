@@ -44,3 +44,27 @@ export async function apiFetch(path, options = {}) {
   }
   return response
 }
+
+export async function fetchThreads() {
+  const response = await apiFetch('/api/threads')
+  const payload = await response.json()
+  return payload.threads
+}
+
+export async function fetchThread(threadId) {
+  const response = await apiFetch(`/api/threads/${threadId}`)
+  return response.json()
+}
+
+export async function renameThreadRequest(threadId, title) {
+  const response = await apiFetch(`/api/threads/${threadId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title }),
+  })
+  const payload = await response.json()
+  return payload.thread
+}
+
+export async function deleteThreadRequest(threadId) {
+  await apiFetch(`/api/threads/${threadId}`, { method: 'DELETE' })
+}

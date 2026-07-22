@@ -1,21 +1,15 @@
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, Field, field_validator
-
-Role = Literal["highschool", "parent", "other"]
 
 
 class User(BaseModel):
     id: str
     name: str
-    role: Role
 
 
 class RegisterRequest(BaseModel):
     name: str = Field(min_length=1, max_length=20)
-    role: Role
 
     @field_validator("name")
     @classmethod
