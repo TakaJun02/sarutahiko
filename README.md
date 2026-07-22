@@ -81,6 +81,64 @@ flowchart LR
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3、ワークフロー全体図は
 [`docs/AGENT_ARCHITECTURE.md`](docs/AGENT_ARCHITECTURE.md)。
 
+### 🧭 AI エージェント — ReAct ワークフローとツール
+
+固定のパイプラインは持ちません。LangGraph 上の **decide ノード（LLM・guided JSON）が
+毎ターン「次に何をするか」を選択**し、ツールの観測を受けてまた考える ReAct ループです。
+探索の停止は周回数のカウンタではなく**コンテキスト予算**（実トークン計測で 70% soft / 85% hard）で決めます。
+
+```mermaid
+flowchart TD
+    Q(["ユーザー質問"]) --> DE
+    DE["<b>decide</b>（LLM・guided JSON）<br/>{thought, action, action_input}<br/>thought は SSE でライブ実況"]
+
+    DE -->|retrieve| RT["🔎 <b>retrieve</b><br/>意味ベクトル検索<br/>（Qwen3-Embedding + Qdrant）"]
+    DE -->|search| SE["🔤 <b>search</b><br/>決定的字句グレップ<br/>（表記ゆれバリアント展開）"]
+    DE -->|get_docs| GD["📄 <b>get_docs</b><br/>断片の元ドキュメント<br/>全文取得（file_id 単位）"]
+    DE -->|web_search| WS["🌐 <b>web_search</b><br/>Tavily<br/>（サーキットブレーカー付き）"]
+    DE -->|campus_navigator| NV["🗺️ <b>campus_navigator</b><br/>経路サブエージェント<br/>fast path（LLM 0回）→ 内部 decide ≤3手"]
+
+    RT -->|"観測（500 tok 上限・truncated / file_id 明示）"| DE
+    SE -->|観測| DE
+    GD -->|"観測（本文 ~1.5k tok）"| DE
+    WS -->|観測| DE
+    NV -->|"route / place（観測）"| DE
+    NV -->|"出発地不明 → ask_origin でターン終端"| DONE
+
+    DE -->|ask_user| AU["❓ <b>ask_user</b><br/>聞き返し（専用回答フォーム）"]
+    DE -->|finish| GE["✍️ <b>generate</b><br/>evidence から回答をストリーミング生成"]
+    AU --> DONE(["done"])
+    GE --> DONE
+```
+
+| ツール | 実体 | 役割 |
+|---|---|---|
+| `retrieve` | 埋め込み vLLM + Qdrant | 意味ベクトル検索。「雰囲気で聞かれた質問」を拾う |
+| `search` | Qdrant スキャン（LLM 不使用） | 決定的な文字列検索。部屋番号・固有名詞に強い |
+| `get_docs` | Qdrant（LLM 不使用） | 検索でヒットした断片の**元ドキュメント全文**を取得 |
+| `web_search` | Tavily API | 学内ナレッジにない情報だけ Web で補完 |
+| `campus_navigator` | サブエージェント | 学内の場所解決・経路探索（Dijkstra）・マップカード構築 |
+| `ask_user` | — | 質問が曖昧なとき来場者に聞き返してターン終端 |
+| `finish` → generate | 生成 vLLM | 集めた evidence から回答を生成 |
+
+**設計の工夫 3 点:**
+
+1. **意味検索と文字列検索の両輪** — ベクトル検索（`retrieve`）だけでは
+   「D404」「〇〇研究室」のような固有表現の完全一致に弱い。決定的な字句グレップ
+   （`search`・表記ゆれバリアント展開付き）を併設したことで、欲しい情報へ確実に到達できる。
+2. **断片 → 全文の 2 段取得（最も効いた工夫）** — 検索ツールの観測は 1 件 500 トークン上限の
+   抜粋に圧縮して返し（`truncated` と `file_id` を明示）、エージェントが必要と判断した文書だけ
+   `get_docs` で全文を取る。**「情報の取りこぼし」と「無駄な情報によるコンテキスト圧迫」の
+   回避を両立**する。
+3. **経路案内のサブエージェント切り出し** — 場所解決・経路探索・出発地確認といった経路系の
+   判断をメインの decide メニューに並べず、`campus_navigator` 1 つに集約。**ツールが増えすぎて
+   選択をミスる問題を構造で回避**した。各観測に LLM を挟んで整形する案も検討したが、
+   レスポンス時間が伸びるため不採用。サブエージェント側も fast path（決定的・LLM 0 回）を
+   先に試す設計で、速度と精度を両立している。
+
+ハーネスの仕様詳細は [`docs/AGENT_REACT.md`](docs/AGENT_REACT.md)、
+全体図は [`docs/AGENT_ARCHITECTURE.md`](docs/AGENT_ARCHITECTURE.md)。
+
 ### 技術スタック
 
 | レイヤ | 選定 |
